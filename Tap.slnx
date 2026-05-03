@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Tap.Hosting/Tap.Hosting.csproj" />
+    <Project Path="src/Tap.Server/Tap.Server.csproj" />
+  </Folder>
+  <Folder Name="/samples/">
+    <Project Path="samples/Sample.Api/Sample.Api.csproj" />
+    <Project Path="samples/Sample.AppHost/Sample.AppHost.csproj" />
+  </Folder>
+</Solution>

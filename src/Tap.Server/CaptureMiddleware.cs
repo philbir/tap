@@ -1,0 +1,150 @@
+using System.Diagnostics;
+using System.Text;
+
+namespace Tap.Server;
+
+public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore store, ILogger<CaptureMiddleware> logger)
+{
+    private const long MaxCaptureBytes = 1_000_000;
+
+    public async Task InvokeAsync(HttpContext ctx)
+    {
+        var sw = Stopwatch.StartNew();
+
+        var record = new RequestRecord
+        {
+            Sequence = store.NextSequence(),
+            Id = Guid.NewGuid(),
+            Timestamp = DateTimeOffset.UtcNow,
+            Method = ctx.Request.Method,
+            Host = ctx.Request.Host.ToString(),
+            Scheme = ctx.Request.Scheme,
+            Path = ctx.Request.Path + ctx.Request.QueryString,
+            Upstream = null,
+            RemoteIp = ctx.Connection.RemoteIpAddress?.ToString(),
+            RequestHeaders = SnapshotHeaders(ctx.Request.Headers),
+            RequestContentType = ctx.Request.ContentType,
+        };
+
+        await CaptureRequestBodyAsync(ctx, record);
+
+        var originalBody = ctx.Response.Body;
+        using var captureStream = new MemoryStream();
+        ctx.Response.Body = captureStream;
+
+        try
+        {
+            await next(ctx);
+        }
+        catch (Exception ex)
+        {
+            record.Error = ex.Message;
+            logger.LogError(ex, "Error proxying {Method} {Host}{Path}", record.Method, record.Host, record.Path);
+            throw;
+        }
+        finally
+        {
+            captureStream.Position = 0;
+            record.ResponseContentType = ctx.Response.ContentType;
+            record.ResponseBodyOriginalSize = captureStream.Length;
+            CaptureResponseBody(captureStream, record);
+            captureStream.Position = 0;
+
+            try
+            {
+                await captureStream.CopyToAsync(originalBody);
+            }
+            catch (Exception ex)
+            {
+                logger.LogWarning(ex, "Failed to copy captured response to downstream body.");
+            }
+            ctx.Response.Body = originalBody;
+
+            record.StatusCode = ctx.Response.StatusCode;
+            record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
+            sw.Stop();
+            record.DurationMs = sw.ElapsedMilliseconds;
+
+            store.Add(record);
+        }
+    }
+
+    private static async Task CaptureRequestBodyAsync(HttpContext ctx, RequestRecord record)
+    {
+        var length = ctx.Request.ContentLength ?? 0;
+        record.RequestBodyOriginalSize = length;
+
+        if (length == 0)
+        {
+            return;
+        }
+
+        ctx.Request.EnableBuffering();
+
+        if (!IsTextContentType(ctx.Request.ContentType) || length > MaxCaptureBytes)
+        {
+            record.RequestBodyTruncated = true;
+            return;
+        }
+
+        using var ms = new MemoryStream();
+        await ctx.Request.Body.CopyToAsync(ms);
+        record.RequestBody = Encoding.UTF8.GetString(ms.ToArray());
+        ctx.Request.Body.Position = 0;
+    }
+
+    private static void CaptureResponseBody(MemoryStream captureStream, RequestRecord record)
+    {
+        if (captureStream.Length == 0)
+        {
+            return;
+        }
+
+        if (captureStream.Length > MaxCaptureBytes)
+        {
+            record.ResponseBodyTruncated = true;
+            return;
+        }
+
+        if (IsImageContentType(record.ResponseContentType))
+        {
+            record.ResponseBodyBase64 = Convert.ToBase64String(captureStream.ToArray());
+            return;
+        }
+
+        if (IsTextContentType(record.ResponseContentType))
+        {
+            record.ResponseBody = Encoding.UTF8.GetString(captureStream.ToArray());
+            return;
+        }
+
+        record.ResponseBodyTruncated = true;
+    }
+
+    private static bool IsImageContentType(string? contentType) =>
+        contentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true;
+
+    private static bool IsTextContentType(string? contentType)
+    {
+        if (string.IsNullOrEmpty(contentType))
+        {
+            return false;
+        }
+
+        return contentType.Contains("json", StringComparison.OrdinalIgnoreCase)
+            || contentType.StartsWith("text/", StringComparison.OrdinalIgnoreCase)
+            || contentType.Contains("xml", StringComparison.OrdinalIgnoreCase)
+            || contentType.Contains("x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase)
+            || contentType.Contains("javascript", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static Dictionary<string, string> SnapshotHeaders(IHeaderDictionary headers)
+    {
+        var snapshot = new Dictionary<string, string>(headers.Count, StringComparer.OrdinalIgnoreCase);
+        foreach (var h in headers)
+        {
+            snapshot[h.Key] = h.Value.ToString();
+        }
+        return snapshot;
+    }
+}

@@ -1,0 +1,115 @@
+:root {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --method-get: #4a90e2;
+  --method-post: #2aa876;
+  --method-put: #d29922;
+  --method-delete: #d9534f;
+  --method-patch: #9b59b6;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0a0b10;
+  --bg-raised: #12141c;
+  --bg-input: #1b1e2a;
+  --border: #272a38;
+  --text: #e8e8ed;
+  --text-muted: #8d91a0;
+  --accent: #a483ff;
+  --accent-solid: #8b5fff;
+  --ok: #3dd68c;
+  --warn: #ffb84d;
+  --err: #ff6b6b;
+  --shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+  --bg: #ffffff;
+  --bg-raised: #fafbfd;
+  --bg-input: #f3f4f8;
+  --border: #e3e5ec;
+  --text: #17181f;
+  --text-muted: #5d6271;
+  --accent: #5d2fd9;
+  --accent-solid: #5d2fd9;
+  --ok: #1f8a5f;
+  --warn: #b7791f;
+  --err: #c53030;
+  --shadow: 0 1px 3px rgba(16, 24, 40, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+
+button:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+input {
+  font-family: inherit;
+  font-size: inherit;
+  background: var(--bg-input);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 8px;
+  transition: border-color 0.12s;
+}
+
+input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+pre {
+  margin: 0;
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+code {
+  font-family: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  background: var(--bg-input);
+  padding: 1px 5px;
+  border-radius: 4px;
+}

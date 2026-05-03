@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <Sdk Name="Aspire.AppHost.Sdk" Version="13.2.3" />
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Exe</OutputType>
+    <IsAspireHost>true</IsAspireHost>
+    <UserSecretsId>tap-sample-apphost</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Aspire.Hosting.AppHost" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Library: extension methods + types. Not an Aspire project resource. -->
+    <ProjectReference Include="..\..\src\Tap.Hosting\Tap.Hosting.csproj" IsAspireProjectResource="false" />
+    <!-- Project resource: launched by the AppHost as Projects.Tap_Server. -->
+    <ProjectReference Include="..\..\src\Tap.Server\Tap.Server.csproj" />
+    <ProjectReference Include="..\Sample.Api\Sample.Api.csproj" />
+  </ItemGroup>
+</Project>

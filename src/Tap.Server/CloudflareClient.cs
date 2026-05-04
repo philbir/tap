@@ -20,6 +20,24 @@ public sealed class CloudflareClient(HttpClient http, CloudflareOptions options,
 {
     private const string ApiBase = "https://api.cloudflare.com/client/v4";
 
+    public async Task<TunnelDetails?> GetTunnelAsync(string accountId, string tunnelId, CancellationToken ct)
+    {
+        if (string.IsNullOrEmpty(options.ApiToken)) return null;
+
+        using var req = new HttpRequestMessage(HttpMethod.Get,
+            $"{ApiBase}/accounts/{accountId}/cfd_tunnel/{tunnelId}");
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", options.ApiToken);
+
+        using var resp = await http.SendAsync(req, ct);
+        if (!resp.IsSuccessStatusCode)
+        {
+            logger.LogWarning("Cloudflare GET tunnel {Id} returned {Status}", tunnelId, (int)resp.StatusCode);
+            return null;
+        }
+        var payload = await resp.Content.ReadFromJsonAsync(CloudflareJson.Default.TunnelDetailsResponse, ct);
+        return payload?.Result;
+    }
+
     public async Task<IngressRule[]> GetIngressAsync(CancellationToken ct)
     {
         EnsureConfigured();
@@ -113,7 +131,29 @@ public sealed class TunnelConfigResult
     public TunnelConfig? Config { get; init; }
 }
 
+public sealed class TunnelDetails
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("created_at")] public string? CreatedAt { get; init; }
+    [JsonPropertyName("status")] public string? Status { get; init; }
+    [JsonPropertyName("connections")] public TunnelConnection[]? Connections { get; init; }
+}
+
+public sealed class TunnelConnection
+{
+    [JsonPropertyName("id")] public string? Id { get; init; }
+    [JsonPropertyName("colo_name")] public string? Colo { get; init; }
+}
+
+public sealed class TunnelDetailsResponse
+{
+    [JsonPropertyName("result")] public TunnelDetails? Result { get; init; }
+    [JsonPropertyName("success")] public bool Success { get; init; }
+}
+
 [JsonSerializable(typeof(TunnelConfigRequest))]
 [JsonSerializable(typeof(TunnelConfigResponse))]
 [JsonSerializable(typeof(IngressRule[]))]
+[JsonSerializable(typeof(TunnelDetailsResponse))]
 internal sealed partial class CloudflareJson : JsonSerializerContext;

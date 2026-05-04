@@ -27,6 +27,9 @@ export interface RequestRecord {
 export interface IngressEntry {
   hostname: string
   upstream: string
+  tunnelMode?: 'token' | 'api-managed' | 'dynamic' | 'quick' | 'local' | null
+  tunnelName?: string | null
+  publicUrl?: string | null
 }
 
 export interface InspectorConfig {

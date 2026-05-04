@@ -3,5 +3,6 @@
     <TargetFramework>net10.0</TargetFramework>
     <RootNamespace>Sample.Api</RootNamespace>
     <AssemblyName>Sample.Api</AssemblyName>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 </Project>

@@ -6,10 +6,12 @@
         <ImplicitUsings>enable</ImplicitUsings>
         <RootNamespace>Tap.Server</RootNamespace>
         <AssemblyName>Tap.Server</AssemblyName>
+        <IsPackable>false</IsPackable>
     </PropertyGroup>
 
     <ItemGroup>
         <PackageReference Include="Yarp.ReverseProxy" />
+        <ProjectReference Include="..\Tap.Core\Tap.Core.csproj" />
     </ItemGroup>
 
     <!-- Build the React inspector UI and sync it into wwwroot so the shipped binary

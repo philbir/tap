@@ -7,7 +7,7 @@ public sealed class CloudflareTunnelAnnotation(CloudflaredTunnelResource tunnel,
 {
     public CloudflaredTunnelResource Tunnel { get; } = tunnel;
 
-    public string Hostname { get; } = hostname;
+    public string Hostname { get; internal set; } = hostname;
 
     public string PublicUrl => $"https://{Hostname}";
 }

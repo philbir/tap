@@ -1,0 +1,17 @@
+**/bin/
+**/obj/
+**/node_modules/
+**/dist/
+ui/.yarn/cache/
+ui/.yarn/install-state.gz
+ui/.yarn/build-state.yml
+.git/
+.github/
+.vs/
+.idea/
+*.user
+.aspire/
+samples/
+ui/.pnp.cjs
+ui/.pnp.loader.mjs
+ui/.yarn/

@@ -2,14 +2,20 @@ import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter'
 import json from 'react-syntax-highlighter/dist/esm/languages/prism/json'
 import graphql from 'react-syntax-highlighter/dist/esm/languages/prism/graphql'
 import markup from 'react-syntax-highlighter/dist/esm/languages/prism/markup'
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript'
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript'
+import css from 'react-syntax-highlighter/dist/esm/languages/prism/css'
 import { oneDark, oneLight } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import { useState, type ReactNode } from 'react'
 
 SyntaxHighlighter.registerLanguage('json', json)
 SyntaxHighlighter.registerLanguage('graphql', graphql)
 SyntaxHighlighter.registerLanguage('markup', markup)
+SyntaxHighlighter.registerLanguage('javascript', javascript)
+SyntaxHighlighter.registerLanguage('typescript', typescript)
+SyntaxHighlighter.registerLanguage('css', css)
 
-type Language = 'json' | 'graphql' | 'markup' | 'text'
+type Language = 'json' | 'graphql' | 'markup' | 'javascript' | 'typescript' | 'css' | 'text'
 
 interface Props {
   body: string | null
@@ -24,7 +30,10 @@ function detectLanguage(contentType: string | null, body: string | null): Langua
   const ct = contentType?.toLowerCase() ?? ''
   if (ct.includes('json')) return 'json'
   if (ct.includes('graphql')) return 'graphql'
-  if (ct.includes('xml') || ct.includes('html')) return 'markup'
+  if (ct.includes('typescript')) return 'typescript'
+  if (ct.includes('javascript') || ct.includes('ecmascript')) return 'javascript'
+  if (ct.includes('css')) return 'css'
+  if (ct.includes('xml') || ct.includes('html') || ct.includes('svg')) return 'markup'
   if (!ct && body?.trim().startsWith('<')) return 'markup'
   if (!ct && body?.trim().startsWith('{')) return 'json'
   return 'text'
@@ -55,6 +64,23 @@ function extractGraphql(body: string): { query: string; variables: unknown; oper
     /* not json */
   }
   return null
+}
+
+function SvgPreview({ svg }: { svg: string }) {
+  const src = `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`
+  return (
+    <img
+      src={src}
+      alt="SVG response"
+      style={{
+        maxWidth: '100%',
+        background: 'var(--bg-input)',
+        border: '1px solid var(--border)',
+        borderRadius: '4px',
+        padding: '8px',
+      }}
+    />
+  )
 }
 
 function Highlighted({ code, language, theme }: { code: string; language: Language; theme: 'light' | 'dark' }) {
@@ -117,7 +143,11 @@ export function useCodeView({ body, base64, contentType, originalSize, truncated
     return { toolbar: null, content: <div style={{ color: 'var(--text-muted)' }}>(empty body)</div> }
   }
 
-  if (base64 && contentType?.toLowerCase().startsWith('image/')) {
+  const ctLower = contentType?.toLowerCase() ?? ''
+  const isSvg = ctLower.includes('svg')
+  const isImage = ctLower.startsWith('image/')
+
+  if (isImage && !isSvg && base64) {
     const src = `data:${contentType};base64,${base64}`
     return {
       toolbar: null,
@@ -138,6 +168,38 @@ export function useCodeView({ body, base64, contentType, originalSize, truncated
             {contentType} · {originalSize.toLocaleString()} bytes
           </div>
         </div>
+      ),
+    }
+  }
+
+  if (isSvg && body) {
+    return {
+      toolbar: (
+        <div style={{ display: 'flex', gap: '2px', alignItems: 'center' }}>
+          {(['view', 'raw'] as const).map((t) => (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              style={{
+                padding: '3px 10px',
+                fontSize: '11px',
+                background: tab === t ? 'var(--accent)' : 'var(--bg-input)',
+                color: tab === t ? '#fff' : 'var(--text-muted)',
+                borderColor: tab === t ? 'var(--accent)' : 'var(--border)',
+              }}
+            >
+              {t === 'view' ? 'Preview' : 'Source'}
+            </button>
+          ))}
+          <span style={{ marginLeft: '10px', fontSize: '11px', color: 'var(--text-muted)' }}>
+            {contentType} · {originalSize.toLocaleString()} bytes
+          </span>
+        </div>
+      ),
+      content: tab === 'view' ? (
+        <SvgPreview svg={body} />
+      ) : (
+        <Highlighted code={body} language="markup" theme={theme} />
       ),
     }
   }

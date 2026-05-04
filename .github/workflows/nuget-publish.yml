@@ -1,0 +1,75 @@
+name: Publish NuGet packages
+
+on:
+  push:
+    # Plain SemVer tags, no `v` prefix — `0.1.0`, `0.1.0-alpha.4`, etc.
+    # Matches the Docker + pages workflows.
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (e.g. 0.1.0)"
+        required: false
+      dry_run:
+        description: "Pack only, don't push"
+        type: boolean
+        default: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Tap.Cli + Tap.Server bundle the Vite-built UI into wwwroot/ via the
+      # BuildTapUi MSBuild target. The target shells out to `yarn build`, so
+      # Node + Corepack must be on PATH at pack time.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        run: corepack enable
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            # Tags are plain SemVer (no `v` prefix) — `0.1.0`, `0.1.0-alpha.4`.
+            v="${GITHUB_REF#refs/tags/}"
+            echo "version=$v" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Pack
+        run: |
+          dotnet pack Tap.slnx \
+            -c Release \
+            -p:Version=${{ steps.ver.outputs.version }} \
+            -o artifacts
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Push to NuGet.org
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          dotnet nuget push 'artifacts/*.nupkg' \
+            --source https://api.nuget.org/v3/index.json \
+            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --skip-duplicate
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkgs
+          path: artifacts/*.nupkg
+          retention-days: 14

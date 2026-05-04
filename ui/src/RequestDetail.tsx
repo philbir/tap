@@ -143,8 +143,16 @@ export function RequestDetail({ record, theme }: Props) {
 
   if (!record) {
     return (
-      <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-        Select a request to inspect.
+      <div className="empty-detail">
+        <img
+          className="empty-detail__hero"
+          src={theme === 'dark' ? '/tap-hero-dark.png' : '/tap-hero.png'}
+          alt="Tap tunnel carrying traffic from cloud to a developer laptop"
+        />
+        <div className="empty-detail__copy">
+          <h2>Ready to tap traffic</h2>
+          <p>Select a request to inspect headers, bodies, tokens, and replay details.</p>
+        </div>
       </div>
     )
   }

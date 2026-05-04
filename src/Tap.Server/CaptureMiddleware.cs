@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.IO.Compression;
 using System.Text;
 
 namespace Tap.Server;
@@ -47,7 +48,8 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
             captureStream.Position = 0;
             record.ResponseContentType = ctx.Response.ContentType;
             record.ResponseBodyOriginalSize = captureStream.Length;
-            CaptureResponseBody(captureStream, record);
+            var contentEncoding = ctx.Response.Headers.ContentEncoding.ToString();
+            CaptureResponseBody(captureStream, contentEncoding, record);
             captureStream.Position = 0;
 
             try
@@ -93,7 +95,7 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
         ctx.Request.Body.Position = 0;
     }
 
-    private static void CaptureResponseBody(MemoryStream captureStream, RequestRecord record)
+    private static void CaptureResponseBody(MemoryStream captureStream, string? contentEncoding, RequestRecord record)
     {
         if (captureStream.Length == 0)
         {
@@ -106,20 +108,80 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
             return;
         }
 
+        byte[] bytes;
+        try
+        {
+            bytes = DecodeBody(captureStream.ToArray(), contentEncoding);
+        }
+        catch
+        {
+            record.ResponseBodyTruncated = true;
+            return;
+        }
+
+        if (bytes.Length > MaxCaptureBytes)
+        {
+            record.ResponseBodyTruncated = true;
+            return;
+        }
+
+        if (IsSvgContentType(record.ResponseContentType))
+        {
+            record.ResponseBody = Encoding.UTF8.GetString(bytes);
+            return;
+        }
+
         if (IsImageContentType(record.ResponseContentType))
         {
-            record.ResponseBodyBase64 = Convert.ToBase64String(captureStream.ToArray());
+            record.ResponseBodyBase64 = Convert.ToBase64String(bytes);
             return;
         }
 
         if (IsTextContentType(record.ResponseContentType))
         {
-            record.ResponseBody = Encoding.UTF8.GetString(captureStream.ToArray());
+            record.ResponseBody = Encoding.UTF8.GetString(bytes);
             return;
         }
 
         record.ResponseBodyTruncated = true;
     }
+
+    private static byte[] DecodeBody(byte[] bytes, string? contentEncoding)
+    {
+        if (string.IsNullOrEmpty(contentEncoding))
+        {
+            return bytes;
+        }
+
+        var encoding = contentEncoding.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+            .LastOrDefault();
+        if (string.IsNullOrEmpty(encoding) || encoding.Equals("identity", StringComparison.OrdinalIgnoreCase))
+        {
+            return bytes;
+        }
+
+        using var input = new MemoryStream(bytes);
+        Stream decompressor = encoding.ToLowerInvariant() switch
+        {
+            "gzip" or "x-gzip" => new GZipStream(input, CompressionMode.Decompress, leaveOpen: true),
+            "deflate" => new DeflateStream(input, CompressionMode.Decompress, leaveOpen: true),
+            "br" => new BrotliStream(input, CompressionMode.Decompress, leaveOpen: true),
+            _ => null!,
+        };
+        if (decompressor is null)
+        {
+            return bytes;
+        }
+        using (decompressor)
+        {
+            using var output = new MemoryStream();
+            decompressor.CopyTo(output);
+            return output.ToArray();
+        }
+    }
+
+    private static bool IsSvgContentType(string? contentType) =>
+        contentType?.Contains("svg", StringComparison.OrdinalIgnoreCase) == true;
 
     private static bool IsImageContentType(string? contentType) =>
         contentType?.StartsWith("image/", StringComparison.OrdinalIgnoreCase) == true;

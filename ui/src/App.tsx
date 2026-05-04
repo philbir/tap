@@ -2,9 +2,52 @@ import { useMemo, useState } from 'react'
 import { RequestList } from './RequestList'
 import { RequestDetail } from './RequestDetail'
 import { TunnelPanel } from './TunnelPanel'
+import { TunnelInfoDialog } from './TunnelInfoDialog'
 import { useRequestStream } from './useRequestStream'
 import { useInspectorConfig } from './useIngress'
 import { useTheme } from './useTheme'
+import type { IngressEntry } from './types'
+
+function TunnelBadge({ entry, onClick }: { entry: IngressEntry; onClick: () => void }) {
+  const mode = entry.tunnelMode ?? ''
+  const label = mode === 'token' ? 'token'
+    : mode === 'api-managed' ? 'api-managed'
+    : mode === 'dynamic' ? 'dynamic'
+    : mode === 'quick' ? 'quick'
+    : mode
+  const tip = [
+    `Cloudflare tunnel: ${label}`,
+    entry.tunnelName ? `name: ${entry.tunnelName}` : null,
+    entry.publicUrl ? `public: ${entry.publicUrl}` : null,
+  ].filter(Boolean).join(' · ')
+
+  return (
+    <button
+      onClick={onClick}
+      title={`${tip} · click for details`}
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: '5px',
+        fontSize: '9.5px',
+        fontFamily: 'SF Mono, Menlo, monospace',
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+        padding: '1px 6px 1px 5px',
+        borderRadius: '3px',
+        background: '#fff',
+        color: '#f6821f',
+        border: '1px solid color-mix(in srgb, #f6821f 35%, transparent)',
+        cursor: 'pointer',
+      }}
+    >
+      <img src="/cloudflare.svg" alt="Cloudflare" height={11} style={{ display: 'block' }} />
+      <span style={{ borderLeft: '1px solid color-mix(in srgb, #f6821f 35%, transparent)', paddingLeft: '5px' }}>
+        {label}
+      </span>
+    </button>
+  )
+}
 
 export function App() {
   const { records, connected, clear } = useRequestStream()
@@ -13,6 +56,7 @@ export function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const [tunnelOpen, setTunnelOpen] = useState(false)
+  const [tunnelInfoOpen, setTunnelInfoOpen] = useState(false)
   const [selectedHostname, setSelectedHostname] = useState<string | null>(null)
 
   const selected = useMemo(
@@ -52,11 +96,9 @@ export function App() {
           gap: '16px',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', whiteSpace: 'nowrap' }}>
-          <img src="/icon.svg" width="22" height="22" alt="" />
-          <span style={{ fontWeight: 600, fontSize: '14px', letterSpacing: '-0.01em' }}>
-            <span style={{ color: 'var(--accent)' }}>tap</span>
-          </span>
+        <div className="app-brand" aria-label="Tap">
+          <img src="/tap-mark.svg" width="28" height="28" alt="" />
+          <span>Tap</span>
         </div>
 
         <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
@@ -83,10 +125,17 @@ export function App() {
             }
           >
             {ingress.map((i) => (
-              <span key={i.hostname || i.upstream} style={{ whiteSpace: 'nowrap' }}>
-                <span style={{ color: 'var(--accent)' }}>{i.hostname || 'any'}</span>
-                <span style={{ margin: '0 6px' }}>→</span>
+              <span key={i.hostname || i.upstream} style={{ display: 'inline-flex', alignItems: 'center', gap: '6px', whiteSpace: 'nowrap' }}>
+                {i.publicUrl ? (
+                  <a href={i.publicUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)', textDecoration: 'none' }}>
+                    {i.hostname || 'any'}
+                  </a>
+                ) : (
+                  <span style={{ color: 'var(--accent)' }}>{i.hostname || 'any'}</span>
+                )}
+                <span>→</span>
                 <span>{i.upstream}</span>
+                {i.tunnelMode && i.tunnelMode !== 'local' && <TunnelBadge entry={i} onClick={() => setTunnelInfoOpen(true)} />}
               </span>
             ))}
             {mode === 'tunnel' && (
@@ -167,6 +216,15 @@ export function App() {
 
       {proxyPort !== undefined && (
         <TunnelPanel proxyPort={proxyPort} open={tunnelOpen} onClose={() => setTunnelOpen(false)} />
+      )}
+
+      {proxyPort !== undefined && ingress.length > 0 && (
+        <TunnelInfoDialog
+          open={tunnelInfoOpen}
+          proxyPort={proxyPort}
+          upstream={ingress[0].upstream}
+          onClose={() => setTunnelInfoOpen(false)}
+        />
       )}
     </div>
   )

@@ -1,7 +1,9 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Tap.Core/Tap.Core.csproj" />
     <Project Path="src/Tap.Hosting/Tap.Hosting.csproj" />
     <Project Path="src/Tap.Server/Tap.Server.csproj" />
+    <Project Path="src/Tap.Cli/Tap.Cli.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Sample.Api/Sample.Api.csproj" />

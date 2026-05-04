@@ -1,0 +1,52 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Tap.Cli</RootNamespace>
+    <AssemblyName>tap</AssemblyName>
+
+    <!-- .NET tool packaging -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>tap</ToolCommandName>
+    <IsPackable>true</IsPackable>
+    <PackageId>Tap</PackageId>
+    <Title>Tap</Title>
+    <Description>tap — ngrok-style HTTP inspector with optional Cloudflare tunnels. Install as a global .NET tool: `dotnet tool install -g Tap`. Run `tap --help` to get started.</Description>
+    <PackageTags>tap;http;inspector;proxy;cloudflare;cloudflared;tunnel;ngrok;dotnet-tool</PackageTags>
+
+    <!-- The bundled wwwroot includes a .gitkeep; without this NuGet's default-excludes
+         abort the pack (NU5119 promoted to error by TreatWarningsAsErrors). -->
+    <NoDefaultExcludes>true</NoDefaultExcludes>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" />
+    <PackageReference Include="Spectre.Console.Cli" />
+    <ProjectReference Include="..\Tap.Core\Tap.Core.csproj" />
+    <ProjectReference Include="..\Tap.Server\Tap.Server.csproj" />
+  </ItemGroup>
+
+  <!-- Tap.Server is a Web SDK project that ships its UI as static web assets via a runtime
+       manifest. A console SDK host (Tap.Cli) doesn't activate that pipeline, so we copy
+       the built wwwroot directly into the CLI build/publish output and into the .NET tool
+       nupkg's tools/<tfm>/any/ folder.
+
+       The yarn build is triggered by Tap.Server's BuildTapUi target, which runs as part of
+       Tap.Server's build (a dependency of ours). By the time ResolveProjectReferences
+       completes, ../Tap.Server/wwwroot/ is freshly populated, so we add ContentWithTargetPath
+       items dynamically at target time (globs re-evaluate inside targets). -->
+  <Target Name="IncludeTapServerWwwroot"
+          BeforeTargets="AssignTargetPaths;_GetPackageFiles"
+          DependsOnTargets="ResolveProjectReferences">
+    <ItemGroup>
+      <_TapWwwroot Include="$(MSBuildThisFileDirectory)..\Tap.Server\wwwroot\**\*" />
+      <ContentWithTargetPath Include="@(_TapWwwroot)">
+        <TargetPath>wwwroot\%(_TapWwwroot.RecursiveDir)%(_TapWwwroot.Filename)%(_TapWwwroot.Extension)</TargetPath>
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ContentWithTargetPath>
+    </ItemGroup>
+  </Target>
+
+</Project>

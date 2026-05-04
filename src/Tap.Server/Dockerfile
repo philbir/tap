@@ -1,0 +1,43 @@
+# syntax=docker/dockerfile:1.6
+#
+# Tap inspector image. Build context = repo root, so paths are relative to repo root.
+#   docker build -t ghcr.io/philbir/tap:latest -f src/Tap.Server/Dockerfile .
+
+# 1) Build the React inspector UI (yarn / vite).
+#    The repo uses Yarn 4 with default PnP, but PnP runs into resolver bugs inside Alpine
+#    (path-based ESM resolution). Force the node-modules linker for the docker build —
+#    it's slower but reliable, and only affects this image.
+FROM node:22-alpine AS ui
+WORKDIR /ui
+COPY ui/package.json ui/yarn.lock* ./
+RUN echo "nodeLinker: node-modules" > .yarnrc.yml \
+    && corepack enable \
+    && yarn install
+COPY ui/ ./
+# Re-write .yarnrc.yml in case the COPY brought one over (we want node-modules in this stage).
+RUN echo "nodeLinker: node-modules" > .yarnrc.yml \
+    && yarn build
+
+# 2) Restore + publish the .NET inspector. The csproj's BuildTapUi target is suppressed
+#    via SkipTapUiBuild=true; we plug the pre-built dist/ from the ui stage straight in.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY global.json Directory.Build.props Directory.Packages.props ./
+COPY src/Tap.Core/ ./src/Tap.Core/
+COPY src/Tap.Server/ ./src/Tap.Server/
+COPY --from=ui /ui/dist ./src/Tap.Server/wwwroot/
+RUN dotnet publish src/Tap.Server/Tap.Server.csproj \
+        -c Release -o /app \
+        -p:SkipTapUiBuild=true
+
+# 3) Runtime — aspnet:10.0 chiseled is the smallest official image with ASP.NET Core.
+FROM mcr.microsoft.com/dotnet/aspnet:10.0
+WORKDIR /app
+COPY --from=build /app ./
+# Default ports — overridable via Inspector__ProxyPort / Inspector__UiPort.
+ENV ASPNETCORE_URLS=http://0.0.0.0:5299;http://0.0.0.0:5298 \
+    Inspector__ProxyPort=5299 \
+    Inspector__UiPort=5298 \
+    Inspector__Mode=standalone
+EXPOSE 5298 5299
+ENTRYPOINT ["dotnet", "Tap.Server.dll"]

@@ -113,3 +113,80 @@ code {
   padding: 1px 5px;
   border-radius: 4px;
 }
+
+.app-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 86px;
+  white-space: nowrap;
+}
+
+.app-brand img {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  box-shadow: var(--shadow);
+}
+
+.app-brand span {
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 760;
+  line-height: 1;
+}
+
+.empty-detail {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 18px;
+  height: 100%;
+  min-height: 0;
+  padding: 28px;
+  overflow: hidden;
+  text-align: center;
+  background:
+    radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--accent) 9%, transparent), transparent 34%),
+    var(--bg);
+}
+
+.empty-detail__hero {
+  display: block;
+  width: min(78%, 760px);
+  max-height: min(58vh, 520px);
+  aspect-ratio: 16 / 10;
+  object-fit: contain;
+  border-radius: 8px;
+  filter: drop-shadow(0 24px 48px color-mix(in srgb, var(--accent) 16%, transparent));
+}
+
+.empty-detail__copy {
+  max-width: 440px;
+}
+
+.empty-detail__copy h2 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 18px;
+  font-weight: 720;
+}
+
+.empty-detail__copy p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+@media (max-width: 900px) {
+  .empty-detail {
+    padding: 20px;
+  }
+
+  .empty-detail__hero {
+    width: min(92%, 620px);
+    max-height: 45vh;
+  }
+}

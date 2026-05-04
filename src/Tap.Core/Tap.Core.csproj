@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Tap.Core</RootNamespace>
+    <AssemblyName>Tap.Internals</AssemblyName>
+    <IsPackable>true</IsPackable>
+    <PackageId>Tap.Internals</PackageId>
+    <Title>Tap.Internals</Title>
+    <Description>Internal building block for Tap.Aspire.Hosting and the Tap CLI. Not intended to be referenced directly — install Tap.Aspire.Hosting instead.</Description>
+    <PackageTags>tap;cloudflare;cloudflared;internal</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,67 @@
+using System.ComponentModel;
+using Spectre.Console;
+using Spectre.Console.Cli;
+using Tap.Cli.Profiles;
+using Tap.Core.Cloudflared;
+
+namespace Tap.Cli.Commands;
+
+public sealed class SaveCommand : Command<SaveCommand.Settings>
+{
+    public sealed class Settings : TapBaseSettings
+    {
+        [CommandArgument(0, "<name>")]
+        [Description("Profile name. Stored as ~/.config/tap/tunnels/<name>.json (or %APPDATA%/tap/tunnels/<name>.json on Windows).")]
+        public string ProfileName { get; init; } = "";
+
+        [CommandArgument(1, "[upstream]")]
+        [Description("Upstream URL.")]
+        public string? Upstream { get; init; }
+    }
+
+    public override int Execute(CommandContext context, Settings settings)
+    {
+        var store = new TunnelProfileStore();
+
+        // Re-use the run-command merge so env/config still apply.
+        var existing = store.Load(settings.ProfileName);
+        var merged = RunCommand.MergeWithEnvAndConfig(settings, settings.Upstream, existing);
+
+        var profile = new TunnelProfile
+        {
+            Name = settings.ProfileName,
+            Upstream = merged.Upstream,
+            ProxyPort = merged.ProxyPort,
+            UiPort = merged.UiPort,
+            TunnelMode = ResolveTunnelMode(merged),
+            Token = merged.Token,
+            ApiToken = merged.ApiToken,
+            AccountId = merged.AccountId,
+            ApiManagedTunnelName = merged.ApiManagedTunnelName,
+            DynamicZone = merged.DynamicZone,
+            Hostname = merged.Hostname,
+            Docker = merged.HostMode == CloudflaredHostMode.Docker,
+            AutoInstall = merged.AutoInstall,
+            AuthHeader = merged.AuthHeader,
+            AuthCidrs = merged.AuthCidrs,
+            AuthCountries = merged.AuthCountries,
+            OidcAuthority = merged.OidcAuthority,
+            OidcClientId = merged.OidcClientId,
+            OidcClientSecret = merged.OidcClientSecret,
+        };
+
+        store.Save(profile);
+        AnsiConsole.MarkupLine($"[green]Saved[/] [bold]{Markup.Escape(profile.Name)}[/] [grey]→[/] {Markup.Escape(Path.Combine(store.RootDirectory, profile.Name + ".json"))}");
+        AnsiConsole.MarkupLine($"[grey]Run with:[/] tap run --name {Markup.Escape(profile.Name)}");
+        return 0;
+    }
+
+    private static Tap.Core.Cloudflare.TunnelMode ResolveTunnelMode(RunCommand.MergedSettings m)
+    {
+        if (m.Quick) return Tap.Core.Cloudflare.TunnelMode.Quick;
+        if (!string.IsNullOrWhiteSpace(m.Token)) return Tap.Core.Cloudflare.TunnelMode.Token;
+        if (!string.IsNullOrWhiteSpace(m.DynamicZone)) return Tap.Core.Cloudflare.TunnelMode.Dynamic;
+        if (!string.IsNullOrWhiteSpace(m.ApiManagedTunnelName)) return Tap.Core.Cloudflare.TunnelMode.ApiManaged;
+        return Tap.Core.Cloudflare.TunnelMode.None;
+    }
+}

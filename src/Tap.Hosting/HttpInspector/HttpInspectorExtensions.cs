@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
+using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting;
 
@@ -19,23 +20,71 @@ public sealed class HttpInspectorIngressAnnotation : IResourceAnnotation
 public sealed record HttpInspectorIngressEntry(
     string? Hostname,
     IResourceWithEndpoints Target,
-    string? EndpointName);
+    string? EndpointName)
+{
+    /// <summary>"standalone" | "token" | "api-managed" | "dynamic"</summary>
+    public string? TunnelMode { get; init; }
+
+    /// <summary>Cloudflare tunnel name (api-managed/dynamic) or null.</summary>
+    public string? TunnelName { get; init; }
+
+    /// <summary>Public URL the tunnel exposes (e.g. https://managed-tap.p7e.dev).</summary>
+    public string? PublicUrl { get; init; }
+}
 
 /// <summary>
 /// Handle returned by <see cref="HttpInspectorExtensions.AddHttpInspector"/>; bundles the
-/// underlying project resource builder with the ingress annotation so call sites can
-/// attach services with <see cref="HttpInspectorExtensions.WithInspector"/>.
+/// underlying inspector resource (project OR container) with the ingress annotation, plus
+/// closures for <c>WithEnvironment</c> / <c>WithUrlForEndpoint</c> so call sites don't
+/// need to know which kind of resource is hosting the inspector.
 /// </summary>
 public sealed class HttpInspectorHandle
 {
-    internal HttpInspectorHandle(IResourceBuilder<ProjectResource> project, HttpInspectorIngressAnnotation annotation)
+    private readonly Action<Action<EnvironmentCallbackContext>> _withEnvironment;
+    private readonly Action<string, Action<ResourceUrlAnnotation>> _withUrlForEndpoint;
+
+    private HttpInspectorHandle(
+        IResource resource,
+        HttpInspectorIngressAnnotation annotation,
+        Action<Action<EnvironmentCallbackContext>> withEnvironment,
+        Action<string, Action<ResourceUrlAnnotation>> withUrlForEndpoint)
     {
-        Project = project;
+        Resource = resource;
         Annotation = annotation;
+        _withEnvironment = withEnvironment;
+        _withUrlForEndpoint = withUrlForEndpoint;
     }
 
-    public IResourceBuilder<ProjectResource> Project { get; }
+    public IResource Resource { get; }
     public HttpInspectorIngressAnnotation Annotation { get; }
+
+    public HttpInspectorHandle WithEnvironment(Action<EnvironmentCallbackContext> callback)
+    {
+        _withEnvironment(callback);
+        return this;
+    }
+
+    public HttpInspectorHandle WithEnvironment(string name, string value)
+    {
+        _withEnvironment(ctx => ctx.EnvironmentVariables[name] = value);
+        return this;
+    }
+
+    public HttpInspectorHandle WithUrlForEndpoint(string endpointName, Action<ResourceUrlAnnotation> callback)
+    {
+        _withUrlForEndpoint(endpointName, callback);
+        return this;
+    }
+
+    internal static HttpInspectorHandle ForProject(IResourceBuilder<ProjectResource> project, HttpInspectorIngressAnnotation annotation)
+        => new(project.Resource, annotation,
+            cb => project.WithEnvironment(cb),
+            (name, cb) => project.WithUrlForEndpoint(name, cb));
+
+    internal static HttpInspectorHandle ForContainer(IResourceBuilder<ContainerResource> container, HttpInspectorIngressAnnotation annotation)
+        => new(container.Resource, annotation,
+            cb => container.WithEnvironment(cb),
+            (name, cb) => container.WithUrlForEndpoint(name, cb));
 }
 
 public static class HttpInspectorExtensions
@@ -70,31 +119,88 @@ public static class HttpInspectorExtensions
         var project = builder.AddProject<TInspectorServer>(name)
             .WithHttpEndpoint(port: proxyPort, name: "proxy", isProxied: false)
             .WithHttpEndpoint(port: uiPort, name: "ui", isProxied: false)
-            .WithEnvironment("Inspector__ProxyPort", proxyPort.ToString(CultureInfo.InvariantCulture))
-            .WithEnvironment("Inspector__UiPort", uiPort.ToString(CultureInfo.InvariantCulture))
-            .WithEnvironment("Inspector__Mode", mode)
+            .WithAnnotation(annotation);
+
+        var handle = HttpInspectorHandle.ForProject(project, annotation);
+        ConfigureCommonInspectorEnv(handle, builder.Configuration, annotation, mode);
+        return handle;
+    }
+
+    /// <summary>
+    /// Same inspector, hosted as a Docker container instead of a project. The container
+    /// image must contain the published <c>Tap.Server</c> with its <c>wwwroot/</c> bundled
+    /// (use <c>src/Tap.Server/Dockerfile</c> from this repo).
+    /// </summary>
+    public static HttpInspectorHandle AddHttpInspectorContainer(
+        this IDistributedApplicationBuilder builder,
+        string name = "http-inspector",
+        string image = "ghcr.io/philbir/tap",
+        string tag = "latest",
+        int proxyPort = DefaultProxyPort,
+        int uiPort = DefaultUiPort,
+        string mode = "standalone",
+        ImagePullPolicy imagePullPolicy = ImagePullPolicy.Missing)
+    {
+        var annotation = new HttpInspectorIngressAnnotation
+        {
+            ProxyPort = proxyPort,
+            UiPort = uiPort,
+            Mode = mode,
+        };
+
+        // Default to Missing so locally-tagged dev images (e.g. philbir/tap:local) Just Work
+        // without an unintended Docker Hub pull attempt. Override with Always for floating
+        // tags where you want to refresh on each AppHost run.
+        var container = builder.AddContainer(name, image, tag)
+            .WithImagePullPolicy(imagePullPolicy)
+            .WithHttpEndpoint(port: proxyPort, targetPort: proxyPort, name: "proxy", isProxied: false)
+            .WithHttpEndpoint(port: uiPort, targetPort: uiPort, name: "ui", isProxied: false)
+            .WithAnnotation(annotation);
+
+        var handle = HttpInspectorHandle.ForContainer(container, annotation);
+        ConfigureCommonInspectorEnv(handle, builder.Configuration, annotation, mode);
+        return handle;
+    }
+
+    private static void ConfigureCommonInspectorEnv(
+        HttpInspectorHandle handle,
+        IConfiguration cfConfig,
+        HttpInspectorIngressAnnotation annotation,
+        string mode)
+    {
+        handle
+            .WithUrlForEndpoint("proxy", url => url.DisplayText = "Proxy")
+            .WithUrlForEndpoint("ui", url => url.DisplayText = "Inspector UI")
+            .WithEnvironment(ctx =>
+            {
+                ctx.EnvironmentVariables["Inspector__ProxyPort"] = annotation.ProxyPort.ToString(CultureInfo.InvariantCulture);
+                ctx.EnvironmentVariables["Inspector__UiPort"] = annotation.UiPort.ToString(CultureInfo.InvariantCulture);
+                ctx.EnvironmentVariables["Inspector__Mode"] = mode;
+            })
             .WithEnvironment(ctx =>
             {
                 var entries = annotation.Entries
-                    .Select(e => new { hostname = e.Hostname ?? string.Empty, upstream = ResolveLocalUrl(e) })
+                    .Select(e => new
+                    {
+                        hostname = e.Hostname ?? string.Empty,
+                        upstream = ResolveLocalUrl(e, containerHosted: handle.Resource is ContainerResource),
+                        tunnelMode = e.TunnelMode,
+                        tunnelName = e.TunnelName,
+                        publicUrl = e.PublicUrl,
+                    })
                     .ToArray();
                 ctx.EnvironmentVariables["Inspector__Ingress"] = JsonSerializer.Serialize(entries);
-            })
-            .WithAnnotation(annotation);
+            });
 
-        // Optional Cloudflare API credentials (only meaningful for tunnel-attached mode, but
-        // passing them here lets a standalone inspector reach Cloudflare too if desired).
-        var cfConfig = builder.Configuration;
+        // Optional Cloudflare API credentials.
         foreach (var key in new[] { "ApiToken", "AccountId", "TunnelId" })
         {
             var value = cfConfig[$"Cloudflare:{key}"];
             if (!string.IsNullOrWhiteSpace(value))
             {
-                project.WithEnvironment($"Cloudflare__{key}", value);
+                handle.WithEnvironment(ctx => ctx.EnvironmentVariables[$"Cloudflare__{key}"] = value);
             }
         }
-
-        return new HttpInspectorHandle(project, annotation);
     }
 
     /// <summary>
@@ -112,7 +218,7 @@ public static class HttpInspectorExtensions
         return builder;
     }
 
-    internal static string ResolveLocalUrl(HttpInspectorIngressEntry entry)
+    internal static string ResolveLocalUrl(HttpInspectorIngressEntry entry, bool containerHosted = false)
     {
         var endpoints = entry.Target.Annotations.OfType<EndpointAnnotation>().ToList();
         var endpoint = entry.EndpointName is null
@@ -127,6 +233,11 @@ public static class HttpInspectorExtensions
                 + ". Ensure the target resource has an HTTP endpoint.");
         }
 
-        return $"{endpoint.UriScheme}://localhost:{endpoint.AllocatedEndpoint.Port}";
+        // When the inspector itself runs inside Docker, "localhost" inside the container is
+        // not the AppHost machine. host.docker.internal works on Docker Desktop (mac/win/linux
+        // since 20.10). On Linux + plain Docker daemon, the container would need --add-host
+        // host.docker.internal:host-gateway — Aspire adds this for AddContainer by default.
+        var host = containerHosted ? "host.docker.internal" : "localhost";
+        return $"{endpoint.UriScheme}://{host}:{endpoint.AllocatedEndpoint.Port}";
     }
 }

@@ -1,14 +1,16 @@
-// Sample AppHost for Tap. One Sample.Api upstream, one inspector per scenario,
-// each tunnel nested as a child of its inspector in the Aspire dashboard.
+// Sample AppHost for Tap. One Sample.Api upstream, one tap per scenario,
+// each tunnel nested as a child of its tap in the Aspire dashboard.
 //
 //   api  ──────────────────────────────────  Sample.Api (single upstream)
-//   inspector-standalone     5298 / 5299
-//   inspector-token          5300 / 5301
-//     └── cf-token                          (cloudflared --token)
-//   inspector-managed        5302 / 5303
-//     └── cf-api                            (cloudflared, API-managed tunnel)
-//   inspector-dynamic        5304 / 5305
-//     └── cf-dyn                            (cloudflared, dynamic hostname)
+//   tap-standalone           5298 / 5299
+//   tap-quick                5306 / 5307
+//     └── tap-quick-tunnel                   (cloudflared, TryCloudflare quick tunnel)
+//   tap-existing             5300 / 5301
+//     └── tap-existing-tunnel                (cloudflared --token)
+//   tap-managed              5302 / 5303
+//     └── tap-managed-tunnel                 (cloudflared, API-managed tunnel)
+//   tap-dynamic              5304 / 5305
+//     └── tap-dynamic-tunnel                 (cloudflared, dynamic hostname)
 //
 // Configure via user-secrets (project-scoped):
 //   dotnet user-secrets set Cloudflare:TunnelToken "<token>"        --project samples/Sample.AppHost
@@ -22,42 +24,34 @@ var zone = builder.Configuration["Cloudflare:Zone"] ?? "p7e.dev";
 // One upstream API, shared by every scenario.
 var api = builder.AddProject<Projects.Sample_Api>("api");
 
-// 1) Standalone inspector — direct: client -> inspector:5299 -> api.
-var inspectorStandalone = builder.AddHttpInspector<Projects.Tap_Server>(
-    name: "inspector-standalone", proxyPort: 5299, uiPort: 5298);
-api.WithInspector(inspectorStandalone);
+// 1) Standalone tap — direct: client -> tap:5299 -> api.
+var tapStandalone = builder.AddTap<Projects.Tap_Server>(
+    name: "tap-standalone", proxyPort: 5299, uiPort: 5298);
+api.WithTap(tapStandalone);
 
 // 2) TryCloudflare quick tunnel — no Cloudflare account needed.
 //    cloudflared assigns a random *.trycloudflare.com URL on startup; the URL is parsed
-//    from cloudflared's logs and surfaced as a clickable link on the cf-quick resource.
+//    from cloudflared's logs and surfaced as a clickable link on the tunnel resource.
 {
-    var inspector = builder.AddHttpInspector<Projects.Tap_Server>(
-        name: "inspector-quick", proxyPort: 5307, uiPort: 5306);
+    var tap = builder.AddTap<Projects.Tap_Server>(
+            name: "tap-quick", proxyPort: 5307, uiPort: 5306)
+        .WithQuickTunnel();
 
-    var t = builder.AddCloudflaredTunnel("cf-quick")
-        .WithQuickTunnel("http://localhost:5307")
-        .WithHttpInspector(inspector)
-        .WithParentRelationship(inspector.Resource);
-
-    api.WithCloudflareTunnel(t); // hostname is null — TryCloudflare assigns one at runtime
+    api.WithTap(tap); // hostname is null — TryCloudflare assigns one at runtime
 }
 
-// 3) Token tunnel: cloudflared with --token, inspector in front.
+// 3) Existing dashboard-managed tunnel: cloudflared with --token, tap in front.
 var tunnelToken = builder.Configuration["Cloudflare:TunnelToken"];
 if (!string.IsNullOrWhiteSpace(tunnelToken))
 {
-    var inspector = builder.AddHttpInspector<Projects.Tap_Server>(
-        name: "inspector-token", proxyPort: 5301, uiPort: 5300);
+    var tap = builder.AddTap<Projects.Tap_Server>(
+            name: "tap-existing", proxyPort: 5301, uiPort: 5300)
+        .WithTunnel("tap-existing-tunnel", t => t.WithExistingTunnel(tunnelToken));
 
-    var t = builder.AddCloudflaredTunnel("cf-token")
-        .WithToken(tunnelToken)
-        .WithHttpInspector(inspector)
-        .WithParentRelationship(inspector.Resource);
-
-    api.WithCloudflareTunnel(t, builder.Configuration["Cloudflare:Hostnames:Token"] ?? $"token-tap.{zone}");
+    api.WithTap(tap, builder.Configuration["Cloudflare:Hostnames:Token"] ?? $"existing-tap.{zone}");
 }
 
-// 3) API-managed tunnel + 4) dynamic hostname tunnel.
+// 4) API-managed tunnel + 5) dynamic hostname tunnel.
 var apiToken = builder.Configuration["Cloudflare:ApiToken"];
 var accountId = builder.Configuration["Cloudflare:AccountId"];
 if (!string.IsNullOrWhiteSpace(apiToken) && string.IsNullOrWhiteSpace(accountId))
@@ -69,26 +63,20 @@ if (!string.IsNullOrWhiteSpace(apiToken) && string.IsNullOrWhiteSpace(accountId)
 }
 if (!string.IsNullOrWhiteSpace(apiToken) && !string.IsNullOrWhiteSpace(accountId))
 {
-    var inspectorManaged = builder.AddHttpInspector<Projects.Tap_Server>(
-        name: "inspector-managed", proxyPort: 5303, uiPort: 5302);
+    var tapManaged = builder.AddTap<Projects.Tap_Server>(
+            name: "tap-managed", proxyPort: 5303, uiPort: 5302)
+        .WithTunnel("tap-managed-tunnel", t => t
+            .WithApiManagedTunnel(apiToken, accountId, tunnelName: "tap-cf-api"));
 
-    var t = builder.AddCloudflaredTunnel("cf-api")
-        .WithApiManagedTunnel(apiToken, accountId, tunnelName: "tap-cf-api")
-        .WithHttpInspector(inspectorManaged)
-        .WithParentRelationship(inspectorManaged.Resource);
+    api.WithTap(tapManaged, builder.Configuration["Cloudflare:Hostnames:Managed"] ?? $"managed-tap.{zone}");
 
-    api.WithCloudflareTunnel(t, builder.Configuration["Cloudflare:Hostnames:Managed"] ?? $"managed-tap.{zone}");
+    var tapDynamic = builder.AddTap<Projects.Tap_Server>(
+            name: "tap-dynamic", proxyPort: 5305, uiPort: 5304)
+        .WithTunnel("tap-dynamic-tunnel", t => t
+            .WithApiManagedTunnel(apiToken, accountId, tunnelName: "tap-cf-dyn")
+            .WithDynamicHostname(zone, prefix: "api-", suffix: "-tap"));
 
-    var inspectorDynamic = builder.AddHttpInspector<Projects.Tap_Server>(
-        name: "inspector-dynamic", proxyPort: 5305, uiPort: 5304);
-
-    var d = builder.AddCloudflaredTunnel("cf-dyn")
-        .WithApiManagedTunnel(apiToken, accountId, tunnelName: "tap-cf-dyn")
-        .WithDynamicHostname(zone, prefix: "api-", suffix: "-tap")
-        .WithHttpInspector(inspectorDynamic)
-        .WithParentRelationship(inspectorDynamic.Resource);
-
-    api.WithCloudflareTunnel(d); // hostname allocated at startup
+    api.WithTap(tapDynamic); // hostname allocated at startup
 }
 
 builder.Build().Run();

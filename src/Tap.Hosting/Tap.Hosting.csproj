@@ -6,7 +6,7 @@
     <IsPackable>true</IsPackable>
     <PackageId>Tap.Aspire.Hosting</PackageId>
     <Title>Tap.Aspire.Hosting</Title>
-    <Description>Aspire AppHost integration for Tap — an ngrok-style HTTP inspector with optional Cloudflare tunnels. Adds AddHttpInspector(), AddCloudflaredTunnel(), and the WithInspector()/WithCloudflareTunnel() resource decorators to your Aspire AppHost.</Description>
+    <Description>Aspire AppHost integration for Tap — an ngrok-style HTTP inspector with optional Cloudflare tunnels. Adds AddTap(), tap.WithTunnel()/WithQuickTunnel(), and the WithTap() resource decorator to your Aspire AppHost.</Description>
     <PackageTags>aspire;integration;hosting;http;inspector;proxy;cloudflare;cloudflared;tunnel;ngrok;tap</PackageTags>
   </PropertyGroup>
 
@@ -16,7 +16,7 @@
   </ItemGroup>
 
   <!--
-    Note: AddHttpInspector references Projects.Tap_Server. That generated type comes from
+    Note: AddTap references Projects.Tap_Server. That generated type comes from
     the Aspire.AppHost.Sdk in the *consumer's* AppHost csproj, so consumers must also add
     a ProjectReference to Tap.Server. In a future packaged release we'll embed the
     published Tap.Server binary in the nupkg and switch to AddExecutable.

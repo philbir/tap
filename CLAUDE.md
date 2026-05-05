@@ -22,15 +22,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tap is two NuGet-style packages plus a sample, glued together by Aspire:
 
-- **`Tap.Hosting`** (library, namespace `Aspire.Hosting`) — extension methods consumers call from their own AppHost: `AddCloudflaredTunnel`, `AddHttpInspector<T>`, `WithCloudflareTunnel`, `WithInspector`, `WithHttpInspector`, `WithToken`, `WithApiManagedTunnel`, `WithDynamicHostname`. No runtime; pure AppHost wiring.
+- **`Tap.Hosting`** (library, namespace `Aspire.Hosting`) — extension methods consumers call from their own AppHost. Primary surface: `AddTap<T>`, `AddTapContainer`, `WithTap`, `tap.WithTunnel(name, configure)`, `tap.WithQuickTunnel`, `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`. Low-level escape hatches still public: `AddCloudflaredTunnel`, `WithCloudflareTunnel`. No runtime; pure AppHost wiring.
 - **`Tap.Server`** (`Microsoft.NET.Sdk.Web`) — standalone ASP.NET Core app: YARP reverse proxy + capture middleware + SSE feed + bundled React UI in `wwwroot`. Reads its config from `Inspector:*` and `Cloudflare:*` env vars set by the AppHost.
 - **`ui/`** — Vite + React 19 + TypeScript source for the inspector UI. Built into `Tap.Server/wwwroot` at build time; not a separate runtime artifact.
-- **`samples/Sample.AppHost`** — exercises four scenarios in parallel (standalone, token tunnel, API-managed tunnel, dynamic-hostname tunnel) gated on which user-secrets are present. `samples/Sample.Api` is the trivial upstream.
+- **`samples/Sample.AppHost`** — exercises five scenarios in parallel (standalone, quick tunnel, existing dashboard tunnel, API-managed tunnel, dynamic-hostname tunnel) gated on which user-secrets are present. `samples/Sample.Api` is the trivial upstream.
 
 ### How a request flows
 
-1. Internet → Cloudflare → cloudflared (token mode: dashboard ingress; local-ingress mode: a `config.yml` written to temp by `CloudflaredExtensions.WriteConfigYamlAsync`).
-2. cloudflared → `localhost:<InspectorProxyPort>` (when an inspector is attached; otherwise straight to the upstream's allocated localhost port).
+1. Internet → Cloudflare → cloudflared (existing-tunnel mode: dashboard ingress; local-ingress mode: a `config.yml` written to temp by `CloudflaredExtensions.WriteConfigYamlAsync`).
+2. cloudflared → `localhost:<InspectorProxyPort>` (when a tap is attached; otherwise straight to the upstream's allocated localhost port).
 3. `Tap.Server` listens on **two ports** distinguished by `app.MapWhen(ctx.Connection.LocalPort == ...)` in `Program.cs`:
    - `proxyPort` branch: `CaptureMiddleware` records request/response into `InMemoryRequestStore` (200-record ring, 1MB body cap, image bodies stored as base64) then YARP forwards to the upstream picked by Host header.
    - `uiPort` branch: REST under `/api/*` (list/clear records, replay, ingress, tunnel ingress) + an SSE stream at `/api/stream` + static UI fallback to `index.html`.
@@ -38,14 +38,14 @@ Tap is two NuGet-style packages plus a sample, glued together by Aspire:
 
 ### Two important Aspire-specific gotchas
 
-- **Generic `TInspectorServer` parameter**: `AddHttpInspector<T>` and `WithHttpInspector<T>` take a generic project-metadata type (typically `Projects.Tap_Server`). That generated type is emitted by the `Aspire.AppHost.Sdk` source generator **only in the consumer's AppHost csproj**, so the library cannot reference it directly. The consumer's AppHost csproj must therefore add a `ProjectReference` to `Tap.Server` itself (see `samples/Sample.AppHost/Sample.AppHost.csproj`). The `Tap.Hosting` reference in that same csproj uses `IsAspireProjectResource="false"` because it's a library, not a launchable project.
-- **`CloudflaredLifecycleHook` runs in `BeforeStartAsync`** and is responsible for: verifying the `cloudflared` binary, calling the Cloudflare API to look up / create named tunnels, writing credentials JSON to temp, resolving zone IDs by walking up labels of the FQDN, minting dynamic hostnames, ensuring DNS CNAMEs to `<tunnelId>.cfargotunnel.com`, and back-filling generated hostnames into `CloudflareTunnelAnnotation` and the inspector's ingress entries. Anything that needs a hostname before cloudflared launches belongs here, not in the extension methods.
+- **Generic `TTapServer` parameter**: `AddTap<T>` takes a generic project-metadata type (typically `Projects.Tap_Server`). That generated type is emitted by the `Aspire.AppHost.Sdk` source generator **only in the consumer's AppHost csproj**, so the library cannot reference it directly. The consumer's AppHost csproj must therefore add a `ProjectReference` to `Tap.Server` itself (see `samples/Sample.AppHost/Sample.AppHost.csproj`). The `Tap.Hosting` reference in that same csproj uses `IsAspireProjectResource="false"` because it's a library, not a launchable project.
+- **`CloudflaredLifecycleHook` runs in `BeforeStartAsync`** and is responsible for: verifying the `cloudflared` binary, calling the Cloudflare API to look up / create named tunnels, writing credentials JSON to temp, resolving zone IDs by walking up labels of the FQDN, minting dynamic hostnames, ensuring DNS CNAMEs to `<tunnelId>.cfargotunnel.com`, and back-filling generated hostnames into `CloudflareTunnelAnnotation` and the tap's ingress entries. Anything that needs a hostname before cloudflared launches belongs here, not in the extension methods.
 
 ### Configuration touch-points
 
 - AppHost reads `Cloudflare:TunnelToken`, `Cloudflare:ApiToken`, `Cloudflare:AccountId`, `Cloudflare:Zone`, `Cloudflare:Hostnames:*` from `IConfiguration`. The sample expects these via `dotnet user-secrets` (UserSecretsId `tap-sample-apphost`) — see header comment in `samples/Sample.AppHost/Program.cs`.
 - `Tap.Server` consumes `Inspector:ProxyPort`, `Inspector:UiPort`, `Inspector:Mode` (`standalone`|`tunnel`), `Inspector:Ingress` (JSON array of `{hostname, upstream}`), and optional `Cloudflare:ApiToken`/`AccountId`/`TunnelId` (used by `/api/tunnel/ingress` to mutate Cloudflare ingress rules). The AppHost serializes the ingress array via `WithEnvironment(ctx => ...)` so allocated upstream ports are resolved at startup, not registration.
-- Default ports: proxy `5199`, UI `5198` (constants in `HttpInspectorExtensions`). The sample overrides to `5299/5298` to avoid collisions if a real consumer also runs.
+- Default ports: proxy `5199`, UI `5198` (constants in `TapExtensions`). The sample overrides to `5299/5298` to avoid collisions if a real consumer also runs.
 
 ### Source-generated JSON
 

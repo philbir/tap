@@ -75,12 +75,12 @@ internal sealed class CloudflaredLifecycleHook(
                         return snapshot with { Urls = urls };
                     });
 
-                    // Patch the attached inspector's "proxy" URL chip so it points to the
+                    // Patch the attached tap's "proxy" URL chip so it points to the
                     // freshly-discovered public URL too (the WithUrlForEndpoint callback
                     // already ran with QuickPublicUrl == null).
-                    if (tunnel.AttachedInspector is { } inspector)
+                    if (tunnel.AttachedTap is { } tap)
                     {
-                        await resourceNotifications.PublishUpdateAsync(inspector.Resource, snapshot =>
+                        await resourceNotifications.PublishUpdateAsync(tap.Resource, snapshot =>
                         {
                             var proxy = snapshot.Urls.FirstOrDefault(u => u.Name == "proxy");
                             if (proxy is null) return snapshot;
@@ -170,15 +170,15 @@ internal sealed class CloudflaredLifecycleHook(
             }
         }
 
-        // Make sure the inspector ingress entries (if any) match the final hostnames.
-        if (tunnel.AttachedInspector is { } inspector)
+        // Make sure the tap's ingress entries (if any) match the final hostnames.
+        if (tunnel.AttachedTap is { } tap)
         {
             var mode = TunnelModeOf(tunnel);
-            inspector.Annotation.Entries.RemoveAll(e =>
+            tap.Annotation.Entries.RemoveAll(e =>
                 tunnel.IngressEntries.Any(t => ReferenceEquals(t.Target, e.Target)));
             foreach (var entry in tunnel.IngressEntries)
             {
-                inspector.Annotation.Entries.Add(new HttpInspectorIngressEntry(entry.Hostname, entry.Target, entry.EndpointName)
+                tap.Annotation.Entries.Add(new TapIngressEntry(entry.Hostname, entry.Target, entry.EndpointName)
                 {
                     TunnelMode = mode,
                     TunnelName = tunnel.ApiTunnelName ?? tunnel.Name,
@@ -248,7 +248,7 @@ internal sealed class CloudflaredLifecycleHook(
     private static string TunnelModeOf(CloudflaredTunnelResource tunnel)
     {
         if (tunnel.IsQuickTunnel) return "quick";
-        if (!tunnel.UseLocalIngress) return "token";
+        if (!tunnel.UseLocalIngress) return "existing";
         if (tunnel.DynamicZoneName is not null) return "dynamic";
         if (tunnel.ApiToken is not null) return "api-managed";
         return "local";
@@ -277,7 +277,7 @@ internal sealed class CloudflaredLifecycleHook(
         else if (string.IsNullOrWhiteSpace(tunnel.Token))
         {
             throw new InvalidOperationException(
-                $"Cloudflared tunnel '{tunnel.Name}' has no token. Call .WithToken(\"...\"), .WithLocalIngress(...), .WithApiManagedTunnel(...), or .WithQuickTunnel(...).");
+                $"Cloudflared tunnel '{tunnel.Name}' has no token. Call .WithExistingTunnel(\"...\"), .WithLocalIngress(...), .WithApiManagedTunnel(...), or .WithQuickTunnel(...).");
         }
     }
 
@@ -317,12 +317,12 @@ internal sealed class CloudflaredLifecycleHook(
                 tunnel.InspectorUiPort,
                 inspectorPort);
 
-            if (mode == "token")
+            if (mode == "existing")
             {
                 foreach (var entry in tunnel.IngressEntries)
                 {
                     logger.LogInformation(
-                        "Token mode: point {Hostname} -> http://localhost:{Proxy} in the Cloudflare dashboard so traffic flows through the inspector.",
+                        "Existing-tunnel mode: point {Hostname} -> http://localhost:{Proxy} in the Cloudflare dashboard so traffic flows through the tap.",
                         entry.Hostname,
                         inspectorPort);
                 }

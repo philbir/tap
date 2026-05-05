@@ -149,16 +149,17 @@ The CLI reads command flags first, then environment variables such as `TAP_UPSTR
 
 | Extension | Purpose |
 |---|---|
-| `AddHttpInspector<TInspectorServer>()` | Register `Tap.Server` as an Aspire project with proxy and UI endpoints. |
-| `WithInspector(inspector)` | Route a resource through a standalone inspector. |
-| `AddCloudflaredTunnel()` | Register `cloudflared` as an executable resource. |
-| `WithQuickTunnel(localUrl)` | Run TryCloudflare mode. |
-| `WithToken(token)` | Run token tunnel mode. |
+| `AddTap<TTapServer>()` | Register `Tap.Server` as an Aspire project with proxy and UI endpoints. |
+| `AddTapContainer(...)` | Same Tap, hosted as a Docker container. |
+| `WithTap(tap)` | Route a resource through a tap (and its tunnel, if attached). |
+| `tap.WithTunnel(name, configure)` | Attach a Cloudflare tunnel as a child of the tap. |
+| `tap.WithQuickTunnel()` | Attach a TryCloudflare quick tunnel wired to the tap's proxy port. |
+| `WithExistingTunnel(token)` | Run cloudflared against a tunnel created in the Cloudflare dashboard. |
 | `WithApiManagedTunnel(...)` | Create or reuse a named tunnel using the Cloudflare API. |
 | `WithDynamicHostname(...)` | Mint hostnames and DNS CNAMEs before startup. |
-| `WithCloudflareTunnel(tunnel, hostname)` | Attach an upstream resource to a tunnel. |
+| `AddCloudflaredTunnel()` | Low-level escape hatch: register `cloudflared` directly as an executable resource. |
 
-The generic `TInspectorServer` is the project metadata type emitted by Aspire's AppHost source generator, usually `Projects.Tap_Server`. Because that type exists only in the consumer's AppHost project, the consumer project must reference `Tap.Server` directly.
+The generic `TTapServer` is the project metadata type emitted by Aspire's AppHost source generator, usually `Projects.Tap_Server`. Because that type exists only in the consumer's AppHost project, the consumer project must reference `Tap.Server` directly.
 
 ### CloudflaredLifecycleHook
 

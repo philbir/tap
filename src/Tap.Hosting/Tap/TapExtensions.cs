@@ -1,28 +1,29 @@
 using System.Globalization;
 using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Cloudflared;
 using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting;
 
 /// <summary>
-/// Aspire resource annotation holding the inspector's allocated ports and the
-/// list of upstream ingress entries registered via <see cref="HttpInspectorExtensions.WithInspector"/>.
+/// Aspire resource annotation holding the tap's allocated ports and the
+/// list of upstream ingress entries registered via <see cref="TapExtensions.WithTap"/>.
 /// </summary>
-public sealed class HttpInspectorIngressAnnotation : IResourceAnnotation
+public sealed class TapIngressAnnotation : IResourceAnnotation
 {
     public required int ProxyPort { get; init; }
     public required int UiPort { get; init; }
     public required string Mode { get; init; } // "standalone" | "tunnel"
-    public List<HttpInspectorIngressEntry> Entries { get; } = [];
+    public List<TapIngressEntry> Entries { get; } = [];
 }
 
-public sealed record HttpInspectorIngressEntry(
+public sealed record TapIngressEntry(
     string? Hostname,
     IResourceWithEndpoints Target,
     string? EndpointName)
 {
-    /// <summary>"standalone" | "token" | "api-managed" | "dynamic"</summary>
+    /// <summary>"standalone" | "existing" | "api-managed" | "dynamic" | "quick"</summary>
     public string? TunnelMode { get; init; }
 
     /// <summary>Cloudflare tunnel name (api-managed/dynamic) or null.</summary>
@@ -33,107 +34,118 @@ public sealed record HttpInspectorIngressEntry(
 }
 
 /// <summary>
-/// Handle returned by <see cref="HttpInspectorExtensions.AddHttpInspector"/>; bundles the
-/// underlying inspector resource (project OR container) with the ingress annotation, plus
+/// Handle returned by <see cref="TapExtensions.AddTap"/>; bundles the
+/// underlying tap resource (project OR container) with the ingress annotation, plus
 /// closures for <c>WithEnvironment</c> / <c>WithUrlForEndpoint</c> so call sites don't
-/// need to know which kind of resource is hosting the inspector.
+/// need to know which kind of resource is hosting the tap.
 /// </summary>
-public sealed class HttpInspectorHandle
+public sealed class TapHandle
 {
     private readonly Action<Action<EnvironmentCallbackContext>> _withEnvironment;
     private readonly Action<string, Action<ResourceUrlAnnotation>> _withUrlForEndpoint;
 
-    private HttpInspectorHandle(
+    private TapHandle(
+        IDistributedApplicationBuilder applicationBuilder,
         IResource resource,
-        HttpInspectorIngressAnnotation annotation,
+        TapIngressAnnotation annotation,
         Action<Action<EnvironmentCallbackContext>> withEnvironment,
         Action<string, Action<ResourceUrlAnnotation>> withUrlForEndpoint)
     {
+        ApplicationBuilder = applicationBuilder;
         Resource = resource;
         Annotation = annotation;
         _withEnvironment = withEnvironment;
         _withUrlForEndpoint = withUrlForEndpoint;
     }
 
+    public IDistributedApplicationBuilder ApplicationBuilder { get; }
     public IResource Resource { get; }
-    public HttpInspectorIngressAnnotation Annotation { get; }
+    public TapIngressAnnotation Annotation { get; }
+    internal IResourceBuilder<CloudflaredTunnelResource>? AttachedTunnel { get; set; }
 
-    public HttpInspectorHandle WithEnvironment(Action<EnvironmentCallbackContext> callback)
+    public TapHandle WithEnvironment(Action<EnvironmentCallbackContext> callback)
     {
         _withEnvironment(callback);
         return this;
     }
 
-    public HttpInspectorHandle WithEnvironment(string name, string value)
+    public TapHandle WithEnvironment(string name, string value)
     {
         _withEnvironment(ctx => ctx.EnvironmentVariables[name] = value);
         return this;
     }
 
-    public HttpInspectorHandle WithUrlForEndpoint(string endpointName, Action<ResourceUrlAnnotation> callback)
+    public TapHandle WithUrlForEndpoint(string endpointName, Action<ResourceUrlAnnotation> callback)
     {
         _withUrlForEndpoint(endpointName, callback);
         return this;
     }
 
-    internal static HttpInspectorHandle ForProject(IResourceBuilder<ProjectResource> project, HttpInspectorIngressAnnotation annotation)
-        => new(project.Resource, annotation,
+    internal static TapHandle ForProject(
+        IDistributedApplicationBuilder applicationBuilder,
+        IResourceBuilder<ProjectResource> project,
+        TapIngressAnnotation annotation)
+        => new(applicationBuilder, project.Resource, annotation,
             cb => project.WithEnvironment(cb),
             (name, cb) => project.WithUrlForEndpoint(name, cb));
 
-    internal static HttpInspectorHandle ForContainer(IResourceBuilder<ContainerResource> container, HttpInspectorIngressAnnotation annotation)
-        => new(container.Resource, annotation,
+    internal static TapHandle ForContainer(
+        IDistributedApplicationBuilder applicationBuilder,
+        IResourceBuilder<ContainerResource> container,
+        TapIngressAnnotation annotation)
+        => new(applicationBuilder, container.Resource, annotation,
             cb => container.WithEnvironment(cb),
             (name, cb) => container.WithUrlForEndpoint(name, cb));
 }
 
-public static class HttpInspectorExtensions
+public static class TapExtensions
 {
     internal const int DefaultProxyPort = 5199;
     internal const int DefaultUiPort = 5198;
 
     /// <summary>
-    /// Registers a stand-alone HTTP inspector — YARP reverse proxy + capture middleware + SSE feed + bundled UI.
-    /// Attach upstream services with <c>.WithInspector(inspector)</c>.
+    /// Registers a Tap — YARP reverse proxy + capture middleware + SSE feed + bundled UI.
+    /// Attach upstream services with <c>.WithTap(tap)</c>; expose them publicly with
+    /// <c>tap.WithTunnel(...)</c>.
     /// </summary>
-    /// <typeparam name="TInspectorServer">
+    /// <typeparam name="TTapServer">
     /// The Tap.Server project metadata generated by the consumer's AppHost
     /// (typically <c>Projects.Tap_Server</c>). Aspire's source generator only emits this
     /// type in the AppHost project, so callers must supply it here.
     /// </typeparam>
-    public static HttpInspectorHandle AddHttpInspector<TInspectorServer>(
+    public static TapHandle AddTap<TTapServer>(
         this IDistributedApplicationBuilder builder,
-        string name = "http-inspector",
+        string name = "tap",
         int proxyPort = DefaultProxyPort,
         int uiPort = DefaultUiPort,
         string mode = "standalone")
-        where TInspectorServer : IProjectMetadata, new()
+        where TTapServer : IProjectMetadata, new()
     {
-        var annotation = new HttpInspectorIngressAnnotation
+        var annotation = new TapIngressAnnotation
         {
             ProxyPort = proxyPort,
             UiPort = uiPort,
             Mode = mode,
         };
 
-        var project = builder.AddProject<TInspectorServer>(name)
+        var project = builder.AddProject<TTapServer>(name)
             .WithHttpEndpoint(port: proxyPort, name: "proxy", isProxied: false)
             .WithHttpEndpoint(port: uiPort, name: "ui", isProxied: false)
             .WithAnnotation(annotation);
 
-        var handle = HttpInspectorHandle.ForProject(project, annotation);
-        ConfigureCommonInspectorEnv(handle, builder.Configuration, annotation, mode);
+        var handle = TapHandle.ForProject(builder, project, annotation);
+        ConfigureCommonTapEnv(handle, builder.Configuration, annotation, mode);
         return handle;
     }
 
     /// <summary>
-    /// Same inspector, hosted as a Docker container instead of a project. The container
-    /// image must contain the published <c>Tap.Server</c> with its <c>wwwroot/</c> bundled
+    /// Same Tap, hosted as a Docker container instead of a project. The container image
+    /// must contain the published <c>Tap.Server</c> with its <c>wwwroot/</c> bundled
     /// (use <c>src/Tap.Server/Dockerfile</c> from this repo).
     /// </summary>
-    public static HttpInspectorHandle AddHttpInspectorContainer(
+    public static TapHandle AddTapContainer(
         this IDistributedApplicationBuilder builder,
-        string name = "http-inspector",
+        string name = "tap",
         string image = "ghcr.io/philbir/tap",
         string tag = "latest",
         int proxyPort = DefaultProxyPort,
@@ -141,7 +153,7 @@ public static class HttpInspectorExtensions
         string mode = "standalone",
         ImagePullPolicy imagePullPolicy = ImagePullPolicy.Missing)
     {
-        var annotation = new HttpInspectorIngressAnnotation
+        var annotation = new TapIngressAnnotation
         {
             ProxyPort = proxyPort,
             UiPort = uiPort,
@@ -157,15 +169,15 @@ public static class HttpInspectorExtensions
             .WithHttpEndpoint(port: uiPort, targetPort: uiPort, name: "ui", isProxied: false)
             .WithAnnotation(annotation);
 
-        var handle = HttpInspectorHandle.ForContainer(container, annotation);
-        ConfigureCommonInspectorEnv(handle, builder.Configuration, annotation, mode);
+        var handle = TapHandle.ForContainer(builder, container, annotation);
+        ConfigureCommonTapEnv(handle, builder.Configuration, annotation, mode);
         return handle;
     }
 
-    private static void ConfigureCommonInspectorEnv(
-        HttpInspectorHandle handle,
+    private static void ConfigureCommonTapEnv(
+        TapHandle handle,
         IConfiguration cfConfig,
-        HttpInspectorIngressAnnotation annotation,
+        TapIngressAnnotation annotation,
         string mode)
     {
         handle
@@ -192,7 +204,6 @@ public static class HttpInspectorExtensions
                 ctx.EnvironmentVariables["Inspector__Ingress"] = JsonSerializer.Serialize(entries);
             });
 
-        // Optional Cloudflare API credentials.
         foreach (var key in new[] { "ApiToken", "AccountId", "TunnelId" })
         {
             var value = cfConfig[$"Cloudflare:{key}"];
@@ -204,21 +215,29 @@ public static class HttpInspectorExtensions
     }
 
     /// <summary>
-    /// Route traffic to <paramref name="builder"/>'s endpoint through the given inspector.
-    /// If <paramref name="hostname"/> is omitted, the inspector routes any Host to this target.
+    /// Route traffic to <paramref name="builder"/>'s endpoint through the given tap.
+    /// If the tap has a tunnel attached (via <see cref="CloudflaredExtensions.WithTunnel"/>
+    /// or <see cref="CloudflaredExtensions.WithQuickTunnel"/>), the upstream is also published
+    /// through that tunnel. <paramref name="hostname"/> is required for existing/api-managed
+    /// tunnels with no dynamic-host zone.
     /// </summary>
-    public static IResourceBuilder<T> WithInspector<T>(
+    public static IResourceBuilder<T> WithTap<T>(
         this IResourceBuilder<T> builder,
-        HttpInspectorHandle inspector,
+        TapHandle tap,
         string? hostname = null,
         string? endpointName = null)
         where T : IResourceWithEndpoints
     {
-        inspector.Annotation.Entries.Add(new HttpInspectorIngressEntry(hostname, builder.Resource, endpointName));
+        if (tap.AttachedTunnel is { } tunnel)
+        {
+            return builder.WithCloudflareTunnel(tunnel, hostname, endpointName);
+        }
+
+        tap.Annotation.Entries.Add(new TapIngressEntry(hostname, builder.Resource, endpointName));
         return builder;
     }
 
-    internal static string ResolveLocalUrl(HttpInspectorIngressEntry entry, bool containerHosted = false)
+    internal static string ResolveLocalUrl(TapIngressEntry entry, bool containerHosted = false)
     {
         var endpoints = entry.Target.Annotations.OfType<EndpointAnnotation>().ToList();
         var endpoint = entry.EndpointName is null
@@ -233,10 +252,6 @@ public static class HttpInspectorExtensions
                 + ". Ensure the target resource has an HTTP endpoint.");
         }
 
-        // When the inspector itself runs inside Docker, "localhost" inside the container is
-        // not the AppHost machine. host.docker.internal works on Docker Desktop (mac/win/linux
-        // since 20.10). On Linux + plain Docker daemon, the container would need --add-host
-        // host.docker.internal:host-gateway — Aspire adds this for AddContainer by default.
         var host = containerHosted ? "host.docker.internal" : "localhost";
         return $"{endpoint.UriScheme}://{host}:{endpoint.AllocatedEndpoint.Port}";
     }

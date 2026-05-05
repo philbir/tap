@@ -80,7 +80,7 @@ const docs: DocSection[] = [
     id: "cloudflare",
     eyebrow: "Cloudflare",
     title: "Tunnel setup",
-    body: "Token mode uses an existing Cloudflare Tunnel. API-managed mode needs a Cloudflare API token that can edit tunnels and DNS.",
+    body: "Existing-tunnel mode uses a Cloudflare Tunnel you have already created. API-managed mode needs a Cloudflare API token that can edit tunnels and DNS.",
   },
   {
     id: "auth",
@@ -136,35 +136,32 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var api = builder.AddProject<Projects.Sample_Api>("api");
 
-var inspector = builder.AddHttpInspector<Projects.Tap_Server>();
-api.WithInspector(inspector);
+var tap = builder.AddTap<Projects.Tap_Server>();
+api.WithTap(tap);
 
 builder.Build().Run();`,
-  quick: `var inspector = builder.AddHttpInspector<Projects.Tap_Server>(
-    name: "inspector-quick",
-    proxyPort: 5307,
-    uiPort: 5306);
+  quick: `var tap = builder.AddTap<Projects.Tap_Server>(
+        name: "tap-quick",
+        proxyPort: 5307,
+        uiPort: 5306)
+    .WithQuickTunnel();
 
-var tunnel = builder.AddCloudflaredTunnel("cf-quick")
-    .WithQuickTunnel("http://localhost:5307")
-    .WithHttpInspector(inspector);
+api.WithTap(tap);`,
+  token: `var tap = builder.AddTap<Projects.Tap_Server>()
+    .WithTunnel("tap-tunnel", t =>
+        t.WithExistingTunnel(builder.Configuration["Cloudflare:TunnelToken"]));
 
-api.WithCloudflareTunnel(tunnel);`,
-  token: `var tunnel = builder.AddCloudflaredTunnel("cf-token")
-    .WithToken(builder.Configuration["Cloudflare:TunnelToken"])
-    .WithHttpInspector<Projects.Tap_Server>();
+api.WithTap(tap, "api-local.example.com");`,
+  managed: `var tap = builder.AddTap<Projects.Tap_Server>()
+    .WithTunnel("tap-tunnel", t => t
+        .WithApiManagedTunnel(
+            builder.Configuration["Cloudflare:ApiToken"]!,
+            builder.Configuration["Cloudflare:AccountId"]!,
+            tunnelName: "tap-dev")
+        .WithDynamicHostname("example.com", prefix: "api-", suffix: "-tap"));
 
-api.WithCloudflareTunnel(tunnel, "api-local.example.com");`,
-  managed: `var tunnel = builder.AddCloudflaredTunnel("cf-api")
-    .WithApiManagedTunnel(
-        builder.Configuration["Cloudflare:ApiToken"]!,
-        builder.Configuration["Cloudflare:AccountId"]!,
-        tunnelName: "tap-dev")
-    .WithDynamicHostname("example.com", prefix: "api-", suffix: "-tap")
-    .WithHttpInspector<Projects.Tap_Server>();
-
-api.WithCloudflareTunnel(tunnel);`,
-  aspireAuth: `var inspector = builder.AddHttpInspector<Projects.Tap_Server>()
+api.WithTap(tap);`,
+  aspireAuth: `var tap = builder.AddTap<Projects.Tap_Server>()
     .WithHeaderAuth("X-Tap-Key", builder.Configuration["Tap:Key"]!)
     .WithIpAllowList("203.0.113.0/24")
     .WithCountryAllowList("CH")
@@ -173,7 +170,7 @@ api.WithCloudflareTunnel(tunnel);`,
         clientId: builder.Configuration["Auth:ClientId"]!,
         clientSecret: builder.Configuration["Auth:ClientSecret"]);
 
-api.WithInspector(inspector);`,
+api.WithTap(tap);`,
   secrets: `dotnet user-secrets set Cloudflare:TunnelToken "<connector-token>" \\
   --project samples/Sample.AppHost
 
@@ -248,7 +245,7 @@ const Hero = () => (
         <span>CLI</span>
         <span>Aspire</span>
         <span>TryCloudflare</span>
-        <span>Token tunnels</span>
+        <span>Existing tunnels</span>
         <span>API-managed DNS</span>
         <span>HTTP replay</span>
         <span>Free as tap water</span>
@@ -454,10 +451,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
       <section className="doc-block" id={doc.id}>
         <DocHeader doc={doc} />
         <div className="callout">
-          <strong>Token mode uses an existing tunnel</strong>
+          <strong>Existing-tunnel mode uses a dashboard tunnel</strong>
           <p>
-            `--token` and `WithToken(...)` do not create a Cloudflare Tunnel. Create the tunnel in
-            the Cloudflare dashboard first, copy its connector token, and pass that token to Tap.
+            `--token` and `WithExistingTunnel(...)` do not create a Cloudflare Tunnel. Create the
+            tunnel in the Cloudflare dashboard first, copy its connector token, and pass that token
+            to Tap.
           </p>
         </div>
         <div className="step-list">
@@ -465,9 +463,9 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             In Cloudflare Zero Trust, go to Networks, then Tunnels, create a cloudflared tunnel,
             and copy the connector command. The `eyJ...` value after `--token` is the connector token.
           </MiniPanel>
-          <MiniPanel title="Use token mode">
-            Pass the connector token to `tap run --token` or `WithToken(...)`, then attach the
-            hostname you already routed to that tunnel.
+          <MiniPanel title="Use existing-tunnel mode">
+            Pass the connector token to `tap run --token` or `WithExistingTunnel(...)`, then attach
+            the hostname you already routed to that tunnel.
           </MiniPanel>
           <MiniPanel title="Create an API token">
             For API-managed mode, create a Cloudflare API token with tunnel edit permission on the

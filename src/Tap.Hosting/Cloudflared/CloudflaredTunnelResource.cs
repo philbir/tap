@@ -22,7 +22,7 @@ public sealed class CloudflaredTunnelResource(string name, string command, strin
 
     public int? InspectorUiPort { get; internal set; }
 
-    internal HttpInspectorHandle? AttachedInspector { get; set; }
+    internal TapHandle? AttachedTap { get; set; }
 
     // Cloudflare API-managed tunnel: lifecycle hook will look up or create the tunnel
     // and write credentials before cloudflared launches.

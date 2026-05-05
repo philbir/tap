@@ -43,7 +43,7 @@ Quick tunnels are free with TryCloudflare and do not need a Cloudflare account. 
 | **Aspire** | You want tunnels and inspectors modeled in your AppHost with generated resource URLs. |
 | **Standalone inspector** | You want a local capture proxy without Cloudflare. |
 | **Quick tunnel** | You need a throwaway `*.trycloudflare.com` URL with no Cloudflare account or DNS setup. |
-| **Token tunnel** | You already manage a tunnel in the Cloudflare dashboard and want Tap to run `cloudflared --token`. |
+| **Existing tunnel** | You already manage a tunnel in the Cloudflare dashboard and want Tap to run `cloudflared --token` against it. |
 | **API-managed tunnel** | You want the AppHost to look up or create a named tunnel, write local credentials, and manage DNS. |
 | **Dynamic hostname** | You want fresh per-run hostnames such as `api-1a2b3c4d-tap.example.com` for demos or parallel dev loops. |
 
@@ -114,8 +114,8 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var api = builder.AddProject<Projects.Sample_Api>("api");
 
-var inspector = builder.AddHttpInspector<Projects.Tap_Server>();
-api.WithInspector(inspector);
+var tap = builder.AddTap<Projects.Tap_Server>();
+api.WithTap(tap);
 
 builder.Build().Run();
 ```
@@ -131,24 +131,20 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var api = builder.AddProject<Projects.Sample_Api>("api");
 
-var inspector = builder.AddHttpInspector<Projects.Tap_Server>(
-    name: "inspector-quick",
-    proxyPort: 5307,
-    uiPort: 5306);
+var tap = builder.AddTap<Projects.Tap_Server>(
+        name: "tap-quick",
+        proxyPort: 5307,
+        uiPort: 5306)
+    .WithQuickTunnel();
 
-var tunnel = builder.AddCloudflaredTunnel("cf-quick")
-    .WithQuickTunnel("http://localhost:5307")
-    .WithHttpInspector(inspector)
-    .WithParentRelationship(inspector.Project);
-
-api.WithCloudflareTunnel(tunnel);
+api.WithTap(tap);
 
 builder.Build().Run();
 ```
 
-`cloudflared` assigns a random TryCloudflare URL at startup. Tap watches the tunnel logs, surfaces the public URL in Aspire, and routes Cloudflare traffic through the inspector before it reaches `api`.
+`cloudflared` assigns a random TryCloudflare URL at startup. Tap watches the tunnel logs, surfaces the public URL on the tap, and routes Cloudflare traffic through the tap before it reaches `api`.
 
-### Aspire: Cloudflare token tunnel
+### Aspire: existing Cloudflare tunnel
 
 ```csharp
 using Aspire.Hosting;
@@ -157,11 +153,11 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var api = builder.AddProject<Projects.Sample_Api>("api");
 
-var tunnel = builder.AddCloudflaredTunnel("cf-token")
-    .WithToken(builder.Configuration["Cloudflare:TunnelToken"])
-    .WithHttpInspector<Projects.Tap_Server>();
+var tap = builder.AddTap<Projects.Tap_Server>()
+    .WithTunnel("tap-tunnel", t =>
+        t.WithExistingTunnel(builder.Configuration["Cloudflare:TunnelToken"]));
 
-api.WithCloudflareTunnel(tunnel, "api-local.example.com");
+api.WithTap(tap, "api-local.example.com");
 
 builder.Build().Run();
 ```
@@ -173,7 +169,7 @@ dotnet user-secrets set Cloudflare:TunnelToken "<token>" \
   --project samples/Sample.AppHost
 ```
 
-Token mode expects an existing Cloudflare Tunnel. Create the tunnel in the Cloudflare dashboard first, copy its connector token, and pass that token to Tap. Tap will run `cloudflared tunnel run --token ...`; it will not create or reconfigure that dashboard-managed tunnel.
+`WithExistingTunnel` expects a Cloudflare Tunnel you have already created. Create the tunnel in the Cloudflare dashboard first, copy its connector token, and pass that token to Tap. Tap will run `cloudflared tunnel run --token ...`; it will not create or reconfigure that dashboard-managed tunnel.
 
 ### Aspire: API-managed tunnel and DNS
 
@@ -184,15 +180,15 @@ var builder = DistributedApplication.CreateBuilder(args);
 
 var api = builder.AddProject<Projects.Sample_Api>("api");
 
-var tunnel = builder.AddCloudflaredTunnel("cf-api")
-    .WithApiManagedTunnel(
-        builder.Configuration["Cloudflare:ApiToken"]!,
-        builder.Configuration["Cloudflare:AccountId"]!,
-        tunnelName: "tap-dev")
-    .WithDynamicHostname("example.com", prefix: "api-", suffix: "-tap")
-    .WithHttpInspector<Projects.Tap_Server>();
+var tap = builder.AddTap<Projects.Tap_Server>()
+    .WithTunnel("tap-tunnel", t => t
+        .WithApiManagedTunnel(
+            builder.Configuration["Cloudflare:ApiToken"]!,
+            builder.Configuration["Cloudflare:AccountId"]!,
+            tunnelName: "tap-dev")
+        .WithDynamicHostname("example.com", prefix: "api-", suffix: "-tap"));
 
-api.WithCloudflareTunnel(tunnel);
+api.WithTap(tap);
 
 builder.Build().Run();
 ```
@@ -232,7 +228,7 @@ For token mode:
 
 1. In Cloudflare Zero Trust, create a Cloudflare Tunnel.
 2. Copy the `cloudflared tunnel run --token ...` connector command.
-3. Use only the token value with `tap run --token` or `WithToken(...)`.
+3. Use only the token value with `tap run --token` or `WithExistingTunnel(...)`.
 4. Route the hostname you pass to Tap to that tunnel in Cloudflare.
 
 For API-managed mode:
@@ -269,7 +265,7 @@ tap run http://localhost:3000 --quick \
 Aspire auth:
 
 ```csharp
-var inspector = builder.AddHttpInspector<Projects.Tap_Server>()
+var tap = builder.AddTap<Projects.Tap_Server>()
     .WithHeaderAuth("X-Tap-Key", builder.Configuration["Tap:Key"]!)
     .WithIpAllowList("203.0.113.0/24")
     .WithCountryAllowList("CH")
@@ -278,7 +274,7 @@ var inspector = builder.AddHttpInspector<Projects.Tap_Server>()
         clientId: builder.Configuration["Auth:ClientId"]!,
         clientSecret: builder.Configuration["Auth:ClientSecret"]);
 
-api.WithInspector(inspector);
+api.WithTap(tap);
 ```
 
 Enabled checks are combined. If header auth, CIDR allowlist, country allowlist, and OIDC are all configured, every request must satisfy every configured check.
@@ -287,13 +283,13 @@ Enabled checks are combined. If header auth, CIDR allowlist, country allowlist, 
 
 | Package | Purpose |
 |---|---|
-| `Tap.Hosting` | Aspire AppHost extensions: `AddCloudflaredTunnel`, `AddHttpInspector`, `WithCloudflareTunnel`, `WithInspector`, `WithHttpInspector`, `WithToken`, `WithApiManagedTunnel`, `WithDynamicHostname`. |
+| `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `tap.WithTunnel`, `tap.WithQuickTunnel`, `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`. |
 | `Tap.Server` | ASP.NET Core capture server: YARP reverse proxy, capture middleware, REST API, SSE stream, and bundled React UI. |
 | `Tap.Cli` | Local command host that reuses the same inspector server code. |
 
 Both entry points use the same `Tap.Server` host internally. The CLI builds `TapInspectorOptions` from command-line flags, environment variables, and optional `tap.config`; Aspire writes the same options through project environment variables.
 
-Consumer AppHost projects must reference both `Tap.Hosting` and `Tap.Server`. `Tap.Server` supplies the generated `Projects.Tap_Server` metadata type used by `AddHttpInspector<TInspectorServer>()`; `Tap.Hosting` should be referenced with `IsAspireProjectResource="false"` because it is a library, not a launchable resource.
+Consumer AppHost projects must reference both `Tap.Hosting` and `Tap.Server`. `Tap.Server` supplies the generated `Projects.Tap_Server` metadata type used by `AddTap<TTapServer>()`; `Tap.Hosting` should be referenced with `IsAspireProjectResource="false"` because it is a library, not a launchable resource.
 
 ```xml
 <ProjectReference Include="..\..\src\Tap.Hosting\Tap.Hosting.csproj"

@@ -189,8 +189,25 @@ export function App() {
               count={hostnameCounts[entry.hostname] ?? 0}
               active={selectedHostname === entry.hostname}
               onClick={() => { setSelectedHostname(entry.hostname); setSelectedId(null) }}
+              entry={entry}
+              onBadgeClick={() => setTunnelInfoOpen(true)}
             />
           ))}
+          {proxyPort !== undefined && (
+            <span
+              style={{
+                marginLeft: 'auto',
+                fontSize: '11px',
+                fontFamily: 'SF Mono, Menlo, monospace',
+                color: 'var(--text-muted)',
+                opacity: 0.8,
+                whiteSpace: 'nowrap',
+              }}
+            >
+              {mode === 'tunnel' ? 'Cloudflare target: ' : 'proxy: '}
+              <code style={{ fontSize: '10px' }}>http://localhost:{proxyPort}</code>
+            </span>
+          )}
         </div>
       )}
 
@@ -235,9 +252,12 @@ interface PillProps {
   count: number
   active: boolean
   onClick: () => void
+  entry?: IngressEntry
+  onBadgeClick?: () => void
 }
 
-function SelectorPill({ label, count, active, onClick }: PillProps) {
+function SelectorPill({ label, count, active, onClick, entry, onBadgeClick }: PillProps) {
+  const showBadge = !!(entry?.tunnelMode && entry.tunnelMode !== 'local' && onBadgeClick)
   return (
     <button
       onClick={onClick}
@@ -274,6 +294,34 @@ function SelectorPill({ label, count, active, onClick }: PillProps) {
       >
         {count}
       </span>
+      {showBadge && entry && (
+        <span
+          role="button"
+          tabIndex={0}
+          onClick={(e) => { e.stopPropagation(); onBadgeClick!() }}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); onBadgeClick!() } }}
+          title={`Cloudflare tunnel: ${entry.tunnelMode}${entry.tunnelName ? ' · ' + entry.tunnelName : ''} · click for details`}
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '4px',
+            fontSize: '9px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.04em',
+            padding: '1px 5px 1px 4px',
+            borderRadius: '3px',
+            background: '#fff',
+            color: '#f6821f',
+            border: '1px solid color-mix(in srgb, #f6821f 35%, transparent)',
+            cursor: 'pointer',
+          }}
+        >
+          <img src="/cloudflare.svg" alt="" height={9} style={{ display: 'block' }} />
+          <span style={{ borderLeft: '1px solid color-mix(in srgb, #f6821f 35%, transparent)', paddingLeft: '4px' }}>
+            {entry.tunnelMode}
+          </span>
+        </span>
+      )}
     </button>
   )
 }

@@ -8,7 +8,6 @@
     <img src="assets/tap-hero.png" alt="Tap tunnel and HTTP inspector illustration" width="620">
   </picture>
 
-  <h1>Tap</h1>
   <p><strong>Easy tunneling with an HTTP inspector built in.</strong> Test mobile app hooks, webhook deliveries, auth callbacks, partner integrations, and temporary demos from your local machine without changing the app you are building.</p>
 
   <p>

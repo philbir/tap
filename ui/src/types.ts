@@ -1,3 +1,12 @@
+export interface SseEvent {
+  timestamp: string
+  event: string
+  data: string
+  id: string | null
+  retry: number | null
+  comment: string | null
+}
+
 export interface RequestRecord {
   sequence: number
   id: string
@@ -22,6 +31,15 @@ export interface RequestRecord {
   responseContentType: string | null
   durationMs: number
   error: string | null
+  isStream?: boolean
+  streamCompleted?: boolean
+  sseEvents?: SseEvent[]
+}
+
+export interface SseEventEnvelope {
+  recordId: string
+  sequence: number
+  event: SseEvent
 }
 
 export interface IngressEntry {

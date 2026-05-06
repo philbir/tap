@@ -30,8 +30,8 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
         await CaptureRequestBodyAsync(ctx, record);
 
         var originalBody = ctx.Response.Body;
-        using var captureStream = new MemoryStream();
-        ctx.Response.Body = captureStream;
+        var capture = new CapturingResponseStream(ctx, originalBody, record, store);
+        ctx.Response.Body = capture;
 
         try
         {
@@ -45,29 +45,42 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
         }
         finally
         {
-            captureStream.Position = 0;
-            record.ResponseContentType = ctx.Response.ContentType;
-            record.ResponseBodyOriginalSize = captureStream.Length;
-            var contentEncoding = ctx.Response.Headers.ContentEncoding.ToString();
-            CaptureResponseBody(captureStream, contentEncoding, record);
-            captureStream.Position = 0;
-
-            try
-            {
-                await captureStream.CopyToAsync(originalBody);
-            }
-            catch (Exception ex)
-            {
-                logger.LogWarning(ex, "Failed to copy captured response to downstream body.");
-            }
             ctx.Response.Body = originalBody;
-
-            record.StatusCode = ctx.Response.StatusCode;
-            record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
             sw.Stop();
             record.DurationMs = sw.ElapsedMilliseconds;
 
-            store.Add(record);
+            if (capture.IsStreaming)
+            {
+                // Streaming response: bytes already flushed to client; no buffer copy.
+                record.StreamCompleted = true;
+                record.StatusCode = ctx.Response.StatusCode;
+                record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
+                record.ResponseBodyOriginalSize = capture.Buffer.Length;
+                store.Update(record);
+            }
+            else
+            {
+                var captureStream = capture.Buffer;
+                captureStream.Position = 0;
+                record.ResponseContentType = ctx.Response.ContentType;
+                record.ResponseBodyOriginalSize = captureStream.Length;
+                var contentEncoding = ctx.Response.Headers.ContentEncoding.ToString();
+                CaptureResponseBody(captureStream, contentEncoding, record);
+                captureStream.Position = 0;
+
+                try
+                {
+                    await captureStream.CopyToAsync(originalBody);
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Failed to copy captured response to downstream body.");
+                }
+
+                record.StatusCode = ctx.Response.StatusCode;
+                record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
+                store.Add(record);
+            }
         }
     }
 

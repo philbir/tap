@@ -277,9 +277,12 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         {
             try
             {
-                await foreach (var record in store.Stream(ct))
+                await foreach (var ev in store.Stream(ct))
                 {
-                    PrintPlainRequestLine(record);
+                    if (ev is RecordEvent re)
+                    {
+                        PrintPlainRequestLine(re.Record);
+                    }
                 }
             }
             catch (OperationCanceledException) { }
@@ -297,9 +300,10 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
             {
                 try
                 {
-                    await foreach (var record in store.Stream(ct))
+                    await foreach (var ev in store.Stream(ct))
                     {
-                        ring.Enqueue(record);
+                        if (ev is not RecordEvent re) continue;
+                        ring.Enqueue(re.Record);
                         while (ring.Count > 10) ring.Dequeue();
                         RefillRequestTable(table, ring);
                         ctx.Refresh();

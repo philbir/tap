@@ -265,10 +265,24 @@ public static class TapInspectorHost
             await ctx.Response.WriteAsync(": connected\n\n", ct);
             await ctx.Response.Body.FlushAsync(ct);
 
-            await foreach (var record in store.Stream(ct))
+            await foreach (var ev in store.Stream(ct))
             {
-                var json = JsonSerializer.Serialize(record, RequestRecordJsonContext.Default.RequestRecord);
-                await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
+                switch (ev)
+                {
+                    case RecordEvent re:
+                    {
+                        var json = JsonSerializer.Serialize(re.Record, RequestRecordJsonContext.Default.RequestRecord);
+                        await ctx.Response.WriteAsync($"data: {json}\n\n", ct);
+                        break;
+                    }
+                    case SseStreamEvent se:
+                    {
+                        var envelope = new SseEventEnvelope(se.RecordId, se.Sequence, se.Event);
+                        var json = JsonSerializer.Serialize(envelope, RequestRecordJsonContext.Default.SseEventEnvelope);
+                        await ctx.Response.WriteAsync($"event: sse\ndata: {json}\n\n", ct);
+                        break;
+                    }
+                }
                 await ctx.Response.Body.FlushAsync(ct);
             }
         });

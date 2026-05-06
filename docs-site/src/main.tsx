@@ -377,6 +377,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     return (
       <section className="doc-block" id={doc.id}>
         <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/tap-aspire.png"
+          alt="Aspire dashboard showing Tap inspector and cloudflared resources"
+          caption="In Aspire, Tap resources show up beside your app, with public URLs and Inspector UI links on each tunnel mode."
+        />
         <div className="entry-grid">
           <MiniPanel title="CLI">
             Use `tap run` when you have one upstream URL and want a tunnel or inspector immediately.
@@ -401,6 +406,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     return (
       <section className="doc-block" id={doc.id}>
         <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/tap-cli.png"
+          alt="Tap CLI running a quick TryCloudflare tunnel"
+          caption="The CLI prints the public URL, upstream, inspector UI, proxy port, and a live tail of recent requests."
+        />
         <div className="mode-grid">
           {[
             ["Local inspector", "No Cloudflare. Proxy on port 4444, UI on port 4445."],
@@ -450,6 +460,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     return (
       <section className="doc-block" id={doc.id}>
         <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/tab-tunnel-dialog.png"
+          alt="Tap tunnel dialog showing Cloudflare edge, cloudflared, inspector, and upstream"
+          caption="The tunnel dialog makes the Cloudflare path explicit, from public hostname through cloudflared to the inspector proxy and local upstream."
+        />
         <div className="callout">
           <strong>Existing-tunnel mode uses a dashboard tunnel</strong>
           <p>
@@ -551,6 +566,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     return (
       <section className="doc-block" id={doc.id}>
         <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/tap-inspector.png"
+          alt="Tap inspector UI showing captured GraphQL requests, headers, and response body"
+          caption="The local inspector captures traffic before forwarding it, then lets you inspect headers, bodies, timings, status, and replay details."
+        />
         <div className="diagram-card" aria-label="High-level architecture diagram">
           <div className="diagram-row">
             <span>tap CLI</span>
@@ -643,6 +663,13 @@ const CodeBlock = ({ title, code }: { title: string; code: string }) => (
     <pre>
       <code>{code}</code>
     </pre>
+  </figure>
+);
+
+const Screenshot = ({ src, alt, caption }: { src: string; alt: string; caption: string }) => (
+  <figure className="screenshot">
+    <img src={src} alt={alt} loading="lazy" />
+    <figcaption>{caption}</figcaption>
   </figure>
 );
 

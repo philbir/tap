@@ -87,6 +87,22 @@ export function RequestList({ records, selectedId, filter, onSelect, onFilterCha
               <span style={{ color: statusColor(r.statusCode), fontWeight: 600, minWidth: '32px' }}>
                 {r.statusCode || '—'}
               </span>
+              {r.isStream && (
+                <span
+                  title={r.streamCompleted ? 'Stream finished' : 'Live stream'}
+                  style={{
+                    fontSize: '9.5px',
+                    fontWeight: 600,
+                    letterSpacing: '0.04em',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    color: r.streamCompleted ? 'var(--text-muted)' : 'var(--ok)',
+                    border: `1px solid ${r.streamCompleted ? 'var(--border)' : 'var(--ok)'}`,
+                  }}
+                >
+                  SSE{(r.sseEvents?.length ?? 0) > 0 && ` · ${r.sseEvents!.length}`}
+                </span>
+              )}
               <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontSize: '11px' }}>
                 {r.durationMs}ms
               </span>

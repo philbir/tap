@@ -1,5 +1,5 @@
-import { Fragment, useMemo, useState } from 'react'
-import type { RequestRecord } from './types'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import type { RequestRecord, SseEvent } from './types'
 import { useCodeView } from './CodeViewer'
 import { TokenInspector } from './TokenInspector'
 import { decodeJwt, findAuthHeader } from './jwt'
@@ -10,7 +10,7 @@ interface Props {
   theme: 'light' | 'dark'
 }
 
-type Tab = 'request' | 'response'
+type Tab = 'request' | 'response' | 'sse'
 
 function SectionLabel({ text }: { text: string }) {
   return (
@@ -114,14 +114,94 @@ function HeadersPanel({ headers, theme }: { headers: Record<string, string>; the
   )
 }
 
+function SsePanel({ events, isLive }: { events: SseEvent[]; isLive: boolean }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+
+  useEffect(() => {
+    if (!autoScroll) return
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [events.length, autoScroll])
+
+  if (events.length === 0) {
+    return (
+      <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+        {isLive ? 'Waiting for events…' : '(no SSE events captured)'}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: 'var(--text-muted)' }}>
+        <span>{events.length} event{events.length === 1 ? '' : 's'}</span>
+        {isLive && (
+          <span style={{ color: 'var(--ok)' }}>
+            <span style={{ display: 'inline-block', width: 6, height: 6, borderRadius: '50%', background: 'var(--ok)', marginRight: 5 }} />
+            live
+          </span>
+        )}
+        <label style={{ marginLeft: 'auto', display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
+          auto-scroll
+        </label>
+      </div>
+      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {events.map((ev, i) => {
+          const isComment = ev.event === 'comment'
+          const formatted = (() => {
+            if (!ev.data) return ''
+            const trimmed = ev.data.trim()
+            if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+              try { return JSON.stringify(JSON.parse(trimmed), null, 2) } catch { /* fall through */ }
+            }
+            return ev.data
+          })()
+          return (
+            <div
+              key={i}
+              style={{
+                border: '1px solid var(--border)',
+                borderLeft: `3px solid ${isComment ? 'var(--text-muted)' : 'var(--accent)'}`,
+                borderRadius: 4,
+                padding: '6px 10px',
+                background: 'var(--bg-input)',
+                fontFamily: 'SF Mono, Menlo, Consolas, monospace',
+                fontSize: 12,
+              }}
+            >
+              <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: 'var(--text-muted)', marginBottom: 3 }}>
+                <span>#{i + 1}</span>
+                <span>{new Date(ev.timestamp).toLocaleTimeString()}</span>
+                <span>event: <strong style={{ color: 'var(--text)' }}>{ev.event}</strong></span>
+                {ev.id && <span>id: {ev.id}</span>}
+                {ev.retry !== null && <span>retry: {ev.retry}ms</span>}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{formatted}</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function RequestDetail({ record, theme }: Props) {
+  const showSse = !!(record?.isStream || (record?.sseEvents && record.sseEvents.length > 0))
   const [tab, setTab] = useState<Tab>('request')
   const [replayState, setReplayState] = useState<{ status: 'idle' | 'pending' | 'ok' | 'err'; message?: string }>({ status: 'idle' })
   const [httpDialogOpen, setHttpDialogOpen] = useState(false)
 
+  // If selection moves away from a streamed record, drop the SSE tab.
+  useEffect(() => {
+    if (!showSse && tab === 'sse') setTab('response')
+  }, [showSse, tab])
+
   const isRequest = tab === 'request'
+  const isSse = tab === 'sse'
   const bodyView = useCodeView(
-    record
+    record && !isSse
       ? isRequest
         ? {
             body: record.requestBody,
@@ -208,9 +288,9 @@ export function RequestDetail({ record, theme }: Props) {
         )}
       </div>
 
-      {/* Request / Response tabs */}
+      {/* Request / Response / SSE tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        {(['request', 'response'] as const).map((t) => (
+        {(['request', 'response', ...(showSse ? (['sse'] as const) : [])] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -222,27 +302,48 @@ export function RequestDetail({ record, theme }: Props) {
               color: tab === t ? 'var(--accent)' : 'var(--text-muted)',
               borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
               fontWeight: tab === t ? 600 : 400,
-              textTransform: 'capitalize',
+              textTransform: t === 'sse' ? 'uppercase' : 'capitalize',
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 6,
             }}
           >
             {t}
+            {t === 'sse' && (
+              <span
+                style={{
+                  fontSize: 10,
+                  color: record.streamCompleted ? 'var(--text-muted)' : 'var(--ok)',
+                  fontWeight: 500,
+                  textTransform: 'none',
+                  letterSpacing: 0,
+                }}
+              >
+                {record.sseEvents?.length ?? 0}
+                {!record.streamCompleted && record.isStream && ' · live'}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
       {/* Content region: headers (shrink) + body (flex:1 with its own scroll) */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px', gap: '12px', overflow: 'hidden', minHeight: 0 }}>
-        <HeadersPanel headers={isRequest ? record.requestHeaders : record.responseHeaders} theme={theme} />
+        {!isSse && <HeadersPanel headers={isRequest ? record.requestHeaders : record.responseHeaders} theme={theme} />}
 
-        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: '4px' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minHeight: '22px' }}>
-            <SectionLabel text="Body" />
-            {bodyView.toolbar}
+        {isSse ? (
+          <SsePanel events={record.sseEvents ?? []} isLive={!!record.isStream && !record.streamCompleted} />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: '4px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minHeight: '22px' }}>
+              <SectionLabel text="Body" />
+              {bodyView.toolbar}
+            </div>
+            <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+              {bodyView.content}
+            </div>
           </div>
-          <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-            {bodyView.content}
-          </div>
-        </div>
+        )}
       </div>
 
       <HttpFileDialog record={record} open={httpDialogOpen} onClose={() => setHttpDialogOpen(false)} />

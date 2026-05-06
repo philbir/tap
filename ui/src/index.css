@@ -126,8 +126,7 @@ code {
   display: block;
   width: 28px;
   height: 28px;
-  border-radius: 6px;
-  box-shadow: var(--shadow);
+  filter: drop-shadow(0 6px 10px color-mix(in srgb, var(--accent) 22%, transparent));
 }
 
 .app-brand span {

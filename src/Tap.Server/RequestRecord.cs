@@ -50,9 +50,33 @@ public sealed class RequestRecord
     public long DurationMs { get; set; }
 
     public string? Error { get; set; }
+
+    /// <summary>True when the response is being streamed (e.g. text/event-stream).</summary>
+    public bool IsStream { get; set; }
+
+    /// <summary>True after the upstream response has finished.</summary>
+    public bool StreamCompleted { get; set; }
+
+    /// <summary>SSE events captured from a text/event-stream response.</summary>
+    public List<SseEvent> SseEvents { get; set; } = new();
 }
+
+public sealed record SseEvent(
+    [property: JsonPropertyName("timestamp")] DateTimeOffset Timestamp,
+    [property: JsonPropertyName("event")] string EventName,
+    [property: JsonPropertyName("data")] string Data,
+    [property: JsonPropertyName("id")] string? Id,
+    [property: JsonPropertyName("retry")] int? Retry,
+    [property: JsonPropertyName("comment")] string? Comment);
+
+public sealed record SseEventEnvelope(
+    [property: JsonPropertyName("recordId")] Guid RecordId,
+    [property: JsonPropertyName("sequence")] int Sequence,
+    [property: JsonPropertyName("event")] SseEvent Event);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(RequestRecord))]
 [JsonSerializable(typeof(List<RequestRecord>))]
+[JsonSerializable(typeof(SseEvent))]
+[JsonSerializable(typeof(SseEventEnvelope))]
 internal sealed partial class RequestRecordJsonContext : JsonSerializerContext;

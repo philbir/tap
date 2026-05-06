@@ -8,29 +8,61 @@ public sealed class InMemoryRequestStore : IRequestStore
 
     private readonly LinkedList<RequestRecord> _records = new();
     private readonly Lock _sync = new();
-    private readonly List<Channel<RequestRecord>> _subscribers = new();
+    private readonly List<Channel<StoreEvent>> _subscribers = new();
     private long _sequence;
 
     public long NextSequence() => Interlocked.Increment(ref _sequence);
 
     public void Add(RequestRecord record)
     {
-        Channel<RequestRecord>[] subs;
+        Channel<StoreEvent>[] subs;
 
         lock (_sync)
         {
-            _records.AddFirst(record);
-            while (_records.Count > Capacity)
+            // Avoid duplicate insertion when streaming records were already added at start.
+            if (!_records.Any(r => r.Id == record.Id))
             {
-                _records.RemoveLast();
+                _records.AddFirst(record);
+                while (_records.Count > Capacity)
+                {
+                    _records.RemoveLast();
+                }
             }
 
             subs = _subscribers.ToArray();
         }
 
+        Broadcast(subs, new RecordEvent(record));
+    }
+
+    public void Update(RequestRecord record)
+    {
+        Channel<StoreEvent>[] subs;
+        lock (_sync)
+        {
+            subs = _subscribers.ToArray();
+        }
+        Broadcast(subs, new RecordEvent(record));
+    }
+
+    public void AppendSseEvent(RequestRecord record, SseEvent ev)
+    {
+        int index;
+        Channel<StoreEvent>[] subs;
+        lock (_sync)
+        {
+            record.SseEvents.Add(ev);
+            index = record.SseEvents.Count - 1;
+            subs = _subscribers.ToArray();
+        }
+        Broadcast(subs, new SseStreamEvent(record.Id, index, ev));
+    }
+
+    private static void Broadcast(Channel<StoreEvent>[] subs, StoreEvent ev)
+    {
         foreach (var sub in subs)
         {
-            sub.Writer.TryWrite(record);
+            sub.Writer.TryWrite(ev);
         }
     }
 
@@ -50,10 +82,10 @@ public sealed class InMemoryRequestStore : IRequestStore
         }
     }
 
-    public async IAsyncEnumerable<RequestRecord> Stream(
+    public async IAsyncEnumerable<StoreEvent> Stream(
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
     {
-        var channel = Channel.CreateUnbounded<RequestRecord>(new UnboundedChannelOptions
+        var channel = Channel.CreateUnbounded<StoreEvent>(new UnboundedChannelOptions
         {
             SingleReader = true,
             SingleWriter = false,
@@ -66,9 +98,9 @@ public sealed class InMemoryRequestStore : IRequestStore
 
         try
         {
-            await foreach (var record in channel.Reader.ReadAllAsync(cancellationToken))
+            await foreach (var ev in channel.Reader.ReadAllAsync(cancellationToken))
             {
-                yield return record;
+                yield return ev;
             }
         }
         finally

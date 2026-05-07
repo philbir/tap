@@ -73,8 +73,8 @@ public static class TapInspectorHost
         }
 
         // Point WebRoot at Tap.Server's wwwroot (bundled UI) regardless of who's hosting us.
-        var serverDir = Path.GetDirectoryName(typeof(TapInspectorHost).Assembly.Location)!;
-        var wwwroot = Path.Combine(serverDir, "wwwroot");
+        // Use AppContext.BaseDirectory so this works in single-file publish too.
+        var wwwroot = Path.Combine(AppContext.BaseDirectory, "wwwroot");
 
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions
         {

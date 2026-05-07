@@ -56,6 +56,38 @@ Quick tunnels are free with TryCloudflare and do not need a Cloudflare account. 
 | **Partner demos** | Share a temporary URL to work running on your machine, then tear it down. |
 | **Aspire demos** | Put the same tunnel and inspector wiring in the AppHost so the whole team gets it. |
 
+## Install
+
+Pick whichever fits — all three install the same `tap` CLI.
+
+### .NET global tool
+
+Needs the .NET 10 SDK on PATH. Cross-platform.
+
+```bash
+dotnet tool install -g Tap
+dotnet tool update    -g Tap
+dotnet tool uninstall -g Tap
+```
+
+Make sure `~/.dotnet/tools` (Linux/macOS) or `%USERPROFILE%\.dotnet\tools` (Windows) is on your `PATH`.
+
+### Self-contained binary (Linux/macOS)
+
+No .NET install required. Downloads the latest release for your platform, verifies the SHA256 checksum, and writes a launcher to `~/.local/bin/tap`.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/philbir/tap/main/install.sh | sh
+```
+
+Pin a version with `TAP_VERSION=0.1.0 ...`, override paths with `TAP_INSTALL_DIR` / `TAP_BIN_DIR`. To uninstall: `rm -rf ~/.local/share/tap ~/.local/bin/tap`.
+
+You can also download archives directly from the [GitHub Releases](https://github.com/philbir/tap/releases) page — assets are named `tap-<version>-<rid>.tar.gz` (Linux/macOS) and `tap-<version>-win-x64.zip` (Windows), with a `SHA256SUMS` file alongside.
+
+### cloudflared
+
+Cloudflare-tunnel features need [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) on `PATH`. Install it once with `brew install cloudflared`, `winget install Cloudflare.cloudflared`, or run `tap install-cloudflared` after Tap is installed.
+
 ## Quick Start
 
 ### CLI

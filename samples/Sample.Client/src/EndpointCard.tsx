@@ -1,6 +1,7 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
-import type { EndpointDescriptor, SseTick } from './types'
+import type { EndpointDescriptor, SseTick, TapDescriptor } from './types'
 import { runSse } from './sseClient'
+import { signHs256 } from './jwt'
 
 interface CallState {
   status: 'idle' | 'pending' | 'ok' | 'err' | 'streaming' | 'closed'
@@ -11,12 +12,35 @@ interface CallState {
   durationMs?: number
 }
 
+interface JwtConfig {
+  secret: string
+  issuer: string
+  audience: string
+}
+
 interface Props {
   endpoint: EndpointDescriptor
   baseUrl: string
+  tap?: TapDescriptor
+  jwtConfig: JwtConfig
 }
 
-export function EndpointCard({ endpoint, baseUrl }: Props) {
+export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
+  const needsJwt = (tap?.requiresJwt ?? false) || (endpoint.requiresAuth ?? false)
+
+  async function buildAuthHeader(): Promise<Record<string, string>> {
+    if (!needsJwt) return {}
+    if (!jwtConfig.secret) {
+      throw new Error('VITE_JWT_SECRET not provided to client')
+    }
+    const token = await signHs256({
+      secret: jwtConfig.secret,
+      issuer: jwtConfig.issuer,
+      audience: jwtConfig.audience,
+      extraClaims: { role: 'tap-demo' },
+    })
+    return { Authorization: `Bearer ${token}` }
+  }
   const [params, setParams] = useState<Record<string, string>>(() => {
     const o: Record<string, string> = {}
     for (const p of endpoint.parameters ?? []) o[p.name] = p.default
@@ -53,11 +77,14 @@ export function EndpointCard({ endpoint, baseUrl }: Props) {
     setState({ status: 'pending' })
     const started = performance.now()
     try {
+      const authHeaders = await buildAuthHeader()
       const init: RequestInit = { method: endpoint.method }
+      const headers: Record<string, string> = { ...authHeaders }
       if (endpoint.method !== 'GET' && body.trim().length > 0) {
-        init.headers = { 'Content-Type': 'application/json' }
+        headers['Content-Type'] = 'application/json'
         init.body = body
       }
+      if (Object.keys(headers).length > 0) init.headers = headers
       const r = await fetch(fullUrl, init)
       const text = await r.text()
       const durationMs = Math.round(performance.now() - started)
@@ -73,28 +100,41 @@ export function EndpointCard({ endpoint, baseUrl }: Props) {
     }
   }
 
-  const callSse = () => {
+  const callSse = async () => {
     stop()
     const controller = new AbortController()
     abortRef.current = controller
     setState({ status: 'streaming', events: [], message: 'connecting…' })
 
-    runSse(fullUrl, controller.signal, {
-      onOpen: () => setState((s) => ({ ...s, status: 'streaming', message: 'streaming' })),
-      onEvent: (ev) =>
-        setState((s) => ({
-          ...s,
-          status: 'streaming',
-          events: [...(s.events ?? []), ev],
-        })),
-      onError: (msg) => setState((s) => ({ ...s, status: 'err', message: msg })),
-      onClose: () =>
-        setState((s) => ({
-          ...s,
-          status: s.status === 'err' ? 'err' : 'closed',
-          message: s.status === 'err' ? s.message : 'stream closed',
-        })),
-    })
+    let authHeaders: Record<string, string> = {}
+    try {
+      authHeaders = await buildAuthHeader()
+    } catch (ex) {
+      setState({ status: 'err', message: String(ex) })
+      return
+    }
+
+    runSse(
+      fullUrl,
+      controller.signal,
+      {
+        onOpen: () => setState((s) => ({ ...s, status: 'streaming', message: 'streaming' })),
+        onEvent: (ev) =>
+          setState((s) => ({
+            ...s,
+            status: 'streaming',
+            events: [...(s.events ?? []), ev],
+          })),
+        onError: (msg) => setState((s) => ({ ...s, status: 'err', message: msg })),
+        onClose: () =>
+          setState((s) => ({
+            ...s,
+            status: s.status === 'err' ? 'err' : 'closed',
+            message: s.status === 'err' ? s.message : 'stream closed',
+          })),
+      },
+      authHeaders,
+    )
   }
 
   const onCall = () => {
@@ -121,6 +161,7 @@ export function EndpointCard({ endpoint, baseUrl }: Props) {
         <span className={`method ${endpoint.method}`}>{endpoint.method}</span>
         <span className="path">{endpoint.path}</span>
         {endpoint.isStream && <span className="tag">SSE</span>}
+        {needsJwt && <span className="tag" title="Authorization: Bearer <HS256 JWT>">JWT</span>}
       </div>
       <div className="descr">{endpoint.description}</div>
 

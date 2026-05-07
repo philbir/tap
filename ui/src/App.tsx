@@ -3,10 +3,19 @@ import { RequestList } from './RequestList'
 import { RequestDetail } from './RequestDetail'
 import { TunnelPanel } from './TunnelPanel'
 import { TunnelInfoDialog } from './TunnelInfoDialog'
+import { CloudflarePage } from './CloudflarePage'
 import { useRequestStream } from './useRequestStream'
 import { useInspectorConfig } from './useIngress'
 import { useTheme } from './useTheme'
 import type { IngressEntry } from './types'
+
+type View = 'inspector' | 'cloudflare'
+
+function initialViewFromLocation(): View {
+  if (typeof window === 'undefined') return 'inspector'
+  const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase()
+  return hash === 'cloudflare' ? 'cloudflare' : 'inspector'
+}
 
 function TunnelBadge({ entry, onClick }: { entry: IngressEntry; onClick: () => void }) {
   const mode = entry.tunnelMode ?? ''
@@ -53,6 +62,16 @@ export function App() {
   const { records, connected, clear } = useRequestStream()
   const config = useInspectorConfig()
   const { theme, toggle: toggleTheme } = useTheme()
+  const [view, setView] = useState<View>(initialViewFromLocation)
+  const switchView = (next: View) => {
+    setView(next)
+    if (typeof window !== 'undefined') {
+      const hash = next === 'cloudflare' ? '#cloudflare' : ''
+      if (window.location.hash !== hash) {
+        history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`)
+      }
+    }
+  }
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [filter, setFilter] = useState('')
   const [tunnelOpen, setTunnelOpen] = useState(false)
@@ -82,7 +101,7 @@ export function App() {
     [records, selectedHostname],
   )
 
-  const showSelector = ingress.length >= 2
+  const showSelector = view === 'inspector' && ingress.length >= 2
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
@@ -101,12 +120,19 @@ export function App() {
           <span>Tap</span>
         </div>
 
-        <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <span style={{ color: connected ? 'var(--ok)' : 'var(--err)' }}>●</span>
-          {connected ? 'live' : 'disconnected'}
-        </div>
+        <nav style={{ display: 'flex', gap: 4 }}>
+          <NavTab label="Inspector" active={view === 'inspector'} onClick={() => switchView('inspector')} />
+          <NavTab label="Cloudflare" active={view === 'cloudflare'} onClick={() => switchView('cloudflare')} />
+        </nav>
 
-        {ingress.length > 0 && proxyPort !== undefined && !showSelector && (
+        {view === 'inspector' && (
+          <div style={{ fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '6px', alignItems: 'center' }}>
+            <span style={{ color: connected ? 'var(--ok)' : 'var(--err)' }}>●</span>
+            {connected ? 'live' : 'disconnected'}
+          </div>
+        )}
+
+        {view === 'inspector' && ingress.length > 0 && proxyPort !== undefined && !showSelector && (
           <div
             style={{
               fontSize: '11px',
@@ -151,17 +177,21 @@ export function App() {
           </div>
         )}
 
-        {showSelector && <div style={{ flex: 1 }} />}
+        {(showSelector || view === 'cloudflare') && <div style={{ flex: 1 }} />}
 
-        {apiMode === 'cloudflare-api' && proxyPort !== undefined && (
+        {view === 'inspector' && apiMode === 'cloudflare-api' && proxyPort !== undefined && (
           <button onClick={() => setTunnelOpen(true)} title="Manage tunnel hostnames via Cloudflare API">
             Tunnel…
           </button>
         )}
-        <button onClick={toggleTheme} title="Toggle theme" style={apiMode === 'cloudflare-api' ? undefined : { marginLeft: 'auto' }}>
+        <button
+          onClick={toggleTheme}
+          title="Toggle theme"
+          style={view === 'inspector' && apiMode === 'cloudflare-api' ? undefined : { marginLeft: 'auto' }}
+        >
           {theme === 'dark' ? '☀' : '☾'}
         </button>
-        <button onClick={clear}>Clear</button>
+        {view === 'inspector' && <button onClick={clear}>Clear</button>}
       </header>
 
       {showSelector && (
@@ -211,25 +241,29 @@ export function App() {
         </div>
       )}
 
-      <div
-        style={{
-          flex: 1,
-          display: 'grid',
-          gridTemplateColumns: '380px 1fr',
-          gridTemplateRows: 'minmax(0, 1fr)',
-          overflow: 'hidden',
-          minHeight: 0,
-        }}
-      >
-        <RequestList
-          records={visibleRecords}
-          selectedId={selectedId}
-          filter={filter}
-          onSelect={setSelectedId}
-          onFilterChange={setFilter}
-        />
-        <RequestDetail record={selected} theme={theme} />
-      </div>
+      {view === 'inspector' ? (
+        <div
+          style={{
+            flex: 1,
+            display: 'grid',
+            gridTemplateColumns: '380px 1fr',
+            gridTemplateRows: 'minmax(0, 1fr)',
+            overflow: 'hidden',
+            minHeight: 0,
+          }}
+        >
+          <RequestList
+            records={visibleRecords}
+            selectedId={selectedId}
+            filter={filter}
+            onSelect={setSelectedId}
+            onFilterChange={setFilter}
+          />
+          <RequestDetail record={selected} theme={theme} />
+        </div>
+      ) : (
+        <CloudflarePage />
+      )}
 
       {proxyPort !== undefined && (
         <TunnelPanel proxyPort={proxyPort} open={tunnelOpen} onClose={() => setTunnelOpen(false)} />
@@ -244,6 +278,25 @@ export function App() {
         />
       )}
     </div>
+  )
+}
+
+function NavTab({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        background: active ? 'color-mix(in srgb, var(--accent) 14%, transparent)' : 'transparent',
+        color: active ? 'var(--accent)' : 'var(--text-muted)',
+        border: '1px solid ' + (active ? 'color-mix(in srgb, var(--accent) 35%, transparent)' : 'transparent'),
+        borderRadius: 6,
+        padding: '4px 10px',
+        fontSize: 12,
+        fontWeight: 600,
+      }}
+    >
+      {label}
+    </button>
   )
 }
 

@@ -16,7 +16,7 @@ app.Configure(cfg =>
         .WithExample(["run", "http://localhost:3000", "--token", "<cf-tunnel-token>"]);
 
     cfg.AddCommand<SaveCommand>("save")
-        .WithDescription("Save a named tunnel profile to %APPDATA%/tap/tunnels (or ~/.config/tap/tunnels).")
+        .WithDescription("Save a named tunnel profile to ~/.tap/tunnels.")
         .WithExample(["save", "my-api", "http://localhost:3000", "--quick"])
         .WithExample(["save", "prod", "http://localhost:3000", "--api-managed", "tap-prod", "--account", "<ID>", "--api-token", "<TOK>"]);
 
@@ -26,6 +26,17 @@ app.Configure(cfg =>
 
     cfg.AddCommand<InstallCloudflaredCommand>("install-cloudflared")
         .WithDescription("Install the cloudflared binary via the host's package manager.");
+
+    cfg.AddCommand<UiCommand>("ui")
+        .WithDescription("Open the inspector UI in your browser to manage Cloudflare tunnel profiles. Starts a local UI server (no upstream/tunnel).")
+        .WithExample(["ui"])
+        .WithExample(["ui", "--ui-port", "5050"])
+        .WithExample(["ui", "--no-open"]);
+
+    cfg.AddCommand<DocsCommand>("docs")
+        .WithDescription($"Open the tap CLI documentation ({DocsCommand.Url}) in your browser.")
+        .WithExample(["docs"])
+        .WithExample(["docs", "--print"]);
 });
 
 return await app.RunAsync(args);

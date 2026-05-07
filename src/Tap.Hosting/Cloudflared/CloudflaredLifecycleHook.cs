@@ -120,9 +120,29 @@ internal sealed class CloudflaredLifecycleHook(
 
         if (existing is not null)
         {
-            cfTunnel = existing;
-            credsPath = await ExistingCredentialsPathOrThrowAsync(api, tunnel, cfTunnel, ct);
-            logger.LogInformation("Reusing Cloudflare tunnel '{Name}' ({Id}).", cfTunnel.Name, cfTunnel.Id);
+            var existingPath = LocalCredentialsPath(existing);
+            if (File.Exists(existingPath))
+            {
+                cfTunnel = existing;
+                credsPath = existingPath;
+                logger.LogInformation("Reusing Cloudflare tunnel '{Name}' ({Id}).", cfTunnel.Name, cfTunnel.Id);
+            }
+            else
+            {
+                // The remote tunnel exists but we have no local TunnelSecret to authenticate
+                // cloudflared with (the API never returns the secret for existing tunnels).
+                // Auto-recover: delete the remote tunnel and recreate it with fresh creds.
+                logger.LogWarning(
+                    "Cloudflare tunnel '{Name}' ({Id}) exists remotely but no local credentials file at '{Path}'. Deleting and recreating to recover.",
+                    existing.Name, existing.Id, existingPath);
+                await api.DeleteTunnelAsync(tunnel.AccountId!, existing.Id, ct);
+
+                var (created, secret) = await api.CreateTunnelAsync(tunnel.AccountId!, tunnel.ApiTunnelName!, ct);
+                cfTunnel = created;
+                credsPath = await api.WriteCredentialsFileAsync(tunnel.AccountId!, cfTunnel, secret, ct);
+                logger.LogInformation("Recreated Cloudflare tunnel '{Name}' ({Id}). Credentials: {Path}",
+                    cfTunnel.Name, cfTunnel.Id, credsPath);
+            }
         }
         else
         {
@@ -203,28 +223,8 @@ internal sealed class CloudflaredLifecycleHook(
         }
     }
 
-    private static async Task<string> ExistingCredentialsPathOrThrowAsync(
-        CloudflareApi api,
-        CloudflaredTunnelResource tunnel,
-        CfTunnel cfTunnel,
-        CancellationToken ct)
-    {
-        // The Cloudflare API doesn't return TunnelSecret for existing tunnels; cloudflared needs it
-        // to authenticate. We rotate credentials by creating a new tunnel with the same name only
-        // when the user explicitly opts in. Otherwise, look for an existing creds file we wrote.
-        var path = Path.Combine(Path.GetTempPath(), $"cloudflared-{cfTunnel.Name}-{cfTunnel.Id}.json");
-        if (File.Exists(path))
-        {
-            return path;
-        }
-
-        // No prior creds we can reuse — emit a fresh secret by recreating with the same name is destructive,
-        // so we ask the user to delete or re-init. We avoid surprises and throw a clear message.
-        throw new InvalidOperationException(
-            $"Cloudflare tunnel '{cfTunnel.Name}' ({cfTunnel.Id}) already exists but no local credentials file "
-            + $"was found at '{path}'. Delete the tunnel in the Cloudflare dashboard (or `cloudflared tunnel delete`) "
-            + "to let this AppHost recreate it with fresh credentials.");
-    }
+    private static string LocalCredentialsPath(CfTunnel cfTunnel) =>
+        Path.Combine(Path.GetTempPath(), $"cloudflared-{cfTunnel.Name}-{cfTunnel.Id}.json");
 
     private static async Task<string> ResolveZoneIdForFqdnAsync(CloudflareApi api, string fqdn, CancellationToken ct)
     {

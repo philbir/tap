@@ -4,5 +4,9 @@
     <RootNamespace>Sample.Api</RootNamespace>
     <AssemblyName>Sample.Api</AssemblyName>
     <IsPackable>false</IsPackable>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" />
+  </ItemGroup>
 </Project>

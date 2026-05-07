@@ -12,9 +12,17 @@ interface SseHandlers {
  * and lets us pass `signal` for cancellation. The parser is a minimal subset of
  * the WHATWG SSE spec — enough for tick / done events plus comments.
  */
-export async function runSse(url: string, signal: AbortSignal, h: SseHandlers): Promise<void> {
+export async function runSse(
+  url: string,
+  signal: AbortSignal,
+  h: SseHandlers,
+  extraHeaders: Record<string, string> = {},
+): Promise<void> {
   try {
-    const res = await fetch(url, { signal, headers: { Accept: 'text/event-stream' } })
+    const res = await fetch(url, {
+      signal,
+      headers: { Accept: 'text/event-stream', ...extraHeaders },
+    })
     if (!res.ok || !res.body) {
       h.onError(`HTTP ${res.status}`)
       h.onClose()

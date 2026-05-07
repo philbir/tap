@@ -1,0 +1,177 @@
+name: Release binaries
+
+on:
+  push:
+    # Plain SemVer tags, no `v` prefix — `0.1.0`, `0.1.0-alpha.4`, etc.
+    # Matches the docker, nuget, and pages workflows.
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version override (e.g. 0.1.0)"
+        required: false
+      dry_run:
+        description: "Publish + archive only, don't create a GitHub Release"
+        type: boolean
+        default: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - rid: linux-x64
+            runner: ubuntu-latest
+            archive: tar.gz
+          - rid: linux-arm64
+            runner: ubuntu-24.04-arm
+            archive: tar.gz
+          - rid: osx-x64
+            runner: macos-13
+            archive: tar.gz
+          - rid: osx-arm64
+            runner: macos-14
+            archive: tar.gz
+          - rid: win-x64
+            runner: windows-latest
+            archive: zip
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "10.0.x"
+
+      # Tap.Cli + Tap.Server bundle the Vite-built UI into wwwroot/ via the
+      # BuildTapUi MSBuild target. The target shells out to `yarn build`, so
+      # Node + Corepack must be on PATH at publish time.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Enable Corepack
+        shell: bash
+        run: corepack enable
+
+      - name: Resolve version
+        id: ver
+        shell: bash
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Publish self-contained single-file
+        shell: bash
+        run: |
+          dotnet publish src/Tap.Cli/Tap.Cli.csproj \
+            -c Release \
+            -r ${{ matrix.rid }} \
+            --self-contained true \
+            -p:PublishSingleFile=true \
+            -p:IncludeNativeLibrariesForSelfExtract=true \
+            -p:EnableCompressionInSingleFile=true \
+            -p:DebugType=None \
+            -p:DebugSymbols=false \
+            -p:Version=${{ steps.ver.outputs.version }} \
+            -o publish/${{ matrix.rid }}
+
+      - name: Stage archive contents
+        shell: bash
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          rid="${{ matrix.rid }}"
+          name="tap-${version}-${rid}"
+          mkdir -p "stage/${name}"
+          cp -R "publish/${rid}/." "stage/${name}/"
+          # Drop debug symbols if any slipped through
+          find "stage/${name}" -name "*.pdb" -delete || true
+          ls -la "stage/${name}"
+
+      - name: Create archive (tar.gz)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          version="${{ steps.ver.outputs.version }}"
+          rid="${{ matrix.rid }}"
+          name="tap-${version}-${rid}"
+          tar -C stage -czf "${name}.tar.gz" "${name}"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "${name}.tar.gz" | awk '{print $1}' > "${name}.tar.gz.sha256"
+          else
+            shasum -a 256 "${name}.tar.gz" | awk '{print $1}' > "${name}.tar.gz.sha256"
+          fi
+
+      - name: Create archive (zip)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          $rid = "${{ matrix.rid }}"
+          $name = "tap-$version-$rid"
+          Compress-Archive -Path "stage/$name/*" -DestinationPath "$name.zip" -Force
+          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
+          [System.IO.File]::WriteAllText("$name.zip.sha256", $hash)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.rid }}
+          path: |
+            tap-*.tar.gz
+            tap-*.zip
+            tap-*.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      # Need write to attach release assets.
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          pattern: binary-*
+          merge-multiple: true
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            v="${{ github.event.inputs.version }}"
+          else
+            v="${GITHUB_REF#refs/tags/}"
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Generate SHA256SUMS
+        working-directory: artifacts
+        run: |
+          ls -la
+          sha256sum tap-*.tar.gz tap-*.zip > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.ver.outputs.version }}
+          name: Tap ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: |
+            artifacts/tap-*.tar.gz
+            artifacts/tap-*.zip
+            artifacts/SHA256SUMS

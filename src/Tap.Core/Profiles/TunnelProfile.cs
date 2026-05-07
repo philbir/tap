@@ -1,7 +1,7 @@
 using System.Text.Json.Serialization;
 using Tap.Core.Cloudflare;
 
-namespace Tap.Cli.Profiles;
+namespace Tap.Core.Profiles;
 
 /// <summary>
 /// A persisted tunnel profile. Loaded by <c>tap run --name &lt;NAME&gt;</c>; saved by
@@ -37,5 +37,7 @@ public sealed class TunnelProfile
     WriteIndented = true,
     UseStringEnumConverter = true)]
 [JsonSerializable(typeof(TunnelProfile))]
+[JsonSerializable(typeof(TunnelProfile[]))]
+[JsonSerializable(typeof(List<TunnelProfile>))]
 [JsonSerializable(typeof(TunnelMode))]
-internal sealed partial class TunnelProfileJson : JsonSerializerContext;
+public sealed partial class TunnelProfileJson : JsonSerializerContext;

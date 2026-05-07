@@ -22,15 +22,15 @@ public abstract class TapBaseSettings : CommandSettings
     public bool Quick { get; init; }
 
     [CommandOption("--token <TOKEN>")]
-    [Description("Cloudflare connector token (token-mode tunnel).")]
+    [Description("Cloudflare connector token (token-mode tunnel). Env: CLOUDFLARE_TUNNEL_TOKEN.")]
     public string? Token { get; init; }
 
     [CommandOption("--api-token <TOKEN>")]
-    [Description("Cloudflare API token (Account:Cloudflare Tunnel:Edit + Zone:DNS:Edit).")]
+    [Description("Cloudflare API token (Account:Cloudflare Tunnel:Edit + Zone:DNS:Edit). Env: CLOUDFLARE_API_TOKEN.")]
     public string? ApiToken { get; init; }
 
     [CommandOption("--account <ID>")]
-    [Description("Cloudflare account ID (required for --api-managed and --dynamic).")]
+    [Description("Cloudflare account ID (required for --api-managed and --dynamic). Env: CLOUDFLARE_ACCOUNT_ID.")]
     public string? AccountId { get; init; }
 
     [CommandOption("--api-managed <NAME>")]

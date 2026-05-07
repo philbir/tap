@@ -109,6 +109,8 @@ const docs: DocSection[] = [
 ];
 
 const commands = {
+  install: `dotnet tool install -g Tap`,
+  installCurl: `curl -fsSL https://raw.githubusercontent.com/philbir/tap/main/install.sh | sh`,
   cli: `tap run http://localhost:3000`,
   cliQuick: `tap run http://localhost:3000 --quick`,
   cliToken: `tap run http://localhost:3000 \\
@@ -362,6 +364,8 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
       <section className="doc-block" id={doc.id}>
         <DocHeader doc={doc} />
         <div className="code-grid">
+          <CodeBlock title="Install (.NET global tool)" code={commands.install} />
+          <CodeBlock title="Install (Linux/macOS, self-contained)" code={commands.installCurl} />
           <CodeBlock title="CLI: local inspector" code={commands.cli} />
           <CodeBlock title="CLI: quick public tunnel" code={commands.cliQuick} />
           <CodeBlock title="CLI: existing token tunnel" code={commands.cliToken} />

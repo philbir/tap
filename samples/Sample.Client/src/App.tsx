@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { EndpointDescriptor, TapDescriptor } from './types'
 import { EndpointCard } from './EndpointCard'
+import { signHs256 } from './jwt'
+
+const jwtConfig = {
+  secret: import.meta.env.VITE_JWT_SECRET ?? '',
+  issuer: import.meta.env.VITE_JWT_ISSUER ?? 'tap-sample-client',
+  audience: import.meta.env.VITE_JWT_AUDIENCE ?? 'tap-sample-api',
+}
 
 function parseTaps(): TapDescriptor[] {
   const raw = import.meta.env.VITE_TAPS
@@ -34,17 +41,28 @@ export function App() {
     let cancelled = false
     setLoading(true)
     setError(null)
-    fetch(`${selected.url.replace(/\/$/, '')}/endpoints`)
-      .then((r) => (r.ok ? r.json() : Promise.reject(`HTTP ${r.status}`)))
-      .then((d: EndpointDescriptor[]) => {
-        if (!cancelled) setEndpoints(d)
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e))
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+
+    const fetchCatalog = async () => {
+      const headers: Record<string, string> = {}
+      if (selected.requiresJwt && jwtConfig.secret) {
+        const token = await signHs256({
+          secret: jwtConfig.secret,
+          issuer: jwtConfig.issuer,
+          audience: jwtConfig.audience,
+          extraClaims: { role: 'tap-demo' },
+        })
+        headers.Authorization = `Bearer ${token}`
+      }
+      const r = await fetch(`${selected.url.replace(/\/$/, '')}/endpoints`, { headers })
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return (await r.json()) as EndpointDescriptor[]
+    }
+
+    fetchCatalog()
+      .then((d) => { if (!cancelled) setEndpoints(d) })
+      .catch((e) => { if (!cancelled) setError(String(e)) })
+      .finally(() => { if (!cancelled) setLoading(false) })
+
     return () => {
       cancelled = true
     }
@@ -110,6 +128,8 @@ export function App() {
             key={`${ep.method} ${ep.path}`}
             endpoint={ep}
             baseUrl={selected?.url ?? ''}
+            tap={selected}
+            jwtConfig={jwtConfig}
           />
         ))}
       </div>

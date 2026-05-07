@@ -1,20 +1,21 @@
 using System.Text.Json;
 
-namespace Tap.Cli.Profiles;
+namespace Tap.Core.Profiles;
 
 /// <summary>
 /// File-backed store for named tunnel profiles. One JSON file per profile under
-/// <c>%APPDATA%\tap\tunnels</c> (Windows), <c>~/Library/Application Support/tap/tunnels</c> (macOS),
-/// or <c>~/.config/tap/tunnels</c> (Linux).
+/// <c>~/.tap/tunnels</c> (all platforms; <c>~</c> resolves via the user-profile folder).
 /// </summary>
 public sealed class TunnelProfileStore
 {
+    public static string DefaultRootDirectory =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".tap", "tunnels");
+
     public string RootDirectory { get; }
 
     public TunnelProfileStore(string? rootOverride = null)
     {
-        RootDirectory = rootOverride
-            ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "tap", "tunnels");
+        RootDirectory = rootOverride ?? DefaultRootDirectory;
         Directory.CreateDirectory(RootDirectory);
     }
 
@@ -83,6 +84,8 @@ public sealed class TunnelProfileStore
         File.Delete(path);
         return true;
     }
+
+    public string ResolveFilePath(string name) => ResolvePath(name);
 
     private string ResolvePath(string name)
     {

@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
@@ -10,6 +11,9 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Protocols;
+using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 
 namespace Tap.Core.Auth;
@@ -23,6 +27,13 @@ public static class TapAuthRegistration
     public static IServiceCollection AddTapAuth(this IServiceCollection services, TapAuthOptions options)
     {
         services.AddSingleton(options);
+
+        if (options.Jwt is { } jwt && (
+                !string.IsNullOrWhiteSpace(jwt.SecretKey) ||
+                !string.IsNullOrWhiteSpace(jwt.WellKnownEndpoint)))
+        {
+            services.AddSingleton(new JwtTokenValidator(jwt));
+        }
 
         if (options.Oidc is { } oidc && !string.IsNullOrWhiteSpace(oidc.Authority) && !string.IsNullOrWhiteSpace(oidc.ClientId))
         {
@@ -77,15 +88,28 @@ public static class TapAuthRegistration
 public sealed class TapAuthMiddleware(
     RequestDelegate next,
     TapAuthOptions options,
-    ILogger<TapAuthMiddleware> logger)
+    ILogger<TapAuthMiddleware> logger,
+    IServiceProvider services)
 {
     private readonly System.Net.IPNetwork[]? _cidrs = ParseCidrs(options.AllowedCidrs);
     private readonly HashSet<string>? _countries = options.AllowedCountries is { Count: > 0 }
         ? new HashSet<string>(options.AllowedCountries.Select(c => c.Trim().ToUpperInvariant()))
         : null;
+    private readonly JwtTokenValidator? _jwt = services.GetService<JwtTokenValidator>();
 
     public async Task InvokeAsync(HttpContext ctx)
     {
+        // Let CORS preflights through unauthenticated. Browsers strip Authorization on
+        // preflight, so applying any header/JWT gate here would 401 the preflight and make
+        // the actual request never fire ("Failed to fetch" on the client).
+        if (HttpMethods.IsOptions(ctx.Request.Method) &&
+            ctx.Request.Headers.ContainsKey("Origin") &&
+            ctx.Request.Headers.ContainsKey("Access-Control-Request-Method"))
+        {
+            await next(ctx);
+            return;
+        }
+
         // Header check — short-circuit BEFORE the request reaches OIDC, since machine-to-machine
         // calls won't have a browser session.
         if (options.Header is { } h && !string.IsNullOrEmpty(h.Value))
@@ -93,6 +117,30 @@ public sealed class TapAuthMiddleware(
             if (!ctx.Request.Headers.TryGetValue(h.Name, out var supplied) || !ConstantTimeEquals(supplied!, h.Value))
             {
                 await Reject(ctx, 401, $"Missing or invalid {h.Name} header.");
+                return;
+            }
+        }
+
+        // JWT Bearer validation.
+        if (_jwt is not null)
+        {
+            var jwtOpts = options.Jwt!;
+            if (!ctx.Request.Headers.TryGetValue(jwtOpts.HeaderName, out var raw) || raw.Count == 0)
+            {
+                await Reject(ctx, 401, $"Missing {jwtOpts.HeaderName} header.");
+                return;
+            }
+            var token = raw.ToString();
+            if (!string.IsNullOrEmpty(jwtOpts.HeaderScheme) &&
+                token.StartsWith(jwtOpts.HeaderScheme, StringComparison.OrdinalIgnoreCase))
+            {
+                token = token.Substring(jwtOpts.HeaderScheme.Length).Trim();
+            }
+
+            var (ok, error) = await _jwt.ValidateAsync(token, ctx.RequestAborted);
+            if (!ok)
+            {
+                await Reject(ctx, 401, $"Invalid JWT: {error}");
                 return;
             }
         }
@@ -157,6 +205,85 @@ public sealed class TapAuthMiddleware(
         var diff = 0;
         for (var i = 0; i < a.Length; i++) diff |= a[i] ^ b[i];
         return diff == 0;
+    }
+}
+
+/// <summary>
+/// Validates JWT bearer tokens using either a symmetric secret (HS*) or signing keys
+/// fetched from an OIDC well-known endpoint (RS*/ES*). Caches the JWKS via
+/// <see cref="ConfigurationManager{T}"/>.
+/// </summary>
+public sealed class JwtTokenValidator
+{
+    private readonly JwtAuthOptions _options;
+    private readonly JsonWebTokenHandler _handler = new();
+    private readonly SymmetricSecurityKey? _symmetricKey;
+    private readonly ConfigurationManager<OpenIdConnectConfiguration>? _configManager;
+
+    public JwtTokenValidator(JwtAuthOptions options)
+    {
+        _options = options;
+        if (!string.IsNullOrWhiteSpace(options.SecretKey))
+        {
+            _symmetricKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(options.SecretKey));
+        }
+        else if (!string.IsNullOrWhiteSpace(options.WellKnownEndpoint))
+        {
+            _configManager = new ConfigurationManager<OpenIdConnectConfiguration>(
+                options.WellKnownEndpoint,
+                new OpenIdConnectConfigurationRetriever(),
+                new HttpDocumentRetriever { RequireHttps = options.WellKnownEndpoint.StartsWith("https", StringComparison.OrdinalIgnoreCase) });
+        }
+        else
+        {
+            throw new InvalidOperationException("JwtAuthOptions requires either SecretKey or WellKnownEndpoint.");
+        }
+    }
+
+    public async Task<(bool ok, string? error)> ValidateAsync(string token, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(token)) return (false, "empty token");
+
+        var parameters = new TokenValidationParameters
+        {
+            ValidateIssuerSigningKey = true,
+            ValidateLifetime = true,
+            ClockSkew = TimeSpan.FromSeconds(_options.ClockSkewSeconds),
+            ValidateIssuer = !string.IsNullOrWhiteSpace(_options.Issuer),
+            ValidIssuer = _options.Issuer,
+            ValidateAudience = !string.IsNullOrWhiteSpace(_options.Audience),
+            ValidAudience = _options.Audience,
+        };
+
+        if (_symmetricKey is not null)
+        {
+            parameters.IssuerSigningKey = _symmetricKey;
+        }
+        else if (_configManager is not null)
+        {
+            var config = await _configManager.GetConfigurationAsync(ct);
+            parameters.IssuerSigningKeys = config.SigningKeys;
+        }
+
+        var result = await _handler.ValidateTokenAsync(token, parameters);
+        if (!result.IsValid)
+        {
+            return (false, result.Exception?.Message ?? "validation failed");
+        }
+
+        if (_options.RequiredClaims is { Count: > 0 } required)
+        {
+            foreach (var (claim, expected) in required)
+            {
+                if (!result.Claims.TryGetValue(claim, out var actual) ||
+                    !string.Equals(actual?.ToString(), expected, StringComparison.Ordinal))
+                {
+                    return (false, $"required claim '{claim}' missing or did not match");
+                }
+            }
+        }
+
+        return (true, null);
     }
 }
 

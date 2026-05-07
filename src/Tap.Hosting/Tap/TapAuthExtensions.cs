@@ -46,6 +46,52 @@ public static class TapAuthExtensions
     }
 
     /// <summary>
+    /// Require a valid JWT Bearer token. Configure either an OIDC well-known endpoint
+    /// (with expected issuer) for asymmetric validation against the published JWKS, or
+    /// a shared <paramref name="secretKey"/> for symmetric HS256/HS384/HS512.
+    /// Optional <paramref name="requiredClaims"/> are matched by exact value after the
+    /// signature is validated.
+    /// </summary>
+    public static TapHandle WithJwtAuth(
+        this TapHandle tap,
+        string? wellKnownEndpoint = null,
+        string? issuer = null,
+        string? secretKey = null,
+        string? audience = null,
+        IDictionary<string, string>? requiredClaims = null)
+    {
+        if (string.IsNullOrWhiteSpace(wellKnownEndpoint) && string.IsNullOrWhiteSpace(secretKey))
+        {
+            throw new ArgumentException("WithJwtAuth requires either a wellKnownEndpoint or a secretKey.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(wellKnownEndpoint))
+        {
+            tap.WithEnvironment("Inspector__Auth__Jwt__WellKnownEndpoint", wellKnownEndpoint);
+        }
+        if (!string.IsNullOrWhiteSpace(issuer))
+        {
+            tap.WithEnvironment("Inspector__Auth__Jwt__Issuer", issuer);
+        }
+        if (!string.IsNullOrWhiteSpace(secretKey))
+        {
+            tap.WithEnvironment("Inspector__Auth__Jwt__SecretKey", secretKey);
+        }
+        if (!string.IsNullOrWhiteSpace(audience))
+        {
+            tap.WithEnvironment("Inspector__Auth__Jwt__Audience", audience);
+        }
+        if (requiredClaims is { Count: > 0 })
+        {
+            foreach (var (claim, value) in requiredClaims)
+            {
+                tap.WithEnvironment($"Inspector__Auth__Jwt__RequiredClaims__{claim}", value);
+            }
+        }
+        return tap;
+    }
+
+    /// <summary>
     /// Require an OIDC sign-in (cookie session) before any tunneled request reaches the upstream.
     /// </summary>
     public static TapHandle WithOidcAuth(

@@ -11,6 +11,7 @@ export interface EndpointDescriptor {
   parameters?: EndpointParameter[]
   sampleBody?: string
   isStream?: boolean
+  requiresAuth?: boolean
 }
 
 export interface SseTick {
@@ -24,4 +25,5 @@ export interface TapDescriptor {
   name: string
   mode: string
   url: string
+  requiresJwt?: boolean
 }

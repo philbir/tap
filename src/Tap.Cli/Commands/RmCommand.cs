@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using Tap.Cli.Profiles;
+using Tap.Core.Profiles;
 
 namespace Tap.Cli.Commands;
 

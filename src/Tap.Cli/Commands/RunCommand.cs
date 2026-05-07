@@ -8,7 +8,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using Tap.Cli.Profiles;
+using Tap.Core.Profiles;
 using Tap.Core.Auth;
 using Tap.Core.Cloudflare;
 using Tap.Core.Cloudflared;
@@ -25,7 +25,7 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         public string? Upstream { get; init; }
 
         [CommandOption("-n|--name <NAME>")]
-        [Description("Run a named profile from ~/.config/tap/tunnels (or %APPDATA%/tap/tunnels). CLI flags override profile values.")]
+        [Description("Run a named profile from ~/.tap/tunnels. CLI flags override profile values.")]
         public string? Name { get; init; }
     }
 

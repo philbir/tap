@@ -52,6 +52,24 @@ public sealed class CloudflareApi(HttpClient http, string apiToken)
         return payload.Result;
     }
 
+    /// <summary>
+    /// Deletes a tunnel. Cloudflare rejects deletion while connectors are active, so this
+    /// first calls the cleanup endpoint to drop stale connections (no-op if the tunnel is idle).
+    /// </summary>
+    public async Task DeleteTunnelAsync(string accountId, string tunnelId, CancellationToken ct)
+    {
+        using (var cleanup = NewRequest(HttpMethod.Delete,
+            $"{ApiBase}/accounts/{accountId}/cfd_tunnel/{tunnelId}/connections"))
+        {
+            // Cleanup is best-effort: swallow non-success responses since the delete below
+            // will surface the real error if the tunnel is still in use.
+            try { using var _ = await http.SendAsync(cleanup, ct); } catch { }
+        }
+
+        using var req = NewRequest(HttpMethod.Delete, $"{ApiBase}/accounts/{accountId}/cfd_tunnel/{tunnelId}");
+        await SendAsync<CfSingleResponse<CfTunnel>>(req, ct);
+    }
+
     public async Task<string> WriteCredentialsFileAsync(
         string accountId, CfTunnel tunnel, string tunnelSecret, CancellationToken ct)
     {

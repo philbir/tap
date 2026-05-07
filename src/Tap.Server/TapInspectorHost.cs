@@ -328,6 +328,8 @@ public static class TapInspectorHost
 
         ep.MapGet("/api/health", () => Results.Ok(new { ok = true }));
 
+        ProfileEndpoints.Map(ep);
+
         ep.MapFallbackToFile("index.html");
     }
 

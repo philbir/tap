@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using Spectre.Console;
 using Spectre.Console.Cli;
-using Tap.Cli.Profiles;
+using Tap.Core.Profiles;
 using Tap.Core.Cloudflared;
 
 namespace Tap.Cli.Commands;
@@ -11,7 +11,7 @@ public sealed class SaveCommand : Command<SaveCommand.Settings>
     public sealed class Settings : TapBaseSettings
     {
         [CommandArgument(0, "<name>")]
-        [Description("Profile name. Stored as ~/.config/tap/tunnels/<name>.json (or %APPDATA%/tap/tunnels/<name>.json on Windows).")]
+        [Description("Profile name. Stored as ~/.tap/tunnels/<name>.json.")]
         public string ProfileName { get; init; } = "";
 
         [CommandArgument(1, "[upstream]")]

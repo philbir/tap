@@ -188,6 +188,10 @@ public static class TapExtensions
                 ctx.EnvironmentVariables["Inspector__ProxyPort"] = annotation.ProxyPort.ToString(CultureInfo.InvariantCulture);
                 ctx.EnvironmentVariables["Inspector__UiPort"] = annotation.UiPort.ToString(CultureInfo.InvariantCulture);
                 ctx.EnvironmentVariables["Inspector__Mode"] = mode;
+                if (handle.Resource is ContainerResource)
+                {
+                    ctx.EnvironmentVariables["Inspector__UiHost"] = "0.0.0.0";
+                }
             })
             .WithEnvironment(ctx =>
             {

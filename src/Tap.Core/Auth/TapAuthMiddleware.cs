@@ -76,6 +76,8 @@ public static class TapAuthRegistration
                 ForwardedHeaders.XForwardedHost;
             o.KnownIPNetworks.Clear();
             o.KnownProxies.Clear();
+            o.KnownProxies.Add(IPAddress.Loopback);
+            o.KnownProxies.Add(IPAddress.IPv6Loopback);
         });
         return services;
     }
@@ -159,7 +161,9 @@ public sealed class TapAuthMiddleware(
         // Country check (CF-IPCountry).
         if (_countries is not null)
         {
-            var country = ctx.Request.Headers["CF-IPCountry"].ToString().Trim().ToUpperInvariant();
+            var country = IsTrustedForwarder(ctx.Connection.RemoteIpAddress)
+                ? ctx.Request.Headers["CF-IPCountry"].ToString().Trim().ToUpperInvariant()
+                : string.Empty;
             if (string.IsNullOrEmpty(country) || !_countries.Contains(country))
             {
                 await Reject(ctx, 403, $"Country '{country}' not in allowlist.");
@@ -187,16 +191,26 @@ public sealed class TapAuthMiddleware(
 
     private static IPAddress? ResolveClientIp(HttpContext ctx)
     {
-        var cf = ctx.Request.Headers["CF-Connecting-IP"].ToString();
-        if (!string.IsNullOrEmpty(cf) && IPAddress.TryParse(cf, out var ip)) return ip;
-
-        var fwd = ctx.Request.Headers["X-Forwarded-For"].ToString();
-        if (!string.IsNullOrEmpty(fwd))
+        if (IsTrustedForwarder(ctx.Connection.RemoteIpAddress))
         {
-            var first = fwd.Split(',')[0].Trim();
-            if (IPAddress.TryParse(first, out ip)) return ip;
+            var cf = ctx.Request.Headers["CF-Connecting-IP"].ToString();
+            if (!string.IsNullOrEmpty(cf) && IPAddress.TryParse(cf, out var ip)) return ip;
+
+            var fwd = ctx.Request.Headers["X-Forwarded-For"].ToString();
+            if (!string.IsNullOrEmpty(fwd))
+            {
+                var first = fwd.Split(',')[0].Trim();
+                if (IPAddress.TryParse(first, out ip)) return ip;
+            }
         }
         return ctx.Connection.RemoteIpAddress;
+    }
+
+    private static bool IsTrustedForwarder(IPAddress? remoteIp)
+    {
+        if (remoteIp is null) return false;
+        if (IPAddress.IsLoopback(remoteIp)) return true;
+        return remoteIp.IsIPv4MappedToIPv6 && IPAddress.IsLoopback(remoteIp.MapToIPv4());
     }
 
     private static bool ConstantTimeEquals(ReadOnlySpan<char> a, ReadOnlySpan<char> b)

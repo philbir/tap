@@ -10,6 +10,8 @@ namespace Tap.Server;
 /// </summary>
 public sealed class CapturingResponseStream : Stream
 {
+    private const long MaxCaptureBytes = 1_000_000;
+
     private readonly HttpContext _ctx;
     private readonly Stream _origin;
     private readonly RequestRecord _record;
@@ -18,6 +20,8 @@ public sealed class CapturingResponseStream : Stream
     private readonly MemoryStream _buffer = new();
     private bool _decided;
     private bool _streaming;
+    private bool _passthrough;
+    private long _bytesWritten;
 
     private readonly StringBuilder _data = new();
     private string _eventName = "message";
@@ -36,6 +40,8 @@ public sealed class CapturingResponseStream : Stream
 
     public MemoryStream Buffer => _buffer;
     public bool IsStreaming => _streaming;
+    public bool IsPassthrough => _passthrough;
+    public long BytesWritten => _bytesWritten;
 
     public override bool CanRead => false;
     public override bool CanSeek => false;
@@ -65,12 +71,26 @@ public sealed class CapturingResponseStream : Stream
     private async Task WriteCoreAsync(ReadOnlyMemory<byte> chunk, CancellationToken ct)
     {
         EnsureDecision();
+        _bytesWritten += chunk.Length;
 
-        if (_streaming)
+        if (_streaming || _passthrough)
         {
             await _origin.WriteAsync(chunk, ct);
-            await _origin.FlushAsync(ct);
-            ProcessSseChunk(chunk.Span);
+            if (_streaming)
+            {
+                await _origin.FlushAsync(ct);
+                ProcessSseChunk(chunk.Span);
+            }
+            return;
+        }
+
+        if (_buffer.Length + chunk.Length > MaxCaptureBytes)
+        {
+            _record.ResponseBodyTruncated = true;
+            _passthrough = true;
+            _buffer.Position = 0;
+            await _buffer.CopyToAsync(_origin, ct);
+            await _origin.WriteAsync(chunk, ct);
             return;
         }
 

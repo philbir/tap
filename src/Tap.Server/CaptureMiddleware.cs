@@ -55,8 +55,18 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
                 record.StreamCompleted = true;
                 record.StatusCode = ctx.Response.StatusCode;
                 record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
-                record.ResponseBodyOriginalSize = capture.Buffer.Length;
+                record.ResponseBodyOriginalSize = capture.BytesWritten;
                 store.Update(record);
+            }
+            else if (capture.IsPassthrough)
+            {
+                // Large response: already passed through after the capture cap was reached.
+                record.StatusCode = ctx.Response.StatusCode;
+                record.ResponseContentType = ctx.Response.ContentType;
+                record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
+                record.ResponseBodyOriginalSize = capture.BytesWritten;
+                record.ResponseBodyTruncated = true;
+                store.Add(record);
             }
             else
             {

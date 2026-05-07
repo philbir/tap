@@ -12,6 +12,8 @@ public sealed class TapInspectorOptions
 {
     public required int ProxyPort { get; init; }
     public required int UiPort { get; init; }
+    public string ProxyHost { get; init; } = "0.0.0.0";
+    public string UiHost { get; init; } = "localhost";
     public required InspectorIngressEntry[] Ingress { get; init; }
     public string Mode { get; init; } = "standalone";
     public TapAuthOptions? Auth { get; init; }
@@ -48,6 +50,8 @@ public static class TapInspectorHost
         {
             ProxyPort = config.GetValue<int>("Inspector:ProxyPort"),
             UiPort = config.GetValue<int>("Inspector:UiPort"),
+            ProxyHost = config["Inspector:ProxyHost"] ?? "0.0.0.0",
+            UiHost = config["Inspector:UiHost"] ?? "localhost",
             Ingress = ingress,
             Mode = config["Inspector:Mode"] ?? "standalone",
             Auth = auth.AnyConfigured ? auth : null,
@@ -77,7 +81,9 @@ public static class TapInspectorHost
             Args = args,
             WebRootPath = Directory.Exists(wwwroot) ? wwwroot : null,
         });
-        builder.WebHost.UseUrls($"http://0.0.0.0:{options.ProxyPort}", $"http://0.0.0.0:{options.UiPort}");
+        builder.WebHost.UseUrls(
+            $"http://{options.ProxyHost}:{options.ProxyPort}",
+            $"http://{options.UiHost}:{options.UiPort}");
 
         if (options.Quiet)
         {
@@ -111,9 +117,6 @@ public static class TapInspectorHost
 
         builder.Services.AddReverseProxy().LoadFromMemory(routes, clusters);
 
-        builder.Services.AddCors(opts => opts.AddDefaultPolicy(p =>
-            p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
-
         if (options.Auth is not null)
         {
             builder.Services.AddTapAuth(options.Auth);
@@ -124,8 +127,8 @@ public static class TapInspectorHost
         if (!options.Quiet)
         {
             app.Logger.LogInformation(
-                "HTTP Inspector starting. Proxy: {Proxy}, UI: {Ui}. {Ingress} ingress entr{Suffix}.{Auth}",
-                options.ProxyPort, options.UiPort, options.Ingress.Length,
+                "HTTP Inspector starting. Proxy: http://{ProxyHost}:{ProxyPort}, UI: http://{UiHost}:{UiPort}. {Ingress} ingress entr{Suffix}.{Auth}",
+                options.ProxyHost, options.ProxyPort, options.UiHost, options.UiPort, options.Ingress.Length,
                 options.Ingress.Length == 1 ? "y" : "ies",
                 options.Auth is not null ? " Auth: enforced." : "");
         }
@@ -142,10 +145,11 @@ public static class TapInspectorHost
             proxy.UseEndpoints(ep => ep.MapReverseProxy());
         });
 
-        // UI branch — never gated by auth (it's the local control plane).
+        // UI branch — local control plane. It binds to loopback by default and rejects
+        // cross-origin unsafe browser requests.
         app.MapWhen(ctx => ctx.Connection.LocalPort == options.UiPort, ui =>
         {
-            ui.UseCors();
+            ui.Use(RejectCrossOriginUnsafeRequests);
             ui.UseDefaultFiles();
             ui.UseStaticFiles();
             ui.UseRouting();
@@ -153,6 +157,36 @@ public static class TapInspectorHost
         });
 
         return app;
+    }
+
+    private static async Task RejectCrossOriginUnsafeRequests(HttpContext ctx, RequestDelegate next)
+    {
+        if (HttpMethods.IsGet(ctx.Request.Method) ||
+            HttpMethods.IsHead(ctx.Request.Method) ||
+            HttpMethods.IsOptions(ctx.Request.Method))
+        {
+            await next(ctx);
+            return;
+        }
+
+        var origin = ctx.Request.Headers.Origin.ToString();
+        var referer = ctx.Request.Headers.Referer.ToString();
+        if ((string.IsNullOrEmpty(origin) || IsSameOrigin(origin, ctx.Request.Host)) &&
+            (string.IsNullOrEmpty(referer) || IsSameOrigin(referer, ctx.Request.Host)))
+        {
+            await next(ctx);
+            return;
+        }
+
+        ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        await ctx.Response.WriteAsync("Cross-origin control-plane requests are not allowed.");
+    }
+
+    private static bool IsSameOrigin(string value, HostString host)
+    {
+        return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+            string.Equals(uri.Host, host.Host, StringComparison.OrdinalIgnoreCase) &&
+            uri.Port == (host.Port ?? (uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80));
     }
 
     private static void MapUiEndpoints(IEndpointRouteBuilder ep, TapInspectorOptions options, CloudflareOptions cloudflareOptions)

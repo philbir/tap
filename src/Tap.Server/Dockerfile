@@ -36,6 +36,8 @@ WORKDIR /app
 COPY --from=build /app ./
 # Default ports — overridable via Inspector__ProxyPort / Inspector__UiPort.
 ENV ASPNETCORE_URLS=http://0.0.0.0:5299;http://0.0.0.0:5298 \
+    Inspector__ProxyHost=0.0.0.0 \
+    Inspector__UiHost=0.0.0.0 \
     Inspector__ProxyPort=5299 \
     Inspector__UiPort=5298 \
     Inspector__Mode=standalone

@@ -27,8 +27,10 @@ jobs:
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
             archive: tar.gz
+          # Both macOS RIDs build on macos-14 (arm64 host) — .NET cross-publishes
+          # for osx-x64 from an arm host. macos-13 (Intel) is being retired by GitHub.
           - rid: osx-x64
-            runner: macos-13
+            runner: macos-14
             archive: tar.gz
           - rid: osx-arm64
             runner: macos-14
@@ -39,6 +41,10 @@ jobs:
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
+    env:
+      # Stop corepack from prompting for stdin confirmation on first download —
+      # the Windows runner was hanging here for 6h.
+      COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,7 +63,11 @@ jobs:
 
       - name: Enable Corepack
         shell: bash
-        run: corepack enable
+        run: |
+          corepack enable
+          # Pre-fetch the pinned yarn version so the MSBuild Exec target
+          # never has to download mid-build (avoids hangs on Windows).
+          corepack prepare yarn@4.9.1 --activate
 
       - name: Resolve version
         id: ver

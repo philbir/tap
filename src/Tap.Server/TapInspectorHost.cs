@@ -94,6 +94,7 @@ public static class TapInspectorHost
             builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
             builder.Logging.AddFilter("Yarp", LogLevel.Warning);
         }
+        builder.Logging.AddFilter("Yarp.ReverseProxy.Forwarder.HttpForwarder", LogLevel.Error);
 
         var (routes, clusters) = BuildYarpConfig(options.Ingress);
 
@@ -142,6 +143,11 @@ public static class TapInspectorHost
             }
             proxy.UseMiddleware<CaptureMiddleware>();
             proxy.UseRouting();
+            proxy.Use(next =>
+            {
+                var logger = proxy.ApplicationServices.GetRequiredService<ILogger<UpstreamErrorPageMiddleware>>();
+                return new UpstreamErrorPageMiddleware(next, options.Ingress, logger).InvokeAsync;
+            });
             proxy.UseEndpoints(ep => ep.MapReverseProxy());
         });
 

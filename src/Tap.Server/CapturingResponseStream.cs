@@ -43,6 +43,19 @@ public sealed class CapturingResponseStream : Stream
     public bool IsPassthrough => _passthrough;
     public long BytesWritten => _bytesWritten;
 
+    public bool TryResetBufferedResponse()
+    {
+        if (_streaming || _passthrough)
+        {
+            return false;
+        }
+
+        _buffer.SetLength(0);
+        _buffer.Position = 0;
+        _bytesWritten = 0;
+        return true;
+    }
+
     public override bool CanRead => false;
     public override bool CanSeek => false;
     public override bool CanWrite => true;

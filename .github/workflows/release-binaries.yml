@@ -23,21 +23,17 @@ jobs:
         include:
           - rid: linux-x64
             runner: ubuntu-latest
-            archive: tar.gz
           - rid: linux-arm64
             runner: ubuntu-24.04-arm
-            archive: tar.gz
           # Both macOS RIDs build on macos-14 (arm64 host) — .NET cross-publishes
           # for osx-x64 from an arm host. macos-13 (Intel) is being retired by GitHub.
           - rid: osx-x64
             runner: macos-14
-            archive: tar.gz
           - rid: osx-arm64
             runner: macos-14
-            archive: tar.gz
-          - rid: win-x64
-            runner: windows-latest
-            archive: zip
+          # Windows is intentionally not built as a self-contained binary: the
+          # publish step hung indefinitely on windows-latest. Windows users
+          # install via `dotnet tool install -g Tap` (see install.ps1).
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -108,7 +104,6 @@ jobs:
           ls -la "stage/${name}"
 
       - name: Create archive (tar.gz)
-        if: matrix.archive == 'tar.gz'
         shell: bash
         run: |
           version="${{ steps.ver.outputs.version }}"
@@ -121,23 +116,11 @@ jobs:
             shasum -a 256 "${name}.tar.gz" | awk '{print $1}' > "${name}.tar.gz.sha256"
           fi
 
-      - name: Create archive (zip)
-        if: matrix.archive == 'zip'
-        shell: pwsh
-        run: |
-          $version = "${{ steps.ver.outputs.version }}"
-          $rid = "${{ matrix.rid }}"
-          $name = "tap-$version-$rid"
-          Compress-Archive -Path "stage/$name/*" -DestinationPath "$name.zip" -Force
-          $hash = (Get-FileHash "$name.zip" -Algorithm SHA256).Hash.ToLower()
-          [System.IO.File]::WriteAllText("$name.zip.sha256", $hash)
-
       - uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.rid }}
           path: |
             tap-*.tar.gz
-            tap-*.zip
             tap-*.sha256
           if-no-files-found: error
           retention-days: 14
@@ -171,7 +154,7 @@ jobs:
         working-directory: artifacts
         run: |
           ls -la
-          sha256sum tap-*.tar.gz tap-*.zip > SHA256SUMS
+          sha256sum tap-*.tar.gz > SHA256SUMS
           cat SHA256SUMS
 
       - name: Create GitHub Release
@@ -183,5 +166,4 @@ jobs:
           generate_release_notes: true
           files: |
             artifacts/tap-*.tar.gz
-            artifacts/tap-*.zip
             artifacts/SHA256SUMS

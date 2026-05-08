@@ -82,7 +82,17 @@ curl -fsSL https://raw.githubusercontent.com/philbir/tap/main/install.sh | sh
 
 Pin a version with `TAP_VERSION=0.1.0 ...`, override paths with `TAP_INSTALL_DIR` / `TAP_BIN_DIR`. To uninstall: `rm -rf ~/.local/share/tap ~/.local/bin/tap`.
 
-You can also download archives directly from the [GitHub Releases](https://github.com/philbir/tap/releases) page — assets are named `tap-<version>-<rid>.tar.gz` (Linux/macOS) and `tap-<version>-win-x64.zip` (Windows), with a `SHA256SUMS` file alongside.
+Archives are also available directly from the [GitHub Releases](https://github.com/philbir/tap/releases) page as `tap-<version>-<rid>.tar.gz`, with a `SHA256SUMS` file alongside.
+
+### Windows one-liner
+
+Wraps the .NET global-tool install — needs the .NET 10 SDK on PATH.
+
+```powershell
+irm https://raw.githubusercontent.com/philbir/tap/main/install.ps1 | iex
+```
+
+Pin a version with `$env:TAP_VERSION = "0.2.3"` before running. To uninstall: `dotnet tool uninstall -g Tap`.
 
 ### cloudflared
 

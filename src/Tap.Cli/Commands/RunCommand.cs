@@ -77,15 +77,80 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         ProvisionedTunnel? provisioned = null;
         Process? cloudflaredProcess = null;
         string? quickPublicUrl = null;
+        TailscaleCliRunner.FunnelHandle? tailscaleFunnel = null;
+
+        if (tunnelMode == TunnelMode.Tailscale
+            && merged.TailscaleDaemonMode == TailscaleDaemonMode.Ephemeral
+            && string.IsNullOrWhiteSpace(merged.TailscaleAuthKey))
+        {
+            AnsiConsole.MarkupLine(
+                "[yellow]⚠[/]  [grey]Tailscale ephemeral mode requested but no auth key provided. "
+                + "Pass --tailscale-authkey, set TAILSCALE_AUTHKEY, or store one in the profile. "
+                + "Falling back to system mode.[/]");
+        }
+
+        // --docker without an auth key implies "ephemeral via Docker" but we have nothing to authenticate
+        // with. Reject up front rather than silently falling through to system mode.
+        if (tunnelMode == TunnelMode.Tailscale
+            && merged.TailscaleHostMode == TailscaleHostMode.Docker
+            && string.IsNullOrWhiteSpace(merged.TailscaleAuthKey))
+        {
+            AnsiConsole.MarkupLine(
+                "[red]✘[/]  [grey]--tailscale --docker requires an auth key (Docker mode is ephemeral by design). "
+                + "Pass --tailscale-authkey, set TAILSCALE_AUTHKEY, or drop --docker to use the host's tailscaled.[/]");
+            return 2;
+        }
+
+        // Process-ephemeral on Windows isn't supported (no userspace tailscaled spawn path);
+        // surface this BEFORE the spinner instead of letting the runner throw later.
+        if (tunnelMode == TunnelMode.Tailscale
+            && merged.TailscaleDaemonMode == TailscaleDaemonMode.Ephemeral
+            && merged.TailscaleHostMode == TailscaleHostMode.Process
+            && !string.IsNullOrWhiteSpace(merged.TailscaleAuthKey)
+            && OperatingSystem.IsWindows())
+        {
+            AnsiConsole.MarkupLine(
+                "[red]✘[/]  [grey]Tailscale ephemeral process mode is not supported on Windows from the CLI. "
+                + "Add --docker to run via the `tailscale/tailscale` container, or drop the auth key for system mode.[/]");
+            return 2;
+        }
 
         try
         {
             await AnsiConsole.Status()
                 .Spinner(Spinner.Known.Dots)
-                .SpinnerStyle(Style.Parse("orange3"))
+                .SpinnerStyle(Style.Parse(tunnelMode == TunnelMode.Tailscale ? "blue" : "orange3"))
                 .StartAsync("Initializing tap...", async ctx =>
                 {
                     if (tunnelMode == TunnelMode.None) return;
+
+                    if (tunnelMode == TunnelMode.Tailscale)
+                    {
+                        // Auth key absence means we fall back to system mode regardless of profile setting.
+                        var effectiveDaemonMode = merged.TailscaleDaemonMode == TailscaleDaemonMode.Ephemeral
+                            && !string.IsNullOrWhiteSpace(merged.TailscaleAuthKey)
+                                ? TailscaleDaemonMode.Ephemeral
+                                : TailscaleDaemonMode.System;
+
+                        var statusText = (effectiveDaemonMode, merged.TailscaleHostMode) switch
+                        {
+                            (TailscaleDaemonMode.Ephemeral, TailscaleHostMode.Docker) => "Starting tailscale/tailscale container...",
+                            (TailscaleDaemonMode.Ephemeral, _) => "Spawning ephemeral tailscaled...",
+                            _ => "Configuring Tailscale Funnel...",
+                        };
+                        ctx.Status(statusText);
+
+                        tailscaleFunnel = await TailscaleCliRunner.StartAsync(
+                            effectiveDaemonMode,
+                            merged.TailscaleHostMode,
+                            merged.TailscaleFunnelPort,
+                            $"http://localhost:{merged.ProxyPort}",
+                            merged.TailscaleAuthKey,
+                            merged.TailscaleLoginServer,
+                            merged.TailscalePublic,
+                            ct);
+                        return;
+                    }
 
                     if (merged.HostMode == CloudflaredHostMode.Process)
                     {
@@ -171,18 +236,46 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         }
 
         // 3) Build the inspector options NOW that we know the public URL.
-        var publicUrl = quickPublicUrl
+        var publicUrl = tailscaleFunnel?.PublicUrl
+            ?? quickPublicUrl
             ?? (provisioned?.Hostnames.FirstOrDefault() is { Length: > 0 } h ? $"https://{h}" : null);
+
+        // For Tailscale we use "tailscale-system" / "tailscale-ephemeral" as the inspector
+        // tunnelMode so the UI picks the right branding and panel.
+        var isEphemeral = tailscaleFunnel?.DaemonProcess is not null || tailscaleFunnel?.DockerContainer is not null;
+        var inspectorTunnelMode = tunnelMode switch
+        {
+            TunnelMode.None => null,
+            TunnelMode.Tailscale => isEphemeral ? "tailscale-ephemeral" : "tailscale-system",
+            _ => tunnelMode.ToString().ToLowerInvariant(),
+        };
+        var provider = tunnelMode switch
+        {
+            TunnelMode.None => null,
+            TunnelMode.Tailscale => "tailscale",
+            _ => "cloudflare",
+        };
+        var hostname = tailscaleFunnel?.MagicDnsName
+            ?? provisioned?.Hostnames.FirstOrDefault()
+            ?? string.Empty;
+
+        var publicExpose = tunnelMode switch
+        {
+            TunnelMode.None => false,
+            TunnelMode.Tailscale => tailscaleFunnel?.PublicExpose ?? merged.TailscalePublic,
+            _ => true, // any Cloudflare flavor
+        };
 
         var ingress = new[]
         {
             new InspectorIngressEntry(
-                Hostname: provisioned?.Hostnames.FirstOrDefault() ?? string.Empty,
+                Hostname: hostname,
                 Upstream: merged.Upstream)
             {
-                TunnelMode = tunnelMode == TunnelMode.None ? null : tunnelMode.ToString().ToLowerInvariant(),
-                TunnelName = provisioned?.TunnelName,
+                TunnelMode = inspectorTunnelMode,
+                TunnelName = tailscaleFunnel is not null ? "tailscale-funnel" : provisioned?.TunnelName,
                 PublicUrl = publicUrl,
+                PublicExpose = publicExpose,
             },
         };
         var auth = BuildAuthOptions(merged);
@@ -194,13 +287,17 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
             Ingress = ingress,
             Mode = tunnelMode == TunnelMode.None ? "standalone" : "tunnel",
             Auth = auth,
-            TunnelMode = tunnelMode == TunnelMode.None ? null : tunnelMode.ToString().ToLowerInvariant(),
-            TunnelName = provisioned?.TunnelName ?? merged.ApiManagedTunnelName,
+            Provider = provider,
+            TunnelMode = inspectorTunnelMode,
+            TunnelName = tailscaleFunnel is not null
+                ? "tailscale-funnel"
+                : provisioned?.TunnelName ?? merged.ApiManagedTunnelName,
             TunnelResourceName = "cli",
             TunnelPublicUrl = publicUrl,
             TunnelAccountId = provisioned?.AccountId ?? merged.AccountId,
             TunnelTunnelId = provisioned?.TunnelId,
             TunnelApiToken = merged.ApiToken,
+            TunnelSocketPath = tailscaleFunnel?.SocketPath, // ephemeral mode: point inspector at our per-session daemon
             Quiet = !merged.Verbose,
         };
 
@@ -229,7 +326,7 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         }
 
         // 8) Graceful shutdown with visible progress and a hard ceiling.
-        await ShutdownAsync(app, cloudflaredProcess);
+        await ShutdownAsync(app, cloudflaredProcess, tailscaleFunnel);
         return 0;
     }
 
@@ -363,13 +460,31 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         }
     }
 
-    private static async Task ShutdownAsync(IHost app, Process? cloudflaredProcess)
+    private static async Task ShutdownAsync(
+        IHost app,
+        Process? cloudflaredProcess,
+        TailscaleCliRunner.FunnelHandle? tailscaleFunnel)
     {
-        AnsiConsole.MarkupLine("[grey]· stopping cloudflared...[/]");
-        if (cloudflaredProcess is { HasExited: false })
+        if (tailscaleFunnel is not null)
         {
-            try { cloudflaredProcess.Kill(entireProcessTree: true); } catch { }
-            try { await cloudflaredProcess.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+            var msg = tailscaleFunnel.DockerContainer is not null
+                ? "[grey]· removing Tailscale Docker container...[/]"
+                : tailscaleFunnel.DaemonProcess is not null
+                    ? "[grey]· stopping ephemeral tailscaled + cleaning up funnel rule...[/]"
+                    : "[grey]· removing Tailscale funnel rule...[/]";
+            AnsiConsole.MarkupLine(msg);
+            using var stopCts = new CancellationTokenSource(TimeSpan.FromSeconds(8));
+            try { await TailscaleCliRunner.StopAsync(tailscaleFunnel, stopCts.Token); } catch { }
+        }
+
+        if (cloudflaredProcess is not null)
+        {
+            AnsiConsole.MarkupLine("[grey]· stopping cloudflared...[/]");
+            if (!cloudflaredProcess.HasExited)
+            {
+                try { cloudflaredProcess.Kill(entireProcessTree: true); } catch { }
+                try { await cloudflaredProcess.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1)); } catch { }
+            }
         }
 
         AnsiConsole.MarkupLine("[grey]· stopping inspector...[/]");
@@ -451,6 +566,10 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         Row("Upstream", $"[link]{Markup.Escape(opts.Ingress[0].Upstream)}[/]");
         Row("Inspector UI", $"[link]http://localhost:{opts.UiPort}[/]");
         Row("Inspector proxy", $"http://localhost:{opts.ProxyPort}");
+        // Deep link to the inspector's QR page — the easiest way to open this URL on a phone.
+        // Most modern terminals (iTerm, kitty, Wezterm, recent macOS Terminal) make this clickable.
+        if (!string.IsNullOrEmpty(ingress.PublicUrl))
+            Row("Open on phone", $"[link=http://localhost:{opts.UiPort}/#qr]http://localhost:{opts.UiPort}/#qr[/]  [grey](QR code)[/]");
         if (!string.IsNullOrEmpty(opts.TunnelMode)) Row("Tunnel", opts.TunnelMode!);
         if (opts.Auth is not null)
         {
@@ -495,6 +614,16 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
             Hostname = s.Hostname ?? profile?.Hostname,
             HostMode = (s.Docker || (profile?.Docker ?? false)) ? CloudflaredHostMode.Docker : CloudflaredHostMode.Process,
             AutoInstall = s.AutoInstall || (profile?.AutoInstall ?? false),
+            Tailscale = s.Tailscale || profile?.TunnelMode == TunnelMode.Tailscale,
+            // Profile.TailscaleDaemonMode is the explicit setting. Auth-key presence (CLI flag, env,
+            // or profile) implicitly opts into ephemeral mode if no explicit mode is set.
+            TailscaleAuthKey = Pick(s.TailscaleAuthKey, Environment.GetEnvironmentVariable("TAILSCALE_AUTHKEY"), profile?.TailscaleAuthKey, null),
+            TailscaleLoginServer = Pick(s.TailscaleLoginServer, Environment.GetEnvironmentVariable("TAILSCALE_LOGIN_SERVER"), profile?.TailscaleLoginServer, null),
+            TailscaleDaemonMode = ResolveTailscaleDaemonMode(s, profile),
+            // Shared --docker flag: applies to whichever provider is active.
+            TailscaleHostMode = (s.Docker || (profile?.Docker ?? false)) ? TailscaleHostMode.Docker : TailscaleHostMode.Process,
+            TailscaleFunnelPort = ValidateFunnelPort(s.TailscaleFunnelPort ?? profile?.TailscaleFunnelPort ?? 443),
+            TailscalePublic = s.TailscalePublic || (profile?.TailscalePublic ?? false),
             AuthHeader = s.AuthHeader ?? profile?.AuthHeader,
             AuthCidrs = s.AuthCidrs ?? profile?.AuthCidrs,
             AuthCountries = s.AuthCountries ?? profile?.AuthCountries,
@@ -506,6 +635,26 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
     }
 
     private static int? NonDefault(int value, int defaultValue) => value == defaultValue ? null : value;
+
+    private static int ValidateFunnelPort(int port)
+    {
+        if (port is 443 or 8443 or 10000) return port;
+        throw new ArgumentException(
+            $"--tailscale-port must be 443, 8443, or 10000 (got {port}).",
+            nameof(port));
+    }
+
+    private static TailscaleDaemonMode ResolveTailscaleDaemonMode(TapBaseSettings s, TunnelProfile? profile)
+    {
+        // 1. CLI flag wins outright — explicit force-system overrides everything else.
+        if (s.TailscaleSystem) return TailscaleDaemonMode.System;
+        // 2. Profile's explicit setting wins next.
+        if (profile?.TailscaleDaemonMode is { } explicitMode) return explicitMode;
+        // 3. Otherwise, presence of an auth key (CLI flag, env, or profile field) implies ephemeral.
+        var authKey = !string.IsNullOrWhiteSpace(s.TailscaleAuthKey) ? s.TailscaleAuthKey
+            : Environment.GetEnvironmentVariable("TAILSCALE_AUTHKEY") ?? profile?.TailscaleAuthKey;
+        return string.IsNullOrWhiteSpace(authKey) ? TailscaleDaemonMode.System : TailscaleDaemonMode.Ephemeral;
+    }
 
     private static int ListProfiles(TunnelProfileStore store)
     {
@@ -531,11 +680,15 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
                 TunnelMode.Token => "[orange3]token[/]",
                 TunnelMode.ApiManaged => "[orange3]api-managed[/]",
                 TunnelMode.Dynamic => "[orange3]dynamic[/]",
+                TunnelMode.Tailscale => "[blue]tailscale[/]",
                 _ => p.TunnelMode.ToString().ToLowerInvariant(),
             };
-            var host = p.TunnelMode == TunnelMode.Dynamic
-                ? p.DynamicZone ?? "—"
-                : p.Hostname ?? "—";
+            var host = p.TunnelMode switch
+            {
+                TunnelMode.Dynamic => p.DynamicZone ?? "—",
+                TunnelMode.Tailscale => "<machine>.<tailnet>.ts.net",
+                _ => p.Hostname ?? "—",
+            };
             var auth = new List<string>();
             if (!string.IsNullOrEmpty(p.AuthHeader)) auth.Add("header");
             if (p.AuthCidrs is { Length: > 0 }) auth.Add($"cidr×{p.AuthCidrs.Length}");
@@ -584,6 +737,15 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         public string? Hostname { get; init; }
         public CloudflaredHostMode HostMode { get; init; }
         public bool AutoInstall { get; init; }
+        // Tailscale Funnel fields (used when ProfileTunnelMode == Tailscale).
+        public bool Tailscale { get; init; }
+        public TailscaleDaemonMode TailscaleDaemonMode { get; init; } = TailscaleDaemonMode.System;
+        public TailscaleHostMode TailscaleHostMode { get; init; } = TailscaleHostMode.Process;
+        public string? TailscaleAuthKey { get; init; }
+        public string? TailscaleLoginServer { get; init; }
+        public int TailscaleFunnelPort { get; init; } = 443;
+        /// <summary>True = public funnel; false = tailnet-only serve (default).</summary>
+        public bool TailscalePublic { get; init; }
         public string? AuthHeader { get; init; }
         public string[]? AuthCidrs { get; init; }
         public string[]? AuthCountries { get; init; }
@@ -594,6 +756,7 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
 
         public TunnelMode ResolveMode()
         {
+            if (Tailscale) return TunnelMode.Tailscale;
             if (Quick) return TunnelMode.Quick;
             if (!string.IsNullOrWhiteSpace(Token)) return TunnelMode.Token;
             if (!string.IsNullOrWhiteSpace(DynamicZone)) return TunnelMode.Dynamic;

@@ -45,9 +45,12 @@ export interface SseEventEnvelope {
 export interface IngressEntry {
   hostname: string
   upstream: string
-  tunnelMode?: 'token' | 'api-managed' | 'dynamic' | 'quick' | 'local' | null
+  tunnelMode?: 'token' | 'api-managed' | 'dynamic' | 'quick' | 'local' | 'tailscale-system' | 'tailscale-ephemeral' | null
   tunnelName?: string | null
   publicUrl?: string | null
+  /** True when the tunnel is exposed to the public internet (any Cloudflare mode, or Tailscale Funnel).
+   *  False for Tailscale serve (tailnet-only). Drives the public-exposure warning banner. */
+  publicExpose?: boolean
 }
 
 export interface InspectorConfig {
@@ -55,6 +58,7 @@ export interface InspectorConfig {
   ingress: IngressEntry[]
   apiMode: 'token' | 'cloudflare-api'
   mode: 'standalone' | 'tunnel'
+  provider?: 'cloudflare' | 'tailscale' | null
 }
 
 export interface HostnameResult {

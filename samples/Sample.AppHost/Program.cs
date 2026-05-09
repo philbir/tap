@@ -14,15 +14,55 @@
 //     └── tap-managed-tunnel                 (cloudflared, API-managed tunnel)
 //   tap-dynamic              5304 / 5305
 //     └── tap-dynamic-tunnel                 (cloudflared, dynamic hostname)
+//   tap-ts-system            5308 / 5309    (only if `tailscale status` reports an authed node)
+//     └── tap-ts-system-funnel               (Tailscale Funnel, system tailscaled)
+//   tap-ts-ephemeral         5310 / 5311    (only if Tailscale:AuthKey is set)
+//     ├── tap-ts-ephemeral-funnel            (Tailscale Funnel, ephemeral userspace daemon)
+//     └── tap-ts-ephemeral-funnel-tailscaled (per-session userspace tailscaled)
 //
 // Configure via user-secrets (project-scoped):
 //   dotnet user-secrets set Cloudflare:TunnelToken "<token>"        --project samples/Sample.AppHost
 //   dotnet user-secrets set Cloudflare:ApiToken    "<api-token>"    --project samples/Sample.AppHost
 //   dotnet user-secrets set Cloudflare:AccountId   "<account-id>"   --project samples/Sample.AppHost
+//   dotnet user-secrets set Tailscale:UseSystem    "true"           --project samples/Sample.AppHost
+//   dotnet user-secrets set Tailscale:AuthKey      "<tskey-...>"    --project samples/Sample.AppHost
+//
+// Tailscale prerequisites:
+//   - `tailscale` CLI installed and on PATH (https://tailscale.com/download).
+//   - For the "system" scenario: be logged in (`tailscale up`) on a node whose tailnet ACL
+//     grants the `funnel` capability to its tags (e.g. `"funnel": ["tag:dev"]`).
+//   - For the "ephemeral" scenario: the auth key must be valid; each `aspire run` consumes
+//     one use of the key (use a reusable key, or generate a fresh one per run).
+//
+// Scenario filtering (skip provider scenarios you don't have credentials for):
+//   dotnet run --project samples/Sample.AppHost                                  # everything (default)
+//   dotnet run --project samples/Sample.AppHost -- --scenarios cloudflare        # standalone + cf-* only
+//   dotnet run --project samples/Sample.AppHost -- --scenarios tailscale         # standalone + ts-* only
+//   dotnet run --project samples/Sample.AppHost -- --scenarios tailscale,cloudflare  # both (== default)
 
 using System.Text.Json;
 
 var builder = DistributedApplication.CreateBuilder(args);
+
+// `--scenarios <name[,name...]>` (or env Scenarios=...) gates which provider blocks run.
+// Recognized: "all" (default), "cloudflare"|"cf", "tailscale"|"ts". Standalone always runs.
+var scenariosArg = builder.Configuration["scenarios"] ?? builder.Configuration["Scenarios"];
+var scenarios = string.IsNullOrWhiteSpace(scenariosArg)
+    ? new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "all" }
+    : new HashSet<string>(
+        scenariosArg.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+        StringComparer.OrdinalIgnoreCase);
+
+var runAll = scenarios.Contains("all");
+var runCloudflare = runAll || scenarios.Contains("cloudflare") || scenarios.Contains("cf");
+var runTailscale = runAll || scenarios.Contains("tailscale") || scenarios.Contains("ts");
+
+if (!runCloudflare && !runTailscale)
+{
+    Console.Error.WriteLine(
+        $"[Sample.AppHost] --scenarios '{scenariosArg}' didn't match any known group "
+        + "(cloudflare|cf, tailscale|ts, all). Only the standalone tap will run.");
+}
 
 var zone = builder.Configuration["Cloudflare:Zone"] ?? "dreamr-cloud.dev";
 
@@ -60,6 +100,7 @@ taps.Add(new TapDescriptor("tap-standalone", "standalone", "http://localhost:529
 // 2) TryCloudflare quick tunnel — no Cloudflare account needed.
 //    cloudflared assigns a random *.trycloudflare.com URL on startup; the URL is parsed
 //    from cloudflared's logs and surfaced as a clickable link on the tunnel resource.
+if (runCloudflare)
 {
     var tap = builder.AddTap<Projects.Tap_Server>(
             name: "tap-quick", proxyPort: 5307, uiPort: 5306)
@@ -71,7 +112,7 @@ taps.Add(new TapDescriptor("tap-standalone", "standalone", "http://localhost:529
 
 // 3) Existing dashboard-managed tunnel: cloudflared with --token, tap in front.
 var tunnelToken = builder.Configuration["Cloudflare:TunnelToken"];
-if (!string.IsNullOrWhiteSpace(tunnelToken))
+if (runCloudflare && !string.IsNullOrWhiteSpace(tunnelToken))
 {
     var tap = builder.AddTap<Projects.Tap_Server>(
             name: "tap-existing", proxyPort: 5301, uiPort: 5300)
@@ -85,7 +126,7 @@ if (!string.IsNullOrWhiteSpace(tunnelToken))
 // 4) API-managed tunnel + 5) dynamic hostname tunnel.
 var apiToken = builder.Configuration["Cloudflare:ApiToken"];
 var accountId = builder.Configuration["Cloudflare:AccountId"];
-if (!string.IsNullOrWhiteSpace(apiToken) && string.IsNullOrWhiteSpace(accountId))
+if (runCloudflare && !string.IsNullOrWhiteSpace(apiToken) && string.IsNullOrWhiteSpace(accountId))
 {
     Console.Error.WriteLine(
         "[Sample.AppHost] Cloudflare:ApiToken is set but Cloudflare:AccountId is missing — "
@@ -93,7 +134,7 @@ if (!string.IsNullOrWhiteSpace(apiToken) && string.IsNullOrWhiteSpace(accountId)
         + "Run: dotnet user-secrets set Cloudflare:AccountId <id> --project samples/Sample.AppHost");
 }
 TapHandle? dynamicTapHandle = null;
-if (!string.IsNullOrWhiteSpace(apiToken) && !string.IsNullOrWhiteSpace(accountId))
+if (runCloudflare && !string.IsNullOrWhiteSpace(apiToken) && !string.IsNullOrWhiteSpace(accountId))
 {
     var tapManaged = builder.AddTap<Projects.Tap_Server>(
             name: "tap-managed", proxyPort: 5303, uiPort: 5302)
@@ -114,6 +155,53 @@ if (!string.IsNullOrWhiteSpace(apiToken) && !string.IsNullOrWhiteSpace(accountId
     dynamicTapHandle = tapDynamic;
     // Placeholder; resolved at startup via the deferred env-var callback below.
     taps.Add(new TapDescriptor("tap-dynamic", "dynamic", "https://<minted at startup>", RequiresJwt: false));
+}
+
+// 6) Tailscale Serve — system tailscaled (no auth key needed; the host's logged-in
+//    tailnet node is reused). Tailnet-only by default — opt into public Funnel via #6b below.
+//    Gated on Tailscale:UseSystem=true so users without tailscale installed don't fail at startup.
+if (runTailscale && string.Equals(builder.Configuration["Tailscale:UseSystem"], "true", StringComparison.OrdinalIgnoreCase))
+{
+    var tap = builder.AddTap<Projects.Tap_Server>(
+            name: "tap-ts-system", proxyPort: 5309, uiPort: 5308, mode: "tunnel")
+        .WithTailscaleServe("tap-ts-system-serve", t => t.WithSystemDaemon());
+
+    api.WithTap(tap); // hostname assigned at startup from MagicDNS
+    taps.Add(new TapDescriptor("tap-ts-system", "tailscale-system", "https://<minted at startup>", RequiresJwt: false));
+}
+
+// 7) Tailscale Serve — ephemeral userspace daemon. Spins up a fresh tailnet node per run
+//    using the supplied auth key; node disappears at AppHost shutdown. Tailnet-only by default.
+var tsAuthKey = builder.Configuration["Tailscale:AuthKey"];
+if (runTailscale && !string.IsNullOrWhiteSpace(tsAuthKey) && !OperatingSystem.IsWindows())
+{
+    var tap = builder.AddTap<Projects.Tap_Server>(
+            name: "tap-ts-ephemeral", proxyPort: 5311, uiPort: 5310, mode: "tunnel")
+        .WithTailscaleServe("tap-ts-ephemeral-serve", t => t
+            .WithEphemeralDaemon(tsAuthKey)
+            .WithFunnelPort(8443));
+
+    api.WithTap(tap);
+    taps.Add(new TapDescriptor("tap-ts-ephemeral", "tailscale-ephemeral", "https://<minted at startup>", RequiresJwt: false));
+}
+
+// 8) Tailscale Serve — ephemeral via Docker (tailnet-only by default). Same as #7 but the
+//    userspace tailscaled runs in a `tailscale/tailscale` container instead of as a host
+//    process. Useful when there's no `tailscaled` binary on the host (e.g. macOS GUI client).
+//    Gated on Tailscale:UseDocker=true alongside the auth key.
+if (runTailscale
+    && !string.IsNullOrWhiteSpace(tsAuthKey)
+    && string.Equals(builder.Configuration["Tailscale:UseDocker"], "true", StringComparison.OrdinalIgnoreCase))
+{
+    var tap = builder.AddTap<Projects.Tap_Server>(
+            name: "tap-ts-docker", proxyPort: 5313, uiPort: 5312, mode: "tunnel")
+        .WithTailscaleServe("tap-ts-docker-serve", t => t
+            .WithEphemeralDaemon(tsAuthKey)
+            .WithFunnelPort(10000),
+            hostMode: Tap.Core.Cloudflare.TailscaleHostMode.Docker);
+
+    api.WithTap(tap);
+    taps.Add(new TapDescriptor("tap-ts-docker", "tailscale-ephemeral", "https://<minted at startup>", RequiresJwt: false));
 }
 
 // Sample.Client — separate Vite resource. Browser-facing UI; not behind a tap.

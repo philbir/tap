@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using Spectre.Console;
 using Spectre.Console.Cli;
+using Tap.Core.Cloudflare;
 using Tap.Core.Profiles;
 using Tap.Core.Cloudflared;
 
@@ -40,8 +41,17 @@ public sealed class SaveCommand : Command<SaveCommand.Settings>
             ApiManagedTunnelName = merged.ApiManagedTunnelName,
             DynamicZone = merged.DynamicZone,
             Hostname = merged.Hostname,
-            Docker = merged.HostMode == CloudflaredHostMode.Docker,
+            Docker = merged.HostMode == CloudflaredHostMode.Docker
+                || merged.TailscaleHostMode == TailscaleHostMode.Docker,
             AutoInstall = merged.AutoInstall,
+            // Tailscale fields: prefer the merged values (CLI flags + env override profile),
+            // fall back to whatever was in `existing` for fields the CLI doesn't expose
+            // (auth key, login server, port).
+            TailscaleDaemonMode = merged.Tailscale ? merged.TailscaleDaemonMode : existing?.TailscaleDaemonMode,
+            TailscaleAuthKey = merged.TailscaleAuthKey ?? existing?.TailscaleAuthKey,
+            TailscaleLoginServer = merged.TailscaleLoginServer ?? existing?.TailscaleLoginServer,
+            TailscaleFunnelPort = merged.Tailscale ? merged.TailscaleFunnelPort : existing?.TailscaleFunnelPort,
+            TailscalePublic = merged.Tailscale ? merged.TailscalePublic : existing?.TailscalePublic,
             AuthHeader = merged.AuthHeader,
             AuthCidrs = merged.AuthCidrs,
             AuthCountries = merged.AuthCountries,
@@ -58,6 +68,7 @@ public sealed class SaveCommand : Command<SaveCommand.Settings>
 
     private static Tap.Core.Cloudflare.TunnelMode ResolveTunnelMode(RunCommand.MergedSettings m)
     {
+        if (m.Tailscale) return Tap.Core.Cloudflare.TunnelMode.Tailscale;
         if (m.Quick) return Tap.Core.Cloudflare.TunnelMode.Quick;
         if (!string.IsNullOrWhiteSpace(m.Token)) return Tap.Core.Cloudflare.TunnelMode.Token;
         if (!string.IsNullOrWhiteSpace(m.DynamicZone)) return Tap.Core.Cloudflare.TunnelMode.Dynamic;

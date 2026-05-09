@@ -11,6 +11,8 @@ flowchart LR
     Upstream["Upstream app"]
     Cloudflare["Cloudflare edge"]
     Cloudflared["cloudflared"]
+    TSEdge["Tailscale Funnel"]
+    Tailscaled["tailscaled"]
 
     CLI --> Server
     Aspire --> Hosting["Tap.Hosting"]
@@ -19,11 +21,15 @@ flowchart LR
     Hosting --> Cloudflared
     Cloudflare --> Cloudflared
     Cloudflared --> Server
+    CLI --> Tailscaled
+    Hosting --> Tailscaled
+    TSEdge --> Tailscaled
+    Tailscaled --> Server
     Server --> Upstream
     Server --> UI
 ```
 
-The CLI is the direct path for local, ad hoc work: point Tap at an upstream URL and optionally add a tunnel. Aspire is the modeled path: declare inspectors and tunnels beside your app resources and let the AppHost resolve ports, hostnames, and DNS before startup.
+The CLI is the direct path for local, ad hoc work: point Tap at an upstream URL and optionally add a tunnel. Aspire is the modeled path: declare inspectors and tunnels beside your app resources and let the AppHost resolve ports, hostnames, and DNS before startup. Tap supports two tunnel providers — **Cloudflare** (named tunnels with optional API/DNS management) and **Tailscale Funnel** (one upstream per tailnet node, ports 443/8443/10000).
 
 ## High-Level Flows
 
@@ -139,9 +145,14 @@ flowchart TB
 | `tap run <upstream> --token <token>` | Use a Cloudflare connector token. |
 | `tap run <upstream> --api-managed <name>` | Look up or create an API-managed tunnel. |
 | `tap run <upstream> --dynamic <zone>` | Mint a fresh hostname under a Cloudflare zone. |
+| `tap run <upstream> --tailscale [--tailscale-port 8443]` | Route through Tailscale (system tailscaled, **tailnet-only via `tailscale serve`** — pair with `--tailscale-public` for `funnel`). |
+| `tap run <upstream> --tailscale --tailscale-public` | Switch to public `tailscale funnel`; pair with auth flags. |
+| `tap run <upstream> --tailscale --tailscale-authkey <key>` | Ephemeral mode: CLI spawns a userspace tailscaled, authenticates with the key, and tears it down on shutdown. |
+| `tap run <upstream> --tailscale --docker` | Ephemeral mode via the `tailscale/tailscale` Docker image (same `--docker` flag also drives `cloudflare/cloudflared` when not in Tailscale mode). |
+| `tap run --name <profile>` | Run a saved profile. Tailscale-mode profiles run via the system `tailscale` CLI; ephemeral mode is AppHost-only and the CLI logs a fallback warning. |
 | `tap install-cloudflared` | Install `cloudflared` with the host package manager. |
 
-The CLI reads command flags first, then environment variables such as `TAP_UPSTREAM`, `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_API_TOKEN`, and `CLOUDFLARE_ACCOUNT_ID`, then optional `tap.config` defaults.
+The CLI reads command flags first, then environment variables (`TAP_UPSTREAM`, `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `TAILSCALE_AUTHKEY`, `TAILSCALE_LOGIN_SERVER`), then optional `tap.config` defaults.
 
 ### Tap.Hosting
 
@@ -151,13 +162,19 @@ The CLI reads command flags first, then environment variables such as `TAP_UPSTR
 |---|---|
 | `AddTap<TTapServer>()` | Register `Tap.Server` as an Aspire project with proxy and UI endpoints. |
 | `AddTapContainer(...)` | Same Tap, hosted as a Docker container. |
-| `WithTap(tap)` | Route a resource through a tap (and its tunnel, if attached). |
+| `WithTap(tap)` | Route a resource through a tap (and its tunnel, if attached). Dispatches by tunnel resource type to the right provider attach path. |
 | `tap.WithTunnel(name, configure)` | Attach a Cloudflare tunnel as a child of the tap. |
 | `tap.WithQuickTunnel()` | Attach a TryCloudflare quick tunnel wired to the tap's proxy port. |
+| `tap.WithTailscaleServe(name?, configure?)` | Attach a Tailscale `serve` (tailnet-only — the safe default) as a child of the tap. |
+| `tap.WithTailscaleFunnel(name?, configure?)` | Attach a Tailscale `funnel` (publicly exposed — opt-in, pair with auth) as a child of the tap. |
 | `WithExistingTunnel(token)` | Run cloudflared against a tunnel created in the Cloudflare dashboard. |
 | `WithApiManagedTunnel(...)` | Create or reuse a named tunnel using the Cloudflare API. |
 | `WithDynamicHostname(...)` | Mint hostnames and DNS CNAMEs before startup. |
-| `AddCloudflaredTunnel()` | Low-level escape hatch: register `cloudflared` directly as an executable resource. |
+| `WithSystemDaemon()` / `WithEphemeralDaemon(authKey)` | Toggle Tailscale daemon mode: reuse the host's tailscaled, or spawn a userspace one per session. |
+| `WithFunnelPort(port)` | Pick the Tailscale Funnel public port (443 default, 8443, 10000). |
+| `AddCloudflaredTunnel()` / `AddTailscaleFunnel()` | Low-level escape hatches: register the tunnel resource directly without binding it to a tap. |
+
+The provider-agnostic shape lives in `Tap.Hosting/Tunnels/`: `TapTunnelResource` (abstract base), `TapTunnelAnnotation` (sibling of `CloudflareTunnelAnnotation`), and `TapTunnelIngress`. `CloudflaredTunnelResource` and `TailscaleFunnelResource` both inherit `TapTunnelResource`, so `TapHandle.AttachedTunnel` is typed as the base and `WithTap<T>` runtime-dispatches via `is` checks.
 
 The generic `TTapServer` is the project metadata type emitted by Aspire's AppHost source generator, usually `Projects.Tap_Server`. Because that type exists only in the consumer's AppHost project, the consumer project must reference `Tap.Server` directly.
 
@@ -177,6 +194,21 @@ In Aspire, tunnel and DNS state has to exist before `cloudflared` starts. `Cloud
 | Watch quick tunnel logs | TryCloudflare URLs only appear after cloudflared emits them. |
 
 For API-managed tunnels, existing tunnels are reused only when Tap can find a matching local credentials file. Cloudflare does not reveal an existing tunnel secret through the API, so Tap avoids destructive rotation and throws a clear setup error instead.
+
+### TailscaleLifecycleHook
+
+The Tailscale provider has its own lifecycle hook with disjoint responsibilities — both hooks scan their own resource types and don't touch each other's state.
+
+| Responsibility | Why it happens before start |
+|---|---|
+| Verify the `tailscale` CLI is on PATH | Fail early when the CLI is missing. |
+| In ephemeral mode, register a `TailscaledDaemonResource` (sibling resource) | The userspace daemon needs to show up in the Aspire dashboard with its own logs and shutdown ordering rather than as a leaked side-process. |
+| Generate a per-resource bootstrapper script under `Path.GetTempPath()` | The script runs `tailscale up` (ephemeral), waits for the node to come Online, pre-warms the cert, configures the funnel, and stays alive. |
+| Watch the bootstrapper's stdout for `TAP_TAILSCALE_HOSTNAME=...` | The MagicDNS name is only known after `tailscaled` reports Online; back-fill it into `TapTunnelAnnotation.Hostname` and the tap's "proxy" URL chip via `PublishUpdateAsync`. |
+
+The bootstrapper is a bash script on macOS/Linux and a PowerShell script on Windows. Windows ephemeral process mode is intentionally not supported in v1 (the GUI service model gets in the way) — pair the auth key with Docker mode on Windows. All three Unix bootstrapper variants (system, ephemeral process, Docker) install an EXIT trap that removes the path-specific rule (`tailscale serve|funnel --https=$PORT --set-path=/ off`) so other manual rules on that port survive shutdown.
+
+In Docker mode (`AddTailscaleFunnel(hostMode: TailscaleHostMode.Docker)` or `tap.WithTailscaleServe(..., hostMode: ...)`), the same companion `TailscaledDaemonResource` is registered but its command is `docker` and its args are `run --rm --name <id> -e TS_AUTHKEY=... -e TS_USERSPACE=true tailscale/tailscale:latest` (Linux gets `--add-host=host.docker.internal:host-gateway` automatically). The bootstrapper drives `tailscale` via `docker exec <container> tailscale ...` rather than bind-mounting the LocalAPI socket — bind-mounted unix sockets don't survive macOS Docker Desktop's VM boundary. It skips the `tailscale up` step (the container's entrypoint runs it from `TS_AUTHKEY`) and rewrites `localhost:<port>` → `host.docker.internal:<port>` so the funnel target is reachable from inside the container. Cleanup is the same: Aspire kills the `docker run` process, `--rm` removes the container.
 
 ### Tap.Server
 

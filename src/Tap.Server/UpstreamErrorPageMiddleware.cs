@@ -300,7 +300,7 @@ public sealed class UpstreamErrorPageMiddleware
       {{upstreamLink}}
     </section>
     <section class="art" aria-label="Tap upstream failure diagram">
-      <svg viewBox="0 0 920 430" role="img" aria-label="A broken Tap pipe between Cloudflare and upstream">
+      <svg viewBox="0 0 920 430" role="img" aria-label="A broken Tap pipe between the public edge and upstream">
         <defs>
           <linearGradient id="pipe" x1="0" x2="1">
             <stop offset="0" stop-color="#7e70ef" stop-opacity="0.45"/>
@@ -397,8 +397,29 @@ public sealed class UpstreamErrorPageMiddleware
 """;
         }
 
-        var cloudflareSub = WebUtility.HtmlEncode(CloudflareSub(ingress!));
-        var cloudflaredSub = WebUtility.HtmlEncode(CloudflaredSub(ingress!.TunnelMode));
+        if (IsTailscale(ingress!.TunnelMode))
+        {
+            var ts = WebUtility.HtmlEncode(TailscaleEdgeSub(ingress));
+            var daemonSub = WebUtility.HtmlEncode(TailscaledSub(ingress.TunnelMode));
+            // Funnel = public, Serve = tailnet-only. We use PublicExpose to label the edge.
+            var edgeLabel = ingress.PublicExpose ? "Tailscale Funnel" : "Tailscale Serve";
+            return $$"""
+      <div class="flow">
+        {{RenderNode("You", "browser", isBad: false)}}
+        <div class="arrow">--&gt;</div>
+        {{RenderNode(edgeLabel, ts, isBad: false)}}
+        <div class="arrow">--&gt;</div>
+        {{RenderNode("tailscaled", daemonSub, isBad: false)}}
+        <div class="arrow">--&gt;</div>
+        {{RenderNode("Tap inspector", "proxy", isBad: false)}}
+        <div class="arrow">--&gt;</div>
+        {{RenderNode("Upstream", safeUpstream, isBad: true)}}
+      </div>
+""";
+        }
+
+        var cloudflareSub = WebUtility.HtmlEncode(CloudflareSub(ingress));
+        var cloudflaredSub = WebUtility.HtmlEncode(CloudflaredSub(ingress.TunnelMode));
 
         return $$"""
       <div class="flow">
@@ -414,6 +435,25 @@ public sealed class UpstreamErrorPageMiddleware
       </div>
 """;
     }
+
+    private static bool IsTailscale(string? tunnelMode) =>
+        string.Equals(tunnelMode, "tailscale-system", StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(tunnelMode, "tailscale-ephemeral", StringComparison.OrdinalIgnoreCase);
+
+    private static string TailscaleEdgeSub(InspectorIngressEntry ingress)
+    {
+        if (!string.IsNullOrWhiteSpace(ingress.PublicUrl) &&
+            Uri.TryCreate(ingress.PublicUrl, UriKind.Absolute, out var uri))
+        {
+            return uri.Host;
+        }
+        return string.IsNullOrWhiteSpace(ingress.Hostname) ? "ts.net" : ingress.Hostname;
+    }
+
+    private static string TailscaledSub(string? tunnelMode) =>
+        string.Equals(tunnelMode, "tailscale-ephemeral", StringComparison.OrdinalIgnoreCase)
+            ? "userspace · ephemeral"
+            : "system daemon";
 
     private static string RenderNode(string label, string sub, bool isBad)
     {

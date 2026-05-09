@@ -46,12 +46,36 @@ public abstract class TapBaseSettings : CommandSettings
     public string? Hostname { get; init; }
 
     [CommandOption("--docker")]
-    [Description("Run cloudflared in a Docker container (cloudflare/cloudflared:latest).")]
+    [Description("Run the active tunnel provider in Docker. Cloudflare: cloudflare/cloudflared. Tailscale: tailscale/tailscale (ephemeral, userspace networking).")]
     public bool Docker { get; init; }
 
     [CommandOption("--auto-install")]
     [Description("If cloudflared is missing, install it via the host's package manager.")]
     public bool AutoInstall { get; init; }
+
+    [CommandOption("--tailscale")]
+    [Description("Route through Tailscale Funnel (system tailscaled by default). Requires `tailscale` on PATH and the funnel ACL cap.")]
+    public bool Tailscale { get; init; }
+
+    [CommandOption("--tailscale-port <PORT>")]
+    [Description("Tailscale Funnel public port. Allowed: 443 (default), 8443, 10000.")]
+    public int? TailscaleFunnelPort { get; init; }
+
+    [CommandOption("--tailscale-authkey <KEY>")]
+    [Description("Tailscale auth key. Setting this enables ephemeral mode: the CLI spawns a userspace tailscaled per session. Env: TAILSCALE_AUTHKEY.")]
+    public string? TailscaleAuthKey { get; init; }
+
+    [CommandOption("--tailscale-system")]
+    [Description("Force system tailscaled mode even when TAILSCALE_AUTHKEY is set. Useful when the env var is exported globally but you want one run on the host's existing node.")]
+    public bool TailscaleSystem { get; init; }
+
+    [CommandOption("--tailscale-public")]
+    [Description("Expose publicly via `tailscale funnel`. Default is tailnet-only (`tailscale serve`) — public exposure attracts opportunistic scanning the moment a hostname resolves; only enable for use cases that genuinely need internet access (and pair with auth).")]
+    public bool TailscalePublic { get; init; }
+
+    [CommandOption("--tailscale-login-server <URL>")]
+    [Description("Override Tailscale coordination server (Headscale, etc.). Only meaningful with --tailscale-authkey.")]
+    public string? TailscaleLoginServer { get; init; }
 
     [CommandOption("--auth-header <NAME=VALUE>")]
     [Description("Require an API key in this header on the proxy.")]

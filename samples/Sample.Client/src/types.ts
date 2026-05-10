@@ -12,11 +12,19 @@ export interface EndpointDescriptor {
   sampleBody?: string
   isStream?: boolean
   requiresAuth?: boolean
+  isWebSocket?: boolean
 }
 
 export interface SseTick {
   id: string | null
   event: string
+  data: string
+  receivedAt: string
+}
+
+export interface WsFrame {
+  direction: 'sent' | 'received'
+  type: 'text' | 'binary' | 'open' | 'close' | 'error'
   data: string
   receivedAt: string
 }

@@ -40,6 +40,11 @@ const features: Feature[] = [
     glyph: "I",
   },
   {
+    title: "Live streaming protocols",
+    text: "WebSockets and Server-Sent Events stream through the same proxy and the inspector UI renders a live, direction-tagged frame/event timeline in dedicated WS and SSE tabs — watch messages append while the connection is open.",
+    glyph: "L",
+  },
+  {
     title: "Aspire-native wiring",
     text: "Attach an inspector or public tunnel to an Aspire resource with extension methods, while allocated ports and hostnames are resolved at startup.",
     glyph: "A",

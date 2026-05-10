@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import type { RequestRecord, SseEvent } from './types'
+import type { RequestRecord, SseEvent, WebSocketMessage } from './types'
 import { useCodeView } from './CodeViewer'
 import { TokenInspector } from './TokenInspector'
 import { decodeJwt, findAuthHeader } from './jwt'
@@ -10,7 +10,7 @@ interface Props {
   theme: 'light' | 'dark'
 }
 
-type Tab = 'request' | 'response' | 'sse'
+type Tab = 'request' | 'response' | 'sse' | 'ws'
 
 function SectionLabel({ text }: { text: string }) {
   return (
@@ -20,10 +20,10 @@ function SectionLabel({ text }: { text: string }) {
   )
 }
 
-function HeadersPanel({ headers, theme }: { headers: Record<string, string>; theme: 'light' | 'dark' }) {
+function HeadersPanel({ headers, theme, defaultExpanded = true }: { headers: Record<string, string>; theme: 'light' | 'dark'; defaultExpanded?: boolean }) {
   const authHeader = findAuthHeader(headers)
   const hasJwt = useMemo(() => (authHeader ? decodeJwt(authHeader) !== null : false), [authHeader])
-  const [expanded, setExpanded] = useState(true)
+  const [expanded, setExpanded] = useState(defaultExpanded)
   const [search, setSearch] = useState('')
   const [tokenOpen, setTokenOpen] = useState(false)
 
@@ -187,21 +187,141 @@ function SsePanel({ events, isLive }: { events: SseEvent[]; isLive: boolean }) {
   )
 }
 
+function WsPanel({ messages, isLive }: { messages: WebSocketMessage[]; isLive: boolean }) {
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const [autoScroll, setAutoScroll] = useState(true)
+  const [filter, setFilter] = useState<'all' | 'client' | 'server'>('all')
+
+  useEffect(() => {
+    if (!autoScroll) return
+    const el = scrollRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [messages.length, autoScroll])
+
+  const filtered = useMemo(
+    () => filter === 'all' ? messages : messages.filter((m) => m.direction === filter),
+    [messages, filter],
+  )
+
+  if (messages.length === 0) {
+    return (
+      <div style={{ color: 'var(--text-muted)', fontSize: 12 }}>
+        {isLive ? 'Waiting for frames…' : '(no WebSocket frames captured)'}
+      </div>
+    )
+  }
+
+  const counts = { client: 0, server: 0 }
+  for (const m of messages) counts[m.direction] += 1
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: 6 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 11, color: 'var(--text-muted)' }}>
+        <span>{messages.length} frame{messages.length === 1 ? '' : 's'}</span>
+        <span title="Browser → upstream">↑ {counts.client}</span>
+        <span title="Upstream → browser">↓ {counts.server}</span>
+        <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 6 }}>
+          {(['all', 'client', 'server'] as const).map((d) => (
+            <button
+              key={d}
+              onClick={() => setFilter(d)}
+              style={{
+                fontSize: 10.5,
+                padding: '1px 8px',
+                borderRadius: 3,
+                background: filter === d ? 'var(--accent)' : 'transparent',
+                color: filter === d ? '#fff' : 'var(--text-muted)',
+                border: `1px solid ${filter === d ? 'var(--accent)' : 'var(--border)'}`,
+                textTransform: 'capitalize',
+              }}
+            >
+              {d === 'all' ? 'all' : d === 'client' ? '↑ client' : '↓ server'}
+            </button>
+          ))}
+        </span>
+        <label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+          <input type="checkbox" checked={autoScroll} onChange={(e) => setAutoScroll(e.target.checked)} />
+          auto-scroll
+        </label>
+      </div>
+      <div ref={scrollRef} style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {filtered.map((m, i) => {
+          const isClient = m.direction === 'client'
+          const isClose = m.type === 'close'
+          const accent = isClose ? 'var(--text-muted)' : isClient ? 'var(--method-post)' : 'var(--accent)'
+          const formatted = (() => {
+            if (m.type === 'close') {
+              return `code ${m.closeStatus ?? '—'}${m.closeDescription ? ` · ${m.closeDescription}` : ''}`
+            }
+            if (m.text != null) {
+              const trimmed = m.text.trim()
+              if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+                try { return JSON.stringify(JSON.parse(trimmed), null, 2) } catch { /* fall through */ }
+              }
+              return m.text
+            }
+            if (m.base64 != null) return `(binary · ${m.size} bytes · base64) ${m.base64.slice(0, 96)}${m.base64.length > 96 ? '…' : ''}`
+            return ''
+          })()
+          return (
+            <div
+              key={i}
+              style={{
+                border: '1px solid var(--border)',
+                borderLeft: `3px solid ${accent}`,
+                borderRadius: 4,
+                padding: '6px 10px',
+                background: 'var(--bg-input)',
+                fontFamily: 'SF Mono, Menlo, Consolas, monospace',
+                fontSize: 12,
+              }}
+            >
+              <div style={{ display: 'flex', gap: 10, fontSize: 10.5, color: 'var(--text-muted)', marginBottom: 3, alignItems: 'center' }}>
+                <span>#{i + 1}</span>
+                <span style={{ color: accent, fontWeight: 600 }}>
+                  {isClient ? '↑ client' : '↓ server'}
+                </span>
+                <span>{m.type}</span>
+                <span>{new Date(m.timestamp).toLocaleTimeString()}</span>
+                <span>{m.size}B</span>
+                {m.truncated && <span style={{ color: 'var(--warn)' }}>truncated</span>}
+              </div>
+              <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{formatted}</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 export function RequestDetail({ record, theme }: Props) {
-  const showSse = !!(record?.isStream || (record?.sseEvents && record.sseEvents.length > 0))
+  const showSse = !!(record?.isStream && !record?.isWebSocket) || (!!record?.sseEvents && record.sseEvents.length > 0)
+  const showWs = !!record?.isWebSocket || (!!record?.webSocketMessages && record.webSocketMessages.length > 0)
   const [tab, setTab] = useState<Tab>('request')
   const [replayState, setReplayState] = useState<{ status: 'idle' | 'pending' | 'ok' | 'err'; message?: string }>({ status: 'idle' })
   const [httpDialogOpen, setHttpDialogOpen] = useState(false)
 
-  // If selection moves away from a streamed record, drop the SSE tab.
+  // If selection moves away from a streamed/ws record, drop the matching tab.
   useEffect(() => {
     if (!showSse && tab === 'sse') setTab('response')
-  }, [showSse, tab])
+    if (!showWs && tab === 'ws') setTab('response')
+  }, [showSse, showWs, tab])
+
+  // For WebSocket records the request/response tabs don't carry payload, so
+  // jump straight to the frame timeline whenever the user selects one.
+  const recordId = record?.id
+  const isWsRecord = !!record?.isWebSocket
+  useEffect(() => {
+    if (recordId && isWsRecord) setTab('ws')
+  }, [recordId, isWsRecord])
 
   const isRequest = tab === 'request'
   const isSse = tab === 'sse'
+  const isWs = tab === 'ws'
+  const isBodyTab = !isSse && !isWs
   const bodyView = useCodeView(
-    record && !isSse
+    record && isBodyTab
       ? isRequest
         ? {
             body: record.requestBody,
@@ -288,9 +408,14 @@ export function RequestDetail({ record, theme }: Props) {
         )}
       </div>
 
-      {/* Request / Response / SSE tabs */}
+      {/* Request / Response / SSE / WS tabs */}
       <div style={{ display: 'flex', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
-        {(['request', 'response', ...(showSse ? (['sse'] as const) : [])] as const).map((t) => (
+        {([
+          'request',
+          'response',
+          ...(showSse ? (['sse'] as const) : []),
+          ...(showWs ? (['ws'] as const) : []),
+        ] as const).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -302,7 +427,7 @@ export function RequestDetail({ record, theme }: Props) {
               color: tab === t ? 'var(--accent)' : 'var(--text-muted)',
               borderBottom: tab === t ? '2px solid var(--accent)' : '2px solid transparent',
               fontWeight: tab === t ? 600 : 400,
-              textTransform: t === 'sse' ? 'uppercase' : 'capitalize',
+              textTransform: t === 'sse' || t === 'ws' ? 'uppercase' : 'capitalize',
               display: 'inline-flex',
               alignItems: 'center',
               gap: 6,
@@ -323,16 +448,43 @@ export function RequestDetail({ record, theme }: Props) {
                 {!record.streamCompleted && record.isStream && ' · live'}
               </span>
             )}
+            {t === 'ws' && (
+              <span
+                style={{
+                  fontSize: 10,
+                  color: record.streamCompleted ? 'var(--text-muted)' : 'var(--ok)',
+                  fontWeight: 500,
+                  textTransform: 'none',
+                  letterSpacing: 0,
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 5,
+                }}
+              >
+                {record.webSocketMessages?.length ?? 0}
+                {!record.streamCompleted && record.isWebSocket && (
+                  <>
+                    <span style={{ opacity: 0.5 }}>·</span>
+                    <span className="tap-ws-dot live" style={{ marginRight: 0 }} />
+                    <span className="tap-ws-live-text" style={{ letterSpacing: '0.04em', fontWeight: 600, textTransform: 'uppercase' }}>live</span>
+                  </>
+                )}
+              </span>
+            )}
           </button>
         ))}
       </div>
 
       {/* Content region: headers (shrink) + body (flex:1 with its own scroll) */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px', gap: '12px', overflow: 'hidden', minHeight: 0 }}>
-        {!isSse && <HeadersPanel headers={isRequest ? record.requestHeaders : record.responseHeaders} theme={theme} />}
+        {isBodyTab && <HeadersPanel headers={isRequest ? record.requestHeaders : record.responseHeaders} theme={theme} />}
+        {isSse && <HeadersPanel headers={record.responseHeaders} theme={theme} defaultExpanded={false} />}
+        {isWs && <HeadersPanel headers={record.requestHeaders} theme={theme} defaultExpanded={false} />}
 
         {isSse ? (
           <SsePanel events={record.sseEvents ?? []} isLive={!!record.isStream && !record.streamCompleted} />
+        ) : isWs ? (
+          <WsPanel messages={record.webSocketMessages ?? []} isLive={!!record.isWebSocket && !record.streamCompleted} />
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, gap: '4px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '12px', minHeight: '22px' }}>

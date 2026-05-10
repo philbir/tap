@@ -189,3 +189,66 @@ code {
     max-height: 45vh;
   }
 }
+
+/* WebSocket live indicators ------------------------------------------------ */
+
+@keyframes tap-ws-glow {
+  0%, 100% {
+    background: color-mix(in srgb, var(--ok) 10%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 0%, transparent);
+  }
+  50% {
+    background: color-mix(in srgb, var(--ok) 18%, transparent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 18%, transparent);
+  }
+}
+
+@keyframes tap-ws-dot-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--ok) 0%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--ok) 25%, transparent);
+  }
+}
+
+@keyframes tap-ws-text-pulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.65; }
+}
+
+.tap-ws-live {
+  border-color: var(--ok) !important;
+  color: var(--ok) !important;
+  animation: tap-ws-glow 2s ease-in-out infinite;
+}
+
+.tap-ws-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ok);
+  margin-right: 6px;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.tap-ws-dot.live {
+  animation: tap-ws-dot-pulse 1.8s ease-in-out infinite;
+}
+
+.tap-ws-live-text {
+  animation: tap-ws-text-pulse 2s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tap-ws-live,
+  .tap-ws-dot.live,
+  .tap-ws-live-text {
+    animation: none;
+  }
+  .tap-ws-live {
+    background: color-mix(in srgb, var(--ok) 16%, transparent);
+  }
+}

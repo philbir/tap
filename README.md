@@ -60,6 +60,7 @@ Quick tunnels are free with TryCloudflare and do not need a Cloudflare account. 
 | **Mobile app callbacks** | Point native or emulator builds at a public URL while still serving from localhost. The inspector's **QR tab** (or `http://localhost:<uiPort>/#qr`) lets you scan the public URL straight onto your phone. |
 | **Webhook development** | See the raw headers, body, status code, and replay path for every provider delivery. |
 | **Auth callbacks** | Test OAuth/OIDC redirect URIs against a real HTTPS hostname. |
+| **Streaming protocols** | Tap proxies and live-captures **Server-Sent Events** (`text/event-stream`) and **WebSockets** end-to-end. The inspector UI renders dedicated **SSE** and **WS** tabs with a live frame/event timeline (direction, payload, timestamps) — open while the connection is in flight and watch messages append in real time. |
 | **Partner demos** | Share a temporary URL to work running on your machine, then tear it down. |
 | **Aspire demos** | Put the same tunnel and inspector wiring in the AppHost so the whole team gets it. |
 
@@ -215,7 +216,7 @@ api.WithTap(tap);
 builder.Build().Run();
 ```
 
-Open <http://localhost:5198> for the inspector UI. Send traffic through <http://localhost:5199> and Tap records the request, response, headers, status, timing, and supported bodies before forwarding to the upstream service.
+Open <http://localhost:5198> for the inspector UI. Send traffic through <http://localhost:5199> and Tap records the request, response, headers, status, timing, and supported bodies before forwarding to the upstream service. WebSocket upgrades and Server-Sent Events are forwarded through the same proxy port; their frames/events stream live in the inspector's **WS** and **SSE** tabs.
 
 ### Aspire: quick public tunnel
 
@@ -457,7 +458,7 @@ Enabled checks are combined. If header auth, CIDR allowlist, country allowlist, 
 | Package | Purpose |
 |---|---|
 | `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `tap.WithTunnel`, `tap.WithQuickTunnel`, `tap.WithTailscaleServe` (tailnet-only, default), `tap.WithTailscaleFunnel` (public, opt-in), `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon`/`WithEphemeralDaemon`/`WithFunnelPort`. |
-| `Tap.Server` | ASP.NET Core capture server: YARP reverse proxy, capture middleware, REST API, SSE stream, and bundled React UI. |
+| `Tap.Server` | ASP.NET Core capture server: YARP reverse proxy, capture middleware, WebSocket-terminating proxy, SSE event parser, REST API, `/api/stream` push channel, and bundled React UI with live **WS** and **SSE** message timelines. |
 | `Tap.Cli` | Local command host that reuses the same inspector server code. Tailscale system-mode profiles run from the CLI; ephemeral mode requires the AppHost. |
 
 Both entry points use the same `Tap.Server` host internally. The CLI builds `TapInspectorOptions` from command-line flags, environment variables, and optional `tap.config`; Aspire writes the same options through project environment variables.
@@ -555,7 +556,7 @@ Internet -> Cloudflare      -> cloudflared -> Tap proxy port -> upstream app
                                             \-> Tap UI port -> inspector UI/API
 ```
 
-The proxy branch captures request and response data, stores the latest records in a bounded in-memory ring, and publishes new records over server-sent events. The UI branch serves the React inspector and exposes REST endpoints for request history, replay, ingress, and tunnel details. With Cloudflare credentials configured the UI can show and update tunnel ingress rules; with Tailscale it shows live daemon state and active funnel/serve rules read from `tailscale status --json` and `tailscale serve status --json`.
+The proxy branch captures request and response data, stores the latest records in a bounded in-memory ring, and publishes new records over server-sent events. WebSocket upgrade requests are intercepted by the capture middleware and re-originated against the upstream so that every text and binary frame can be recorded in both directions; the inspector renders them in a dedicated **WS** tab alongside the existing **SSE** view. The UI branch serves the React inspector and exposes REST endpoints for request history, replay, ingress, and tunnel details. With Cloudflare credentials configured the UI can show and update tunnel ingress rules; with Tailscale it shows live daemon state and active funnel/serve rules read from `tailscale status --json` and `tailscale serve status --json`.
 
 For the deeper technical background, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

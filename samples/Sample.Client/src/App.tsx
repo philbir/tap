@@ -77,8 +77,9 @@ export function App() {
         </div>
         <p className="lede">
           Pick a tap proxy. Endpoint cards call through it — open the matching inspector UI to watch each
-          request flow in. The <code>/sse</code> endpoint streams Server-Sent Events; tick events appear
-          inline and in the inspector's <strong>SSE</strong> tab.
+          request flow in. The <code>/sse</code> endpoint streams Server-Sent Events and the <code>/ws</code>
+          endpoint opens a WebSocket; both appear live in the inspector's <strong>SSE</strong> /
+          <strong>WS</strong> tabs.
         </p>
       </header>
 

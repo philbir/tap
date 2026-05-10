@@ -33,9 +33,9 @@ Tap is two NuGet-style packages plus a sample, glued together by Aspire:
 1. Internet → Cloudflare → cloudflared (existing-tunnel mode: dashboard ingress; local-ingress mode: a `config.yml` written to temp by `CloudflaredExtensions.WriteConfigYamlAsync`).
 2. cloudflared → `localhost:<InspectorProxyPort>` (when a tap is attached; otherwise straight to the upstream's allocated localhost port).
 3. `Tap.Server` listens on **two ports** distinguished by `app.MapWhen(ctx.Connection.LocalPort == ...)` in `Program.cs`:
-   - `proxyPort` branch: `CaptureMiddleware` records request/response into `InMemoryRequestStore` (200-record ring, 1MB body cap, image bodies stored as base64) then YARP forwards to the upstream picked by Host header.
-   - `uiPort` branch: REST under `/api/*` (list/clear records, replay, ingress, tunnel ingress) + an SSE stream at `/api/stream` + static UI fallback to `index.html`.
-4. UI subscribes to `/api/stream` (live tail) and renders detail panes.
+   - `proxyPort` branch: `app.UseWebSockets()` then `CaptureMiddleware` records request/response into `InMemoryRequestStore` (200-record ring, 1MB body cap, image bodies stored as base64) then YARP forwards to the upstream picked by Host header. `text/event-stream` responses are detected mid-write and parsed into SSE events. WebSocket upgrade requests are intercepted before YARP — `WebSocketProxy` accepts the upgrade, opens a matching `ClientWebSocket` to the upstream (resolved from the ingress array by Host header), and pumps frames in both directions while recording each completed text/binary/close message as a `WebSocketMessage`.
+   - `uiPort` branch: REST under `/api/*` (list/clear records, replay, ingress, tunnel ingress) + an SSE stream at `/api/stream` (default `data:` events for record snapshots, named `event: sse` for SSE frames, named `event: ws` for WebSocket frames) + static UI fallback to `index.html`.
+4. UI subscribes to `/api/stream` (live tail) and renders detail panes — `RequestDetail` shows a **WS** tab for WebSocket records (frame timeline with direction filter) alongside the existing **SSE** tab.
 
 ### Two important Aspire-specific gotchas
 

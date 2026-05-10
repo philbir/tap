@@ -4,9 +4,26 @@ using System.Text;
 
 namespace Tap.Server;
 
-public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore store, ILogger<CaptureMiddleware> logger)
+public sealed class CaptureMiddleware
 {
     private const long MaxCaptureBytes = 1_000_000;
+
+    private readonly RequestDelegate _next;
+    private readonly InMemoryRequestStore _store;
+    private readonly ILogger<CaptureMiddleware> _logger;
+    private readonly InspectorIngressEntry[] _ingress;
+
+    public CaptureMiddleware(
+        RequestDelegate next,
+        InMemoryRequestStore store,
+        ILogger<CaptureMiddleware> logger,
+        InspectorIngressEntry[] ingress)
+    {
+        _next = next;
+        _store = store;
+        _logger = logger;
+        _ingress = ingress;
+    }
 
     public async Task InvokeAsync(HttpContext ctx)
     {
@@ -14,7 +31,7 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
 
         var record = new RequestRecord
         {
-            Sequence = store.NextSequence(),
+            Sequence = _store.NextSequence(),
             Id = Guid.NewGuid(),
             Timestamp = DateTimeOffset.UtcNow,
             Method = ctx.Request.Method,
@@ -27,20 +44,41 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
             RequestContentType = ctx.Request.ContentType,
         };
 
+        if (ctx.WebSockets.IsWebSocketRequest)
+        {
+            try
+            {
+                await WebSocketProxy.ProxyAsync(ctx, record, ResolveIngress(ctx.Request.Host.Host), _store, _logger);
+            }
+            catch (Exception ex)
+            {
+                record.Error = ex.Message;
+                _logger.LogError(ex, "WebSocket proxy error for {Host}{Path}", record.Host, record.Path);
+            }
+            finally
+            {
+                sw.Stop();
+                record.DurationMs = sw.ElapsedMilliseconds;
+                record.StreamCompleted = true;
+                _store.Update(record);
+            }
+            return;
+        }
+
         await CaptureRequestBodyAsync(ctx, record);
 
         var originalBody = ctx.Response.Body;
-        var capture = new CapturingResponseStream(ctx, originalBody, record, store);
+        var capture = new CapturingResponseStream(ctx, originalBody, record, _store);
         ctx.Response.Body = capture;
 
         try
         {
-            await next(ctx);
+            await _next(ctx);
         }
         catch (Exception ex)
         {
             record.Error = ex.Message;
-            logger.LogError(ex, "Error proxying {Method} {Host}{Path}", record.Method, record.Host, record.Path);
+            _logger.LogError(ex, "Error proxying {Method} {Host}{Path}", record.Method, record.Host, record.Path);
             throw;
         }
         finally
@@ -56,7 +94,7 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
                 record.StatusCode = ctx.Response.StatusCode;
                 record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
                 record.ResponseBodyOriginalSize = capture.BytesWritten;
-                store.Update(record);
+                _store.Update(record);
             }
             else if (capture.IsPassthrough)
             {
@@ -66,7 +104,7 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
                 record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
                 record.ResponseBodyOriginalSize = capture.BytesWritten;
                 record.ResponseBodyTruncated = true;
-                store.Add(record);
+                _store.Add(record);
             }
             else
             {
@@ -84,14 +122,32 @@ public sealed class CaptureMiddleware(RequestDelegate next, InMemoryRequestStore
                 }
                 catch (Exception ex)
                 {
-                    logger.LogWarning(ex, "Failed to copy captured response to downstream body.");
+                    _logger.LogWarning(ex, "Failed to copy captured response to downstream body.");
                 }
 
                 record.StatusCode = ctx.Response.StatusCode;
                 record.ResponseHeaders = SnapshotHeaders(ctx.Response.Headers);
-                store.Add(record);
+                _store.Add(record);
             }
         }
+    }
+
+    private InspectorIngressEntry? ResolveIngress(string requestHost)
+    {
+        InspectorIngressEntry? fallback = null;
+        foreach (var entry in _ingress)
+        {
+            if (string.IsNullOrWhiteSpace(entry.Hostname))
+            {
+                fallback ??= entry;
+                continue;
+            }
+            if (string.Equals(entry.Hostname, requestHost, StringComparison.OrdinalIgnoreCase))
+            {
+                return entry;
+            }
+        }
+        return fallback;
     }
 
     private static async Task CaptureRequestBodyAsync(HttpContext ctx, RequestRecord record)

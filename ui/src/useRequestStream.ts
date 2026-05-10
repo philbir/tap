@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { RequestRecord, SseEventEnvelope } from './types'
+import type { RequestRecord, SseEventEnvelope, WebSocketMessageEnvelope } from './types'
 
 export function useRequestStream() {
   const [records, setRecords] = useState<RequestRecord[]>([])
@@ -31,14 +31,15 @@ export function useRequestStream() {
         const record = JSON.parse(ev.data) as RequestRecord
         setRecords((prev) => {
           const existing = prev.find((r) => r.id === record.id)
-          const incomingLen = record.sseEvents?.length ?? 0
-          const existingLen = existing?.sseEvents?.length ?? 0
-          // Snapshots may arrive out-of-order with named `sse` events. Keep whichever
-          // copy of the events list is longer.
-          const merged: RequestRecord =
-            existing && existingLen > incomingLen
-              ? { ...record, sseEvents: existing.sseEvents }
-              : record
+          const incomingSseLen = record.sseEvents?.length ?? 0
+          const existingSseLen = existing?.sseEvents?.length ?? 0
+          const incomingWsLen = record.webSocketMessages?.length ?? 0
+          const existingWsLen = existing?.webSocketMessages?.length ?? 0
+          // Snapshots may arrive out-of-order with named `sse`/`ws` events. Keep whichever
+          // copy of each list is longer.
+          const merged: RequestRecord = { ...record }
+          if (existing && existingSseLen > incomingSseLen) merged.sseEvents = existing.sseEvents
+          if (existing && existingWsLen > incomingWsLen) merged.webSocketMessages = existing.webSocketMessages
           return [merged, ...prev.filter((r) => r.id !== record.id)].slice(0, 500)
         })
       } catch {
@@ -57,6 +58,22 @@ export function useRequestStream() {
             // via an out-of-order record snapshot.
             if (env.sequence < events.length) return r
             return { ...r, sseEvents: [...events, env.event] }
+          }),
+        )
+      } catch {
+        /* ignore */
+      }
+    })
+
+    es.addEventListener('ws', (ev) => {
+      try {
+        const env = JSON.parse((ev as MessageEvent).data) as WebSocketMessageEnvelope
+        setRecords((prev) =>
+          prev.map((r) => {
+            if (r.id !== env.recordId) return r
+            const msgs = r.webSocketMessages ?? []
+            if (env.sequence < msgs.length) return r
+            return { ...r, webSocketMessages: [...msgs, env.message] }
           }),
         )
       } catch {

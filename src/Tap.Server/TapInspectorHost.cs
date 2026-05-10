@@ -108,6 +108,7 @@ public static class TapInspectorHost
 
         builder.Services.AddSingleton<InMemoryRequestStore>();
         builder.Services.AddSingleton<IRequestStore>(sp => sp.GetRequiredService<InMemoryRequestStore>());
+        builder.Services.AddSingleton(options.Ingress);
 
         builder.Services.AddHttpClient("replay").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
         {
@@ -148,6 +149,9 @@ public static class TapInspectorHost
         // Proxy branch: tunnel/captured traffic, with optional auth in front.
         app.MapWhen(ctx => ctx.Connection.LocalPort == options.ProxyPort, proxy =>
         {
+            // WebSockets: must come before CaptureMiddleware so ctx.WebSockets.IsWebSocketRequest
+            // resolves correctly when we intercept the upgrade.
+            proxy.UseWebSockets();
             if (options.Auth is not null)
             {
                 proxy.UseTapAuth(options.Auth);
@@ -375,6 +379,13 @@ public static class TapInspectorHost
                         var envelope = new SseEventEnvelope(se.RecordId, se.Sequence, se.Event);
                         var json = JsonSerializer.Serialize(envelope, RequestRecordJsonContext.Default.SseEventEnvelope);
                         await ctx.Response.WriteAsync($"event: sse\ndata: {json}\n\n", ct);
+                        break;
+                    }
+                    case WebSocketStreamEvent we:
+                    {
+                        var envelope = new WebSocketMessageEnvelope(we.RecordId, we.Sequence, we.Message);
+                        var json = JsonSerializer.Serialize(envelope, RequestRecordJsonContext.Default.WebSocketMessageEnvelope);
+                        await ctx.Response.WriteAsync($"event: ws\ndata: {json}\n\n", ct);
                         break;
                     }
                 }

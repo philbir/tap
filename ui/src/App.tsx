@@ -304,7 +304,16 @@ export function App() {
   )
 }
 
+const PUBLIC_EXPOSURE_DISMISS_KEY = 'tap.publicExposureDismissed'
+
 function PublicExposureWarning() {
+  const [dismissed, setDismissed] = useState(() => {
+    try { return sessionStorage.getItem(PUBLIC_EXPOSURE_DISMISS_KEY) === '1' }
+    catch { return false }
+  })
+
+  if (dismissed) return null
+
   return (
     <div
       role="alert"
@@ -328,6 +337,27 @@ function PublicExposureWarning() {
         confusions) become easy targets. Always pair public tunnels with auth — header check,
         CIDR/country allowlist, or OIDC.
       </div>
+      <button
+        type="button"
+        aria-label="Dismiss public exposure warning"
+        title="Hide for this session"
+        onClick={() => {
+          try { sessionStorage.setItem(PUBLIC_EXPOSURE_DISMISS_KEY, '1') } catch { /* ignore */ }
+          setDismissed(true)
+        }}
+        style={{
+          background: 'transparent',
+          border: '1px solid transparent',
+          color: '#b45309',
+          fontSize: 16,
+          lineHeight: 1,
+          padding: '2px 8px',
+          borderRadius: 4,
+          cursor: 'pointer',
+        }}
+      >
+        ×
+      </button>
     </div>
   )
 }

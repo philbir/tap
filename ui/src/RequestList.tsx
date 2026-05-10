@@ -87,7 +87,7 @@ export function RequestList({ records, selectedId, filter, onSelect, onFilterCha
               <span style={{ color: statusColor(r.statusCode), fontWeight: 600, minWidth: '32px' }}>
                 {r.statusCode || '—'}
               </span>
-              {r.isStream && (
+              {r.isStream && !r.isWebSocket && (
                 <span
                   title={r.streamCompleted ? 'Stream finished' : 'Live stream'}
                   style={{
@@ -101,6 +101,26 @@ export function RequestList({ records, selectedId, filter, onSelect, onFilterCha
                   }}
                 >
                   SSE{(r.sseEvents?.length ?? 0) > 0 && ` · ${r.sseEvents!.length}`}
+                </span>
+              )}
+              {r.isWebSocket && (
+                <span
+                  className={r.streamCompleted ? undefined : 'tap-ws-live'}
+                  title={r.streamCompleted ? 'WebSocket closed' : 'WebSocket open'}
+                  style={{
+                    fontSize: '9.5px',
+                    fontWeight: 600,
+                    letterSpacing: '0.04em',
+                    padding: '1px 5px',
+                    borderRadius: 3,
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    color: r.streamCompleted ? 'var(--text-muted)' : 'var(--ok)',
+                    border: `1px solid ${r.streamCompleted ? 'var(--border)' : 'var(--ok)'}`,
+                  }}
+                >
+                  {!r.streamCompleted && <span className="tap-ws-dot live" />}
+                  WS{(r.webSocketMessages?.length ?? 0) > 0 && ` · ${r.webSocketMessages!.length}`}
                 </span>
               )}
               <span style={{ color: 'var(--text-muted)', marginLeft: 'auto', fontSize: '11px' }}>

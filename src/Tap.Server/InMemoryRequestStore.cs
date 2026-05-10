@@ -58,6 +58,19 @@ public sealed class InMemoryRequestStore : IRequestStore
         Broadcast(subs, new SseStreamEvent(record.Id, index, ev));
     }
 
+    public void AppendWebSocketMessage(RequestRecord record, WebSocketMessage message)
+    {
+        int index;
+        Channel<StoreEvent>[] subs;
+        lock (_sync)
+        {
+            record.WebSocketMessages.Add(message);
+            index = record.WebSocketMessages.Count - 1;
+            subs = _subscribers.ToArray();
+        }
+        Broadcast(subs, new WebSocketStreamEvent(record.Id, index, message));
+    }
+
     private static void Broadcast(Channel<StoreEvent>[] subs, StoreEvent ev)
     {
         foreach (var sub in subs)

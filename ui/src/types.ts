@@ -7,6 +7,20 @@ export interface SseEvent {
   comment: string | null
 }
 
+export interface WebSocketMessage {
+  timestamp: string
+  /** "client" = browser → upstream, "server" = upstream → browser */
+  direction: 'client' | 'server'
+  /** "text" | "binary" | "close" */
+  type: string
+  text: string | null
+  base64: string | null
+  size: number
+  truncated: boolean
+  closeStatus: number | null
+  closeDescription: string | null
+}
+
 export interface RequestRecord {
   sequence: number
   id: string
@@ -34,12 +48,20 @@ export interface RequestRecord {
   isStream?: boolean
   streamCompleted?: boolean
   sseEvents?: SseEvent[]
+  isWebSocket?: boolean
+  webSocketMessages?: WebSocketMessage[]
 }
 
 export interface SseEventEnvelope {
   recordId: string
   sequence: number
   event: SseEvent
+}
+
+export interface WebSocketMessageEnvelope {
+  recordId: string
+  sequence: number
+  message: WebSocketMessage
 }
 
 export interface IngressEntry {

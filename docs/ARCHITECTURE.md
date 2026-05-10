@@ -99,6 +99,8 @@ sequenceDiagram
 
 The proxy branch captures traffic before and after forwarding. The UI branch is local control-plane traffic: request history, replay, ingress, tunnel details, and the static React app.
 
+`text/event-stream` responses and WebSocket upgrades are first-class. SSE events are parsed as the upstream writes them and WebSocket frames are pumped through a terminating proxy that records both directions; both flow types are pushed to the inspector over `/api/stream` (named `sse` / `ws` events) so the React UI's **SSE** and **WS** tabs append messages live while the connection is open.
+
 ## Components
 
 ```mermaid
@@ -246,10 +248,16 @@ For each request it records:
 | Response | status, headers, content type, body size, captured text or image body when supported. |
 | Timing | duration in milliseconds. |
 | Errors | proxy exception message when forwarding fails. |
+| SSE events | per-event timestamp, name, id, retry, data — appended live as the upstream emits frames. |
+| WebSocket frames | per-frame timestamp, direction (client/server), type (text/binary/close), payload (UTF-8 or base64), size, close code — appended live in both directions. |
 
 Bodies are capped at 1 MB. Text-like content types are captured as UTF-8 strings; image responses are stored as base64 for UI rendering; unsupported or oversized bodies are marked truncated.
 
-`InMemoryRequestStore` keeps the newest 200 records and fans out new records to `/api/stream` subscribers over server-sent events.
+`text/event-stream` responses are detected on the first response write — Kestrel buffering is disabled so the wire flow stays real-time, every chunk is parsed against a small SSE state machine, and each dispatched event is appended to the record and broadcast as a named `sse` event on `/api/stream`.
+
+WebSocket upgrade requests are detected before YARP. `WebSocketProxy` accepts the upgrade with `HttpContext.WebSockets.AcceptWebSocketAsync`, resolves the upstream from the ingress array, opens a matching `ClientWebSocket` (forwarding subprotocols and forwardable request headers), and pumps frames in both directions. Each completed text or binary message — plus `Close` frames — is recorded as a `WebSocketMessage { direction, type, text/base64, size, closeStatus }` on the record and broadcast as a named `ws` event on `/api/stream`. The capture cap (1 MB) applies per-message; oversized payloads are flagged truncated.
+
+`InMemoryRequestStore` keeps the newest 200 records and fans out new records, named `sse` events, and named `ws` events to `/api/stream` subscribers over server-sent events.
 
 ## Configuration Shape
 

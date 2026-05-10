@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useRef, useState } from 'react'
-import type { EndpointDescriptor, SseTick, TapDescriptor } from './types'
+import type { EndpointDescriptor, SseTick, TapDescriptor, WsFrame } from './types'
 import { runSse } from './sseClient'
 import { signHs256 } from './jwt'
 
@@ -9,6 +9,7 @@ interface CallState {
   body?: string
   contentType?: string
   events?: SseTick[]
+  frames?: WsFrame[]
   durationMs?: number
 }
 
@@ -48,7 +49,9 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
   })
   const [body, setBody] = useState(endpoint.sampleBody ?? '')
   const [state, setState] = useState<CallState>({ status: 'idle' })
+  const [wsInput, setWsInput] = useState('hello, tap!')
   const abortRef = useRef<AbortController | null>(null)
+  const wsRef = useRef<WebSocket | null>(null)
 
   const expandedPath = useMemo(() => {
     let path = endpoint.path
@@ -70,6 +73,10 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
   const stop = () => {
     abortRef.current?.abort()
     abortRef.current = null
+    if (wsRef.current && wsRef.current.readyState <= WebSocket.OPEN) {
+      try { wsRef.current.close(1000, 'client closed') } catch { /* ignore */ }
+    }
+    wsRef.current = null
   }
 
   const callStandard = async () => {
@@ -137,8 +144,77 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
     )
   }
 
+  const callWebSocket = () => {
+    stop()
+    const wsUrl = fullUrl.replace(/^http(s?):/i, (_m, s) => `ws${s}:`)
+    setState({ status: 'streaming', frames: [], message: 'connecting…' })
+    let socket: WebSocket
+    try {
+      socket = new WebSocket(wsUrl)
+    } catch (ex) {
+      setState({ status: 'err', message: String(ex) })
+      return
+    }
+    wsRef.current = socket
+
+    socket.onopen = () => {
+      setState((s) => ({
+        ...s,
+        status: 'streaming',
+        message: 'open',
+        frames: [...(s.frames ?? []), { direction: 'received', type: 'open', data: '(socket open)', receivedAt: new Date().toISOString() }],
+      }))
+    }
+    socket.onmessage = (ev) => {
+      const data = typeof ev.data === 'string' ? ev.data : '(binary frame)'
+      setState((s) => ({
+        ...s,
+        frames: [...(s.frames ?? []), {
+          direction: 'received',
+          type: typeof ev.data === 'string' ? 'text' : 'binary',
+          data,
+          receivedAt: new Date().toISOString(),
+        }],
+      }))
+    }
+    socket.onerror = () => {
+      setState((s) => ({
+        ...s,
+        status: 'err',
+        message: 'socket error',
+        frames: [...(s.frames ?? []), { direction: 'received', type: 'error', data: 'WebSocket error', receivedAt: new Date().toISOString() }],
+      }))
+    }
+    socket.onclose = (ev) => {
+      setState((s) => ({
+        ...s,
+        status: s.status === 'err' ? 'err' : 'closed',
+        message: s.status === 'err' ? s.message : `closed (${ev.code})`,
+        frames: [...(s.frames ?? []), {
+          direction: 'received',
+          type: 'close',
+          data: `code ${ev.code}${ev.reason ? ` · ${ev.reason}` : ''}`,
+          receivedAt: new Date().toISOString(),
+        }],
+      }))
+      if (wsRef.current === socket) wsRef.current = null
+    }
+  }
+
+  const sendWsFrame = () => {
+    const socket = wsRef.current
+    if (!socket || socket.readyState !== WebSocket.OPEN) return
+    socket.send(wsInput)
+    const sent = wsInput
+    setState((s) => ({
+      ...s,
+      frames: [...(s.frames ?? []), { direction: 'sent', type: 'text', data: sent, receivedAt: new Date().toISOString() }],
+    }))
+  }
+
   const onCall = () => {
-    if (endpoint.isStream) callSse()
+    if (endpoint.isWebSocket) callWebSocket()
+    else if (endpoint.isStream) callSse()
     else callStandard()
   }
 
@@ -161,6 +237,7 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
         <span className={`method ${endpoint.method}`}>{endpoint.method}</span>
         <span className="path">{endpoint.path}</span>
         {endpoint.isStream && <span className="tag">SSE</span>}
+        {endpoint.isWebSocket && <span className="tag">WS</span>}
         {needsJwt && <span className="tag" title="Authorization: Bearer <HS256 JWT>">JWT</span>}
       </div>
       <div className="descr">{endpoint.description}</div>
@@ -183,7 +260,7 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
         </div>
       )}
 
-      {endpoint.method !== 'GET' && (
+      {endpoint.method !== 'GET' && !endpoint.isWebSocket && (
         <div className="body-row">
           <label>JSON body</label>
           <textarea value={body} onChange={(e) => setBody(e.target.value)} spellCheck={false} />
@@ -192,9 +269,13 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
 
       <div className="actions">
         <button className="primary" onClick={onCall} disabled={state.status === 'pending'}>
-          {endpoint.isStream ? (isStreaming ? 'Restart' : 'Open stream') : 'Send'}
+          {endpoint.isWebSocket
+            ? (isStreaming ? 'Reconnect' : 'Connect')
+            : endpoint.isStream
+              ? (isStreaming ? 'Restart' : 'Open stream')
+              : 'Send'}
         </button>
-        {isStreaming && <button onClick={stop}>Stop</button>}
+        {isStreaming && <button onClick={stop}>{endpoint.isWebSocket ? 'Disconnect' : 'Stop'}</button>}
         {state.message && (
           <span className={`status ${state.status === 'ok' || state.status === 'closed' ? 'ok' : state.status === 'err' ? 'err' : ''}`}>
             {state.message}
@@ -203,6 +284,37 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
         )}
       </div>
       <div className="full-url" title={fullUrl}>{fullUrl}</div>
+
+      {endpoint.isWebSocket && state.status === 'streaming' && (
+        <div className="body-row">
+          <label>send text frame</label>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <input
+              value={wsInput}
+              onChange={(e) => setWsInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') sendWsFrame() }}
+              style={{ flex: 1 }}
+            />
+            <button onClick={sendWsFrame} disabled={!wsInput}>Send</button>
+          </div>
+        </div>
+      )}
+
+      {endpoint.isWebSocket && state.frames && state.frames.length > 0 && (
+        <div className="result">
+          <div className="result-head">frames ({state.frames.length})</div>
+          <div className="event-list">
+            {state.frames.map((f, i) => (
+              <div className="sse-event" key={i}>
+                <div className="meta">
+                  {new Date(f.receivedAt).toLocaleTimeString()} · {f.direction === 'sent' ? '→ sent' : '← received'} · {f.type}
+                </div>
+                <div className="data">{f.data}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {endpoint.isStream && state.events && state.events.length > 0 && (
         <div className="result">
@@ -221,7 +333,7 @@ export function EndpointCard({ endpoint, baseUrl, tap, jwtConfig }: Props) {
         </div>
       )}
 
-      {!endpoint.isStream && state.body !== undefined && (
+      {!endpoint.isStream && !endpoint.isWebSocket && state.body !== undefined && (
         <div className="result">
           <div className="result-head">
             response{state.contentType && ` · ${state.contentType}`}

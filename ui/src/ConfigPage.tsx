@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react'
 import type { TunnelProfile, TunnelMode } from './profileTypes'
 import { TUNNEL_MODES, emptyProfile } from './profileTypes'
 
-type Tab = 'intro' | 'profiles'
+type Tab = 'profiles' | 'cloudflare' | 'tailscale'
 
-export function CloudflarePage() {
-  const [tab, setTab] = useState<Tab>('intro')
+export function ConfigPage() {
+  const [tab, setTab] = useState<Tab>('profiles')
 
   return (
     <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -18,12 +18,15 @@ export function CloudflarePage() {
           background: 'var(--bg-raised)',
         }}
       >
-        <PageTab label="Cloudflare guide" active={tab === 'intro'} onClick={() => setTab('intro')} />
         <PageTab label="Tunnel profiles" active={tab === 'profiles'} onClick={() => setTab('profiles')} />
+        <PageTab label="Cloudflare" active={tab === 'cloudflare'} onClick={() => setTab('cloudflare')} />
+        <PageTab label="Tailscale" active={tab === 'tailscale'} onClick={() => setTab('tailscale')} />
       </div>
 
       <div style={{ flex: 1, overflow: 'auto' }}>
-        {tab === 'intro' ? <IntroSection /> : <ProfilesSection />}
+        {tab === 'profiles' && <ProfilesSection />}
+        {tab === 'cloudflare' && <IntroSection />}
+        {tab === 'tailscale' && <TailscaleSection />}
       </div>
     </div>
   )
@@ -59,6 +62,8 @@ function IntroSection() {
         upstream. Cloudflare runs <code>cloudflared</code> as the connector — tap installs and
         manages the process for you. Pick the mode that matches what you have:
       </p>
+
+      <SecurityCallout />
 
       <Prerequisites />
 
@@ -117,6 +122,249 @@ function IntroSection() {
       />
 
     </div>
+  )
+}
+
+const TS_ACCENT = '#5e64f4'
+
+function SecurityCallout() {
+  return (
+    <div
+      role="alert"
+      style={{
+        marginTop: 16,
+        padding: '12px 14px',
+        borderRadius: 8,
+        background: 'color-mix(in srgb, #d97706 10%, transparent)',
+        border: '1px solid color-mix(in srgb, #d97706 35%, transparent)',
+        color: 'var(--text)',
+        lineHeight: 1.55,
+        fontSize: 13,
+      }}
+    >
+      <b style={{ color: '#b45309' }}>⚠ Security: public tunnels are scanned within minutes.</b>
+      <p style={{ margin: '6px 0 0', color: 'var(--text-muted)' }}>
+        The moment a public hostname's TLS certificate appears in a public CT log (which happens
+        within seconds of <code>tailscale funnel</code> or any Cloudflare tunnel coming up),
+        opportunistic scanners hit it looking for admin endpoints, exposed debug routes, leaked
+        secrets, dependency-confusion paths, default credentials, and known-CVE banners. This is
+        not theoretical — your tap will receive scanner traffic before your first real test request.
+      </p>
+      <ul style={{ margin: '8px 0 0 18px', color: 'var(--text-muted)' }}>
+        <li>
+          <b>Default to private.</b> Use <code>WithTailscaleServe(...)</code> (or no
+          <code>--tailscale-public</code> flag in the CLI) so the tap is reachable only from your
+          tailnet. Switch to <code>WithTailscaleFunnel(...)</code> only when you actually need
+          internet access.
+        </li>
+        <li>
+          <b>Always pair public tunnels with auth.</b> tap supports header-based, CIDR/country
+          allowlists, and OIDC out of the box — see the auth section in the README.
+        </li>
+        <li>
+          <b>Don't run unauthenticated public tunnels for internal admin services.</b>{' '}
+          Even short demos benefit from header-auth — it stops 99% of scanner traffic.
+        </li>
+      </ul>
+    </div>
+  )
+}
+
+function TailscaleSection() {
+  return (
+    <div style={{ maxWidth: 880, margin: '0 auto', padding: '28px 24px 64px' }}>
+      <h1 style={{ marginTop: 0, fontSize: 22 }}>Tailscale Serve & Funnel with tap</h1>
+      <p style={{ color: 'var(--text-muted)', lineHeight: 1.55 }}>
+        Tailscale exposes a tailnet node's HTTPS endpoint at <code>https://&lt;machine&gt;.&lt;tailnet&gt;.ts.net</code>{' '}
+        in two flavors: <code>serve</code> (reachable only from your tailnet — the safe default)
+        and <code>funnel</code> (publicly reachable on the internet). One node = one upstream;
+        for multiple upstreams, register multiple resources. Only ports <code>443</code>,{' '}
+        <code>8443</code>, and <code>10000</code> are allowed.
+      </p>
+
+      <SecurityCallout />
+
+      <TailscalePrerequisites />
+
+      <h2 style={{ fontSize: 17, marginTop: 32, marginBottom: 4 }}>Modes</h2>
+
+      <ModeCard
+        title="System daemon (default)"
+        slug="system"
+        when="You already have Tailscale installed and signed in on this machine."
+        bullets={[
+          'Reuses the host’s tailscaled and existing tailnet node — public hostname is fixed across runs.',
+          'No auth key needed; the node’s existing tailnet membership and ACL caps drive everything.',
+          'On AppHost shutdown, the bootstrapper removes only the path-specific rule (`tailscale serve --set-path=/ off`), so other manual rules on the same port survive.',
+        ]}
+        cli={`var tap = builder.AddTap<Projects.Tap_Server>("tap")
+    .WithTailscaleFunnel("tap-funnel", t => t.WithSystemDaemon());
+api.WithTap(tap);`}
+        accent={TS_ACCENT}
+      />
+
+      <ModeCard
+        title="Ephemeral userspace daemon"
+        slug="ephemeral"
+        when="Want a fresh tailnet node per run, no host tailscale install required."
+        bullets={[
+          'Spins up its own tailscaled with --tun=userspace-networking and a per-session state dir under /tmp.',
+          'Joins the tailnet via the supplied auth key; node disappears when the AppHost stops.',
+          'Each run consumes one use of the auth key — use a Reusable key, or generate a fresh one each run.',
+          'macOS/Linux only — Windows ephemeral mode is not yet supported (the GUI service model gets in the way).',
+        ]}
+        cli={`var tap = builder.AddTap<Projects.Tap_Server>("tap")
+    .WithTailscaleFunnel("tap-funnel", t => t
+        .WithEphemeralDaemon(authKey)
+        .WithFunnelPort(8443)); // 443 (default), 8443, or 10000
+api.WithTap(tap);`}
+        accent={TS_ACCENT}
+      />
+
+      <h2 style={{ fontSize: 17, marginTop: 32, marginBottom: 4 }}>How it actually flows</h2>
+      <p style={{ color: 'var(--text-muted)', lineHeight: 1.55, fontSize: 13 }}>
+        Internet → Tailscale Funnel ingress → <code>tailscaled</code> on this machine →
+        the inspector's proxy port → your upstream. Every request is captured and shows
+        up live on the Inspector tab; the daemon and active rules are surfaced in the
+        Tunnel detail dialog (click the Tunnel chip in the inspector header when running
+        a Tailscale tap).
+      </p>
+    </div>
+  )
+}
+
+function TailscalePrerequisites() {
+  return (
+    <section style={{ marginTop: 18 }}>
+      <h2 style={{ fontSize: 17, marginTop: 0, marginBottom: 8 }}>Prerequisites</h2>
+      <p style={{ color: 'var(--text-muted)', lineHeight: 1.55, marginTop: 0 }}>
+        tap calls the <code>tailscale</code> CLI directly. Make sure the CLI is on{' '}
+        <code>PATH</code>, HTTPS is enabled on your tailnet, and the node has the{' '}
+        <code>funnel</code> ACL capability.
+      </p>
+
+      <div style={{ display: 'grid', gap: 12, gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', marginTop: 10 }}>
+        <PrereqCard
+          title="Install Tailscale"
+          forModes={['System', 'Ephemeral']}
+          summary="The tailscale CLI must be on PATH. tap fails fast at AppHost startup if it isn't found."
+          steps={[
+            <>
+              macOS: <code>brew install tailscale</code>, or install the App Store /
+              standalone client and run <i>Install CLI</i> from its menu so{' '}
+              <code>/usr/local/bin/tailscale</code> is created.
+            </>,
+            <>
+              Linux: one-line installer at{' '}
+              <a href="https://tailscale.com/download/linux" target="_blank" rel="noreferrer">
+                tailscale.com/download/linux
+              </a>
+              , then <code>sudo systemctl enable --now tailscaled</code>.
+            </>,
+            <>
+              Windows: GUI installer from{' '}
+              <a href="https://tailscale.com/download" target="_blank" rel="noreferrer">
+                tailscale.com/download
+              </a>
+              . System mode only — ephemeral mode is not yet supported on Windows.
+            </>,
+            <>
+              Sign in once for system mode: <code>tailscale up</code>.
+            </>,
+          ]}
+          notes={[
+            'Verify with `tailscale version`. tap shells out to whatever resolves on PATH.',
+          ]}
+          link={{
+            label: 'Tailscale download page',
+            href: 'https://tailscale.com/download',
+          }}
+          accent={TS_ACCENT}
+        />
+
+        <PrereqCard
+          title="Enable HTTPS + grant funnel"
+          forModes={['System', 'Ephemeral']}
+          summary="Funnel requires HTTPS to be enabled on the tailnet, and the node must have the funnel capability granted via ACL."
+          steps={[
+            <>
+              Admin console →{' '}
+              <a href="https://login.tailscale.com/admin/dns" target="_blank" rel="noreferrer">
+                DNS
+              </a>{' '}
+              → enable <b>HTTPS Certificates</b> (one-time per tailnet).
+            </>,
+            <>
+              Admin console →{' '}
+              <a href="https://login.tailscale.com/admin/acls" target="_blank" rel="noreferrer">
+                Access Controls
+              </a>{' '}
+              → add <code>nodeAttrs</code>:
+            </>,
+            <pre style={{ margin: '4px 0 0', padding: '6px 8px', background: 'var(--bg-input)', border: '1px solid var(--border)', borderRadius: 4, fontSize: 11 }}>
+{`"nodeAttrs": [
+  { "target": ["*"], "attr": ["funnel"] }
+]`}
+            </pre>,
+            <>
+              Scope by tag (e.g. <code>"target": ["tag:dev"]</code>) and tag your node from
+              the Machines page if you don't want to grant funnel to everything.
+            </>,
+            <>
+              Verify: <code>tailscale status --json | grep -i funnel</code> should show{' '}
+              <code>"funnel"</code> in your node's <code>CapMap</code>.
+            </>,
+          ]}
+          notes={[
+            'Funnel is allowed only on ports 443, 8443, 10000 (enforced by Tailscale).',
+            'After ACL changes, run `tailscale down && tailscale up` so the cap propagates immediately.',
+          ]}
+          link={{
+            label: 'Open admin console',
+            href: 'https://login.tailscale.com/admin/',
+          }}
+          accent={TS_ACCENT}
+        />
+
+        <PrereqCard
+          title="Auth key (ephemeral only)"
+          forModes={['Ephemeral']}
+          summary="Required for ephemeral mode. tap uses the key to spawn a fresh userspace tailscaled per AppHost run; the node is removed at shutdown."
+          steps={[
+            <>
+              Admin console →{' '}
+              <a href="https://login.tailscale.com/admin/settings/keys" target="_blank" rel="noreferrer">
+                Settings → Keys
+              </a>{' '}
+              → <b>Generate auth key</b>.
+            </>,
+            <>
+              Mark <b>Reusable</b> if you'll run the AppHost more than once with the
+              same key, and <b>Ephemeral</b> so the node is automatically removed when offline.
+            </>,
+            <>
+              Add the ACL tags that grant <code>funnel</code> (e.g. <code>tag:dev</code>) so
+              the new node lands in the right slice of your ACL.
+            </>,
+            <>
+              Stash it in user-secrets:
+              <code style={{ display: 'block', marginTop: 4 }}>
+                dotnet user-secrets set Tailscale:AuthKey tskey-… --project samples/Sample.AppHost
+              </code>
+            </>,
+          ]}
+          notes={[
+            "Treat the key like a password — it's authenticated tailnet membership.",
+            "Reusable keys can be revoked from the same admin page if leaked.",
+          ]}
+          link={{
+            label: 'Generate auth key',
+            href: 'https://login.tailscale.com/admin/settings/keys',
+          }}
+          accent={TS_ACCENT}
+        />
+      </div>
+    </section>
   )
 }
 
@@ -215,6 +463,7 @@ function PrereqCard({
   steps,
   notes,
   link,
+  accent = '#f6821f',
 }: {
   title: string
   forModes: string[]
@@ -222,6 +471,7 @@ function PrereqCard({
   steps: React.ReactNode[]
   notes?: string[]
   link?: { label: string; href: string }
+  accent?: string
 }) {
   return (
     <article
@@ -241,8 +491,8 @@ function PrereqCard({
               fontSize: 9.5,
               textTransform: 'uppercase',
               letterSpacing: '0.06em',
-              color: '#f6821f',
-              border: '1px solid color-mix(in srgb, #f6821f 35%, transparent)',
+              color: accent,
+              border: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`,
               padding: '1px 5px',
               borderRadius: 3,
               background: '#fff',
@@ -281,6 +531,7 @@ function ModeCard({
   bullets,
   cli,
   link,
+  accent = '#f6821f',
 }: {
   title: string
   slug: string
@@ -288,6 +539,7 @@ function ModeCard({
   bullets: string[]
   cli: string
   link?: { label: string; href: string }
+  accent?: string
 }) {
   return (
     <section
@@ -305,8 +557,8 @@ function ModeCard({
             fontSize: 10,
             textTransform: 'uppercase',
             letterSpacing: '0.06em',
-            color: '#f6821f',
-            border: '1px solid color-mix(in srgb, #f6821f 35%, transparent)',
+            color: accent,
+            border: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`,
             padding: '1px 6px',
             borderRadius: 3,
             background: '#fff',
@@ -493,7 +745,9 @@ function ProfileRow({
   if (profile.oidcAuthority) auth.push('oidc')
 
   const hostOrZone =
-    profile.tunnelMode === 'Dynamic' ? profile.dynamicZone || '—' : profile.hostname || '—'
+    profile.tunnelMode === 'Dynamic' ? profile.dynamicZone || '—'
+      : profile.tunnelMode === 'Tailscale' ? '<machine>.<tailnet>.ts.net'
+      : profile.hostname || '—'
 
   return (
     <tr style={{ borderTop: '1px solid var(--border)' }}>
@@ -527,14 +781,15 @@ function ModeBadge({ mode }: { mode: TunnelMode }) {
     return <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>standalone</span>
   }
   const label = mode === 'ApiManaged' ? 'api-managed' : mode.toLowerCase()
+  const accent = mode === 'Tailscale' ? '#5e64f4' : '#f6821f'
   return (
     <span
       style={{
         fontSize: 10,
         textTransform: 'uppercase',
         letterSpacing: '0.06em',
-        color: '#f6821f',
-        border: '1px solid color-mix(in srgb, #f6821f 35%, transparent)',
+        color: accent,
+        border: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`,
         padding: '1px 6px',
         borderRadius: 3,
         background: '#fff',
@@ -767,6 +1022,97 @@ function ProfileEditor({
             style={{ width: '100%' }}
           />
         </Field>
+      )}
+
+      {mode === 'Tailscale' && (
+        <>
+          <Field label="Exposure" hint="Default: tailnet-only (`tailscale serve`). Switch to public when you need an internet-facing URL — pair with auth.">
+            <select
+              value={draft.tailscalePublic ? 'public' : 'tailnet'}
+              onChange={(e) => set('tailscalePublic', e.target.value === 'public')}
+              style={{
+                width: '100%',
+                background: 'var(--bg-input)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '5px 8px',
+                fontFamily: 'inherit',
+                fontSize: 'inherit',
+              }}
+            >
+              <option value="tailnet">tailnet-only — `tailscale serve` (default; private)</option>
+              <option value="public">public — `tailscale funnel` (internet-exposed)</option>
+            </select>
+          </Field>
+          <Field label="Daemon mode" hint="System reuses the host's tailscaled. Ephemeral spawns a per-session userspace daemon (host process or Docker, requires auth key).">
+            <select
+              value={draft.tailscaleDaemonMode ?? 'system'}
+              onChange={(e) => set('tailscaleDaemonMode', e.target.value as 'system' | 'ephemeral')}
+              style={{
+                width: '100%',
+                background: 'var(--bg-input)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '5px 8px',
+                fontFamily: 'inherit',
+                fontSize: 'inherit',
+              }}
+            >
+              <option value="system">system (default — uses existing tailscaled)</option>
+              <option value="ephemeral">ephemeral (needs auth key + tailscaled or Docker)</option>
+            </select>
+          </Field>
+          <Field label="Funnel port" hint="Tailscale only allows 443, 8443, or 10000.">
+            <select
+              value={draft.tailscaleFunnelPort ?? 443}
+              onChange={(e) => set('tailscaleFunnelPort', Number(e.target.value))}
+              style={{
+                width: '100%',
+                background: 'var(--bg-input)',
+                color: 'var(--text)',
+                border: '1px solid var(--border)',
+                borderRadius: 6,
+                padding: '5px 8px',
+                fontFamily: 'inherit',
+                fontSize: 'inherit',
+              }}
+            >
+              <option value={443}>443 (default)</option>
+              <option value={8443}>8443</option>
+              <option value={10000}>10000</option>
+            </select>
+          </Field>
+          {draft.tailscaleDaemonMode === 'ephemeral' && (
+            <>
+              <Field label="Auth key" hint="Required for ephemeral mode. Generate at admin.tailscale.com → Settings → Keys.">
+                <input
+                  type="password"
+                  value={draft.tailscaleAuthKey ?? ''}
+                  onChange={(e) => set('tailscaleAuthKey', e.target.value)}
+                  placeholder="tskey-…"
+                  style={{ width: '100%' }}
+                />
+              </Field>
+              <Field label="Login server (optional)" hint="Override for self-hosted Headscale, etc. Leave blank for the public Tailscale coordination server.">
+                <input
+                  value={draft.tailscaleLoginServer ?? ''}
+                  onChange={(e) => set('tailscaleLoginServer', e.target.value)}
+                  placeholder="https://controlplane.tailscale.com"
+                  style={{ width: '100%' }}
+                />
+              </Field>
+              <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'color-mix(in srgb, #5e64f4 10%, transparent)', border: '1px solid color-mix(in srgb, #5e64f4 30%, transparent)', fontSize: 11.5, color: 'var(--text-muted)' }}>
+                <b style={{ color: 'var(--text)' }}>Heads up:</b> ephemeral mode is honored by both the Aspire AppHost
+                (<code>WithEphemeralDaemon</code>) and the CLI (<code>tap run … --tailscale-authkey</code> or
+                <code>TAILSCALE_AUTHKEY</code> env). On Windows, ephemeral process mode is unsupported — pair the auth
+                key with <code>--docker</code> (or <code>hostMode: TailscaleHostMode.Docker</code>) to run
+                <code>tailscale/tailscale</code> in a container instead.
+              </div>
+            </>
+          )}
+        </>
       )}
 
       <Row>

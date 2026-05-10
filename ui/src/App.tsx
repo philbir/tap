@@ -3,32 +3,40 @@ import { RequestList } from './RequestList'
 import { RequestDetail } from './RequestDetail'
 import { TunnelPanel } from './TunnelPanel'
 import { TunnelInfoDialog } from './TunnelInfoDialog'
-import { CloudflarePage } from './CloudflarePage'
+import { ConfigPage } from './ConfigPage'
+import { QrPage } from './QrPage'
 import { useRequestStream } from './useRequestStream'
 import { useInspectorConfig } from './useIngress'
 import { useTheme } from './useTheme'
 import type { IngressEntry } from './types'
 
-type View = 'inspector' | 'cloudflare'
+type View = 'inspector' | 'config' | 'qr'
 
 function initialViewFromLocation(): View {
   if (typeof window === 'undefined') return 'inspector'
   const hash = window.location.hash.replace(/^#\/?/, '').toLowerCase()
-  return hash === 'cloudflare' ? 'cloudflare' : 'inspector'
+  // Accept legacy `#cloudflare` and `#docs` so old bookmarks still resolve.
+  if (hash === 'qr') return 'qr'
+  return hash === 'config' || hash === 'docs' || hash === 'cloudflare' ? 'config' : 'inspector'
 }
 
 function TunnelBadge({ entry, onClick }: { entry: IngressEntry; onClick: () => void }) {
   const mode = entry.tunnelMode ?? ''
+  const isTailscale = mode === 'tailscale-system' || mode === 'tailscale-ephemeral'
   const label = mode === 'token' ? 'token'
     : mode === 'api-managed' ? 'api-managed'
     : mode === 'dynamic' ? 'dynamic'
     : mode === 'quick' ? 'quick'
+    : mode === 'tailscale-system' ? 'system'
+    : mode === 'tailscale-ephemeral' ? 'ephemeral'
     : mode
   const tip = [
-    `Cloudflare tunnel: ${label}`,
+    isTailscale ? `Tailscale Funnel: ${label}` : `Cloudflare tunnel: ${label}`,
     entry.tunnelName ? `name: ${entry.tunnelName}` : null,
     entry.publicUrl ? `public: ${entry.publicUrl}` : null,
   ].filter(Boolean).join(' · ')
+
+  const accent = isTailscale ? '#5e64f4' : '#f6821f'
 
   return (
     <button
@@ -45,13 +53,18 @@ function TunnelBadge({ entry, onClick }: { entry: IngressEntry; onClick: () => v
         padding: '1px 6px 1px 5px',
         borderRadius: '3px',
         background: '#fff',
-        color: '#f6821f',
-        border: '1px solid color-mix(in srgb, #f6821f 35%, transparent)',
+        color: accent,
+        border: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`,
         cursor: 'pointer',
       }}
     >
-      <img src="/cloudflare.svg" alt="Cloudflare" height={11} style={{ display: 'block' }} />
-      <span style={{ borderLeft: '1px solid color-mix(in srgb, #f6821f 35%, transparent)', paddingLeft: '5px' }}>
+      <img
+        src={isTailscale ? '/tailscale-mark.png' : '/cloudflare.svg'}
+        alt={isTailscale ? 'Tailscale' : 'Cloudflare'}
+        height={11}
+        style={{ display: 'block' }}
+      />
+      <span style={{ borderLeft: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`, paddingLeft: '5px' }}>
         {label}
       </span>
     </button>
@@ -66,7 +79,7 @@ export function App() {
   const switchView = (next: View) => {
     setView(next)
     if (typeof window !== 'undefined') {
-      const hash = next === 'cloudflare' ? '#cloudflare' : ''
+      const hash = next === 'config' ? '#config' : next === 'qr' ? '#qr' : ''
       if (window.location.hash !== hash) {
         history.replaceState(null, '', `${window.location.pathname}${window.location.search}${hash}`)
       }
@@ -87,6 +100,7 @@ export function App() {
   const ingress = config?.ingress ?? []
   const apiMode = config?.apiMode ?? 'token'
   const mode = config?.mode ?? 'standalone'
+  const provider = config?.provider ?? null
 
   const hostnameCounts = useMemo(() => {
     const counts: Record<string, number> = {}
@@ -122,7 +136,8 @@ export function App() {
 
         <nav style={{ display: 'flex', gap: 4 }}>
           <NavTab label="Inspector" active={view === 'inspector'} onClick={() => switchView('inspector')} />
-          <NavTab label="Cloudflare" active={view === 'cloudflare'} onClick={() => switchView('cloudflare')} />
+          <NavTab label="QR" active={view === 'qr'} onClick={() => switchView('qr')} />
+          <NavTab label="Config" active={view === 'config'} onClick={() => switchView('config')} />
         </nav>
 
         {view === 'inspector' && (
@@ -145,7 +160,9 @@ export function App() {
               overflow: 'hidden',
             }}
             title={
-              apiMode === 'cloudflare-api'
+              provider === 'tailscale'
+                ? `Tailscale Funnel: traffic from your ts.net URL is routed via tailscaled to http://localhost:${proxyPort} where the inspector captures it.`
+                : apiMode === 'cloudflare-api'
                 ? 'Cloudflare API mode: use the Tunnel button to add or update public hostnames directly.'
                 : `In the Cloudflare Zero Trust dashboard, set every public hostname's target URL to http://localhost:${proxyPort} so traffic flows through the inspector.`
             }
@@ -166,7 +183,7 @@ export function App() {
             ))}
             {mode === 'tunnel' && (
               <span style={{ whiteSpace: 'nowrap', color: 'var(--text-muted)', opacity: 0.8 }}>
-                (Cloudflare target: <code style={{ fontSize: '10px' }}>http://localhost:{proxyPort}</code>)
+                ({provider === 'tailscale' ? 'Funnel' : 'Cloudflare'} target: <code style={{ fontSize: '10px' }}>http://localhost:{proxyPort}</code>)
               </span>
             )}
             {mode === 'standalone' && (
@@ -177,9 +194,9 @@ export function App() {
           </div>
         )}
 
-        {(showSelector || view === 'cloudflare') && <div style={{ flex: 1 }} />}
+        {(showSelector || view === 'config' || view === 'qr') && <div style={{ flex: 1 }} />}
 
-        {view === 'inspector' && apiMode === 'cloudflare-api' && proxyPort !== undefined && (
+        {view === 'inspector' && apiMode === 'cloudflare-api' && (provider === null || provider === 'cloudflare') && proxyPort !== undefined && (
           <button onClick={() => setTunnelOpen(true)} title="Manage tunnel hostnames via Cloudflare API">
             Tunnel…
           </button>
@@ -193,6 +210,8 @@ export function App() {
         </button>
         {view === 'inspector' && <button onClick={clear}>Clear</button>}
       </header>
+
+      {view === 'inspector' && ingress.some((e) => e.publicExpose) && <PublicExposureWarning />}
 
       {showSelector && (
         <div
@@ -241,7 +260,7 @@ export function App() {
         </div>
       )}
 
-      {view === 'inspector' ? (
+      {view === 'inspector' && (
         <div
           style={{
             flex: 1,
@@ -261,9 +280,11 @@ export function App() {
           />
           <RequestDetail record={selected} theme={theme} />
         </div>
-      ) : (
-        <CloudflarePage />
       )}
+
+      {view === 'qr' && <QrPage config={config ?? null} />}
+
+      {view === 'config' && <ConfigPage />}
 
       {proxyPort !== undefined && (
         <TunnelPanel proxyPort={proxyPort} open={tunnelOpen} onClose={() => setTunnelOpen(false)} />
@@ -274,9 +295,39 @@ export function App() {
           open={tunnelInfoOpen}
           proxyPort={proxyPort}
           upstream={ingress[0].upstream}
+          provider={provider}
+          publicExpose={ingress.some((e) => e.publicExpose)}
           onClose={() => setTunnelInfoOpen(false)}
         />
       )}
+    </div>
+  )
+}
+
+function PublicExposureWarning() {
+  return (
+    <div
+      role="alert"
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: '10px',
+        padding: '8px 14px',
+        borderBottom: '1px solid color-mix(in srgb, #d97706 35%, var(--border))',
+        background: 'color-mix(in srgb, #d97706 12%, var(--bg-raised))',
+        color: 'var(--text)',
+        fontSize: 12,
+        lineHeight: 1.45,
+      }}
+    >
+      <span aria-hidden="true" style={{ fontSize: 14 }}>⚠</span>
+      <div style={{ flex: 1 }}>
+        <b style={{ color: '#b45309' }}>Public exposure: </b>
+        this tap is reachable on the public internet. Opportunistic scanners typically find new
+        tunnel hostnames within minutes — exposed paths (admin endpoints, debug routes, dependency
+        confusions) become easy targets. Always pair public tunnels with auth — header check,
+        CIDR/country allowlist, or OIDC.
+      </div>
     </div>
   )
 }
@@ -347,13 +398,16 @@ function SelectorPill({ label, count, active, onClick, entry, onBadgeClick }: Pi
       >
         {count}
       </span>
-      {showBadge && entry && (
+      {showBadge && entry && (() => {
+        const isTs = entry.tunnelMode === 'tailscale-system' || entry.tunnelMode === 'tailscale-ephemeral'
+        const accent = isTs ? '#5e64f4' : '#f6821f'
+        return (
         <span
           role="button"
           tabIndex={0}
           onClick={(e) => { e.stopPropagation(); onBadgeClick!() }}
           onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.stopPropagation(); e.preventDefault(); onBadgeClick!() } }}
-          title={`Cloudflare tunnel: ${entry.tunnelMode}${entry.tunnelName ? ' · ' + entry.tunnelName : ''} · click for details`}
+          title={`${isTs ? 'Tailscale Funnel' : 'Cloudflare tunnel'}: ${entry.tunnelMode}${entry.tunnelName ? ' · ' + entry.tunnelName : ''} · click for details`}
           style={{
             display: 'inline-flex',
             alignItems: 'center',
@@ -364,17 +418,18 @@ function SelectorPill({ label, count, active, onClick, entry, onBadgeClick }: Pi
             padding: '1px 5px 1px 4px',
             borderRadius: '3px',
             background: '#fff',
-            color: '#f6821f',
-            border: '1px solid color-mix(in srgb, #f6821f 35%, transparent)',
+            color: accent,
+            border: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`,
             cursor: 'pointer',
           }}
         >
-          <img src="/cloudflare.svg" alt="" height={9} style={{ display: 'block' }} />
-          <span style={{ borderLeft: '1px solid color-mix(in srgb, #f6821f 35%, transparent)', paddingLeft: '4px' }}>
+          <img src={isTs ? '/tailscale-mark.png' : '/cloudflare.svg'} alt="" height={9} style={{ display: 'block' }} />
+          <span style={{ borderLeft: `1px solid color-mix(in srgb, ${accent} 35%, transparent)`, paddingLeft: '4px' }}>
             {entry.tunnelMode}
           </span>
         </span>
-      )}
+        )
+      })()}
     </button>
   )
 }

@@ -185,7 +185,7 @@ internal sealed class CloudflaredLifecycleHook(
             {
                 if (string.IsNullOrEmpty(ann.Hostname) && ReferenceEquals(ann.Tunnel, tunnel))
                 {
-                    ann.Hostname = entry.Hostname;
+                    ann.Hostname = entry.Hostname ?? string.Empty;
                 }
             }
         }
@@ -203,6 +203,7 @@ internal sealed class CloudflaredLifecycleHook(
                     TunnelMode = mode,
                     TunnelName = tunnel.ApiTunnelName ?? tunnel.Name,
                     PublicUrl = string.IsNullOrEmpty(entry.Hostname) ? null : $"https://{entry.Hostname}",
+                    PublicExpose = true,
                 });
             }
         }

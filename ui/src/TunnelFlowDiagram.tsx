@@ -9,7 +9,7 @@ interface Props {
 interface Node {
   label: string
   sub?: string | null
-  icon: 'user' | 'cf' | 'cloudflared' | 'inspector' | 'upstream'
+  icon: 'user' | 'cf' | 'cloudflared' | 'ts' | 'tailscaled' | 'inspector' | 'upstream'
   highlight?: boolean
 }
 
@@ -20,6 +20,15 @@ export function TunnelFlowDiagram({ mode, publicUrl, tunnelName, proxyPort, upst
     if (mode === 'standalone' || !mode) {
       return [
         { icon: 'user', label: 'You', sub: 'http client' },
+        inspector,
+        upstreamNode,
+      ]
+    }
+    if (mode === 'tailscale-system' || mode === 'tailscale-ephemeral') {
+      return [
+        { icon: 'user', label: 'You', sub: stripScheme(publicUrl ?? '') || 'http client' },
+        { icon: 'ts', label: 'Tailscale', sub: publicUrl ? new URL(publicUrl).host : null, highlight: true },
+        { icon: 'tailscaled', label: 'tailscaled', sub: mode === 'tailscale-ephemeral' ? 'userspace · ephemeral' : 'system daemon' },
         inspector,
         upstreamNode,
       ]
@@ -113,6 +122,14 @@ function NodeIcon({ kind, highlight }: { kind: Node['icon']; highlight: boolean 
   const color = highlight ? '#f6821f' : 'var(--accent)'
   const size = 18
   if (kind === 'cf') return <img src="/cloudflare.svg" alt="" height={14} />
+  if (kind === 'ts') return <img src="/tailscale-mark.png" alt="" height={18} />
+  if (kind === 'tailscaled') return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.7}>
+      <circle cx="6" cy="6" r="1.6" /><circle cx="12" cy="6" r="1.6" /><circle cx="18" cy="6" r="1.6" />
+      <circle cx="6" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="18" cy="12" r="1.6" />
+      <circle cx="6" cy="18" r="1.6" /><circle cx="12" cy="18" r="1.6" /><circle cx="18" cy="18" r="1.6" />
+    </svg>
+  )
   if (kind === 'user') return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={1.7}>
       <circle cx="12" cy="8" r="3.6" /><path d="M4 21c1.5-4 4.5-6 8-6s6.5 2 8 6" strokeLinecap="round" />

@@ -18,6 +18,9 @@ public sealed class TapInspectorOptions
     public string Mode { get; init; } = "standalone";
     public TapAuthOptions? Auth { get; init; }
 
+    /// <summary>"cloudflare" | "tailscale" | null. Gates provider-specific tunnel endpoints.</summary>
+    public string? Provider { get; init; }
+
     // Optional per-inspector tunnel context — used to surface tunnel info via /api/tunnel/details.
     public string? TunnelMode { get; init; }
     public string? TunnelName { get; init; }
@@ -26,6 +29,9 @@ public sealed class TapInspectorOptions
     public string? TunnelAccountId { get; init; }
     public string? TunnelTunnelId { get; init; }
     public string? TunnelApiToken { get; init; }
+
+    /// <summary>Tailscale daemon socket path (ephemeral mode); empty/null = system default.</summary>
+    public string? TunnelSocketPath { get; init; }
 
     /// <summary>
     /// When true, ASP.NET Core's framework log categories (Microsoft.*, System.*) are
@@ -55,6 +61,7 @@ public static class TapInspectorHost
             Ingress = ingress,
             Mode = config["Inspector:Mode"] ?? "standalone",
             Auth = auth.AnyConfigured ? auth : null,
+            Provider = config["Inspector:Provider"],
             TunnelMode = config["Inspector:Tunnel:Mode"],
             TunnelName = config["Inspector:Tunnel:Name"],
             TunnelResourceName = config["Inspector:Tunnel:ResourceName"],
@@ -62,6 +69,7 @@ public static class TapInspectorHost
             TunnelAccountId = config["Inspector:Tunnel:AccountId"],
             TunnelTunnelId = config["Inspector:Tunnel:TunnelId"],
             TunnelApiToken = config["Inspector:Tunnel:ApiToken"],
+            TunnelSocketPath = config["Inspector:Tunnel:SocketPath"],
         };
     }
 
@@ -115,6 +123,9 @@ public static class TapInspectorHost
         };
         builder.Services.AddSingleton(cloudflareOptions);
         builder.Services.AddHttpClient<CloudflareClient>();
+
+        builder.Services.AddSingleton(new TailscaleOptions { SocketPath = options.TunnelSocketPath });
+        builder.Services.AddSingleton<TailscaleClient>();
 
         builder.Services.AddReverseProxy().LoadFromMemory(routes, clusters);
 
@@ -213,7 +224,10 @@ public static class TapInspectorHost
             () => Results.Json(ingress, InspectorIngressJsonContext.Default.InspectorIngressEntryArray));
 
         ep.MapGet("/api/config", () => Results.Json(
-            new InspectorConfig(proxyPort, ingress, cloudflareOptions.IsConfigured ? "cloudflare-api" : "token", options.Mode),
+            new InspectorConfig(proxyPort, ingress, cloudflareOptions.IsConfigured ? "cloudflare-api" : "token", options.Mode)
+            {
+                Provider = options.Provider,
+            },
             InspectorConfigJsonContext.Default.InspectorConfig));
 
         ep.MapGet("/api/tunnel/details", async (CloudflareClient cf, CancellationToken ct) =>
@@ -221,6 +235,26 @@ public static class TapInspectorHost
             if (string.IsNullOrEmpty(options.TunnelMode))
             {
                 return Results.NotFound(new { error = "No tunnel attached to this inspector." });
+            }
+
+            // Tailscale: return the basic Cloudflare-shaped context (so the existing UI keeps working)
+            // — the rich Tailscale-specific snapshot is served separately at /api/tunnel/tailscale/status.
+            if (!string.Equals(options.Provider, "cloudflare", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.Json(new TunnelContext(
+                    Mode: options.TunnelMode!,
+                    Name: options.TunnelName ?? options.TunnelResourceName ?? "tunnel",
+                    ResourceName: options.TunnelResourceName ?? "",
+                    PublicUrl: options.TunnelPublicUrl,
+                    AccountId: null,
+                    TunnelId: null,
+                    DashboardUrl: null,
+                    ApiResolved: false,
+                    Status: null,
+                    CreatedAt: null,
+                    Connections: null,
+                    Error: null
+                ), InspectorConfigJsonContext.Default.TunnelContext);
             }
 
             var dashboard = !string.IsNullOrEmpty(options.TunnelAccountId) && !string.IsNullOrEmpty(options.TunnelTunnelId)
@@ -264,8 +298,25 @@ public static class TapInspectorHost
             ), InspectorConfigJsonContext.Default.TunnelContext);
         });
 
+        // Tailscale-only: live daemon status + active funnel/serve rules.
+        ep.MapGet("/api/tunnel/tailscale/status", async (TailscaleClient ts, CancellationToken ct) =>
+        {
+            if (!string.Equals(options.Provider, "tailscale", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.NotFound(new { error = $"Provider '{options.Provider ?? "none"}' is not Tailscale." });
+            }
+            var snap = await ts.GetSnapshotAsync(ct);
+            return Results.Json(snap, TailscaleJsonContext.Default.TailscaleSnapshot);
+        });
+
+        // Cloudflare-only: read or modify named-tunnel ingress rules.
+        // For other providers (Tailscale Funnel) ingress mutation is meaningless — one node = one URL.
         ep.MapGet("/api/tunnel/ingress", async (CloudflareClient cf, CancellationToken ct) =>
         {
+            if (!string.Equals(options.Provider, "cloudflare", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.NotFound(new { error = $"Provider '{options.Provider ?? "none"}' does not support hostname-based ingress." });
+            }
             if (!cloudflareOptions.IsConfigured) return Results.BadRequest(new { error = "Cloudflare API not configured." });
             try
             {
@@ -281,6 +332,10 @@ public static class TapInspectorHost
 
         ep.MapPost("/api/tunnel/ingress", async (UpsertHostnameRequest body, CloudflareClient cf, CancellationToken ct) =>
         {
+            if (!string.Equals(options.Provider, "cloudflare", StringComparison.OrdinalIgnoreCase))
+            {
+                return Results.NotFound(new { error = $"Provider '{options.Provider ?? "none"}' does not support hostname-based ingress." });
+            }
             if (!cloudflareOptions.IsConfigured) return Results.BadRequest(new { error = "Cloudflare API not configured." });
             if (string.IsNullOrWhiteSpace(body.Hostname)) return Results.BadRequest(new { error = "hostname is required" });
             try

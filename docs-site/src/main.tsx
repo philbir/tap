@@ -21,7 +21,7 @@ type DocSection = {
 const features: Feature[] = [
   {
     title: "Tunnel without ceremony",
-    text: "Use free TryCloudflare URLs for quick sharing, dashboard connector tokens for existing tunnels, or API-managed tunnels when Tap should create DNS for you.",
+    text: "Use free TryCloudflare URLs, dashboard connector tokens, API-managed Cloudflare DNS, or Tailscale Serve/Funnel when your tailnet is the right boundary.",
     glyph: "T",
   },
   {
@@ -46,7 +46,7 @@ const features: Feature[] = [
   },
   {
     title: "Built for local trust",
-    text: "Keep the UI local, put auth on public proxy traffic, and combine header, CIDR, country, and OIDC checks when the tunnel exposes sensitive services.",
+    text: "Keep the UI local, default Tailscale to tailnet-only Serve, put auth on public proxy traffic, and combine header, CIDR, country, and OIDC checks.",
     glyph: "S",
   },
 ];
@@ -74,13 +74,19 @@ const docs: DocSection[] = [
     id: "cli",
     eyebrow: "Terminal",
     title: "CLI reference",
-    body: "The CLI is for one upstream URL at a time. Start local-only, add a quick tunnel, or let Tap provision Cloudflare state for you.",
+    body: "The CLI is for one upstream URL at a time. Start local-only, add Cloudflare, or route through Tailscale Serve/Funnel.",
   },
   {
     id: "cloudflare",
     eyebrow: "Cloudflare",
     title: "Tunnel setup",
     body: "Existing-tunnel mode uses a Cloudflare Tunnel you have already created. API-managed mode needs a Cloudflare API token that can edit tunnels and DNS.",
+  },
+  {
+    id: "tailscale",
+    eyebrow: "Tailscale",
+    title: "Serve and Funnel",
+    body: "Tailscale support routes Tap through your tailnet. Serve is private by default; Funnel is public and should be paired with auth.",
   },
   {
     id: "auth",
@@ -92,19 +98,19 @@ const docs: DocSection[] = [
     id: "architecture",
     eyebrow: "Internals",
     title: "Architecture",
-    body: "Tap has two entry points, a shared inspector host, and an optional cloudflared tunnel in front of the proxy port.",
+    body: "Tap has two entry points, a shared inspector host, and optional Cloudflare or Tailscale tunnel providers in front of the proxy port.",
   },
   {
     id: "modes",
     eyebrow: "Routing",
     title: "Tunnel modes",
-    body: "Tap scales from a local capture proxy to Cloudflare-managed tunnels with DNS and dynamic hostnames.",
+    body: "Tap scales from a local capture proxy to Cloudflare-managed tunnels, Tailscale private Serve, and public Funnel.",
   },
   {
     id: "config",
     eyebrow: "Operations",
     title: "Configuration",
-    body: "Most configuration is written by the AppHost, with Cloudflare credentials and optional auth coming from normal .NET configuration.",
+    body: "Most configuration is written by the AppHost, with provider credentials, profile fields, and optional auth coming from normal .NET configuration.",
   },
 ];
 
@@ -121,6 +127,13 @@ const commands = {
   --account "$CLOUDFLARE_ACCOUNT_ID" \\
   --api-managed tap-cli \\
   --dynamic example.com`,
+  cliTailscaleServe: `tap run http://localhost:3000 --tailscale`,
+  cliTailscalePublic: `tap run http://localhost:3000 --tailscale --tailscale-public \\
+  --auth-header "X-Tap-Key=$TAP_KEY"`,
+  cliTailscaleEphemeral: `export TAILSCALE_AUTHKEY=tskey-...
+tap run http://localhost:3000 --tailscale --tailscale-port 8443`,
+  cliTailscaleDocker: `export TAILSCALE_AUTHKEY=tskey-...
+tap run http://localhost:3000 --tailscale --docker`,
   cliConfig: `{
   "upstream": "http://localhost:3000"
 }`,
@@ -163,6 +176,28 @@ api.WithTap(tap, "api-local.example.com");`,
         .WithDynamicHostname("example.com", prefix: "api-", suffix: "-tap"));
 
 api.WithTap(tap);`,
+  tailscaleServe: `var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleServe("tap-serve", t => t.WithSystemDaemon());
+
+api.WithTap(tap);`,
+  tailscalePublic: `var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleFunnel("tap-funnel", t => t.WithSystemDaemon())
+    .WithHeaderAuth("X-Tap-Key", builder.Configuration["Tap:Key"]!);
+
+api.WithTap(tap);`,
+  tailscaleEphemeral: `var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleServe("tap-ts-ephemeral", t => t
+        .WithEphemeralDaemon(builder.Configuration["Tailscale:AuthKey"]!)
+        .WithFunnelPort(8443));
+
+api.WithTap(tap);`,
+  tailscaleDocker: `var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleServe("tap-ts-docker", t => t
+        .WithEphemeralDaemon(builder.Configuration["Tailscale:AuthKey"]!)
+        .WithFunnelPort(10000),
+        hostMode: TailscaleHostMode.Docker);
+
+api.WithTap(tap);`,
   aspireAuth: `var tap = builder.AddTap<Projects.Tap_Server>()
     .WithHeaderAuth("X-Tap-Key", builder.Configuration["Tap:Key"]!)
     .WithIpAllowList("203.0.113.0/24")
@@ -181,6 +216,17 @@ dotnet user-secrets set Cloudflare:ApiToken "<api-token>" \\
 
 dotnet user-secrets set Cloudflare:AccountId "<account-id>" \\
   --project samples/Sample.AppHost`,
+  tailscaleSecrets: `dotnet user-secrets set Tailscale:UseSystem "true" \\
+  --project samples/Sample.AppHost
+
+dotnet user-secrets set Tailscale:AuthKey "<tskey-...>" \\
+  --project samples/Sample.AppHost
+
+dotnet user-secrets set Tailscale:UseDocker "true" \\
+  --project samples/Sample.AppHost`,
+  sampleScenarios: `dotnet run --project samples/Sample.AppHost -- --scenarios tailscale
+dotnet run --project samples/Sample.AppHost -- --scenarios cloudflare
+dotnet run --project samples/Sample.AppHost -- --scenarios all`,
 };
 
 const App = () => (
@@ -188,6 +234,7 @@ const App = () => (
     <SiteNav />
     <main>
       <Hero />
+      <PublicTunnelWarning />
       <FeatureGrid />
       <FlowSection />
       <Docs />
@@ -209,6 +256,7 @@ const SiteNav = () => (
         <a href="#entry-points">CLI/Aspire</a>
         <a href="#cli">CLI</a>
         <a href="#cloudflare">Cloudflare</a>
+        <a href="#tailscale">Tailscale</a>
         <a href="#auth">Auth</a>
         <a href="#architecture">Architecture</a>
       <a className="nav-cta" href={repoUrl}>
@@ -223,9 +271,9 @@ const Hero = () => (
     <div className="hero-copy">
       <div className="eyebrow">
         <span className="spark" />
-        Aspire-friendly Cloudflare Tunnel inspector
+        Aspire-friendly tunnel inspector
       </div>
-      <h1>Localhost, ready for real callbacks.</h1>
+      <h1>localhost, ready for real callbacks.</h1>
       <p className="lead">
         Tap gives local services a public URL for mobile hooks, webhooks, auth redirects,
         partner integrations, and temporary demos, then captures the traffic so you can see
@@ -247,8 +295,10 @@ const Hero = () => (
         <span>CLI</span>
         <span>Aspire</span>
         <span>TryCloudflare</span>
-        <span>Existing tunnels</span>
+        <span>Tailscale Serve</span>
+        <span>Tailscale Funnel</span>
         <span>API-managed DNS</span>
+        <span>QR links</span>
         <span>HTTP replay</span>
         <span>Free as tap water</span>
       </div>
@@ -257,6 +307,32 @@ const Hero = () => (
       <source srcSet="./tap-hero-dark.png" media="(prefers-color-scheme: dark)" />
       <img src="./tap-hero.png" alt="A tap extracting traffic from a tunnel into an inspector panel" />
     </picture>
+  </section>
+);
+
+const PublicTunnelWarning = () => (
+  <section className="public-warning" aria-labelledby="public-warning-title">
+    <div className="public-warning-copy">
+      <div className="public-warning-icon" aria-hidden="true">
+        !
+      </div>
+      <div>
+        <span className="kicker">Public tunnel warning</span>
+        <h2 id="public-warning-title">Avoid public tunnels when they are not necessary.</h2>
+        <p>
+          Tap keeps Tailscale routes tailnet-only by default. When you opt into public Cloudflare tunnels
+          or Tailscale Funnel URLs, they can be probed within seconds of coming online. Put Tap auth in
+          front of the proxy, or use Cloudflare Access and WAF rules before traffic reaches your upstream.
+          Those unwanted requests are not abstract: you can watch scanner and attack attempts land directly
+          in the Inspector as soon as the tunnel is reachable.
+        </p>
+      </div>
+    </div>
+    <img
+      className="public-warning-art"
+      src="./public-tunnel-warning.png"
+      alt="A suspicious actor sending malicious traffic through a public tunnel into a computer"
+    />
   </section>
 );
 
@@ -289,7 +365,8 @@ const FlowSection = () => (
       <h2>A tunnel path you can reason about.</h2>
       <p>
         CLI and Aspire both converge on the same inspector host. If a tunnel is enabled, Cloudflare
-        reaches cloudflared, cloudflared targets Tap's proxy port, and Tap forwards to the local upstream.
+        reaches cloudflared or Tailscale reaches tailscaled; the connector targets Tap's proxy port,
+        and Tap forwards to the local upstream.
       </p>
     </div>
     <div className="entry-flow" aria-label="Tap entry point flow">
@@ -299,7 +376,7 @@ const FlowSection = () => (
       <div className="entry-node wide">Tap.Server shared inspector</div>
     </div>
     <div className="flow" aria-label="Tap request flow">
-      {["Client", "Cloudflare", "cloudflared", "Tap proxy", "Upstream"].map((step, index) => (
+      {["Client", "Cloudflare/Tailscale", "connector/daemon", "Tap proxy", "Upstream"].map((step, index) => (
         <React.Fragment key={step}>
           <div className="flow-node">{step}</div>
           {index < 4 ? <div className="flow-link" /> : null}
@@ -370,8 +447,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
           <CodeBlock title="CLI: quick public tunnel" code={commands.cliQuick} />
           <CodeBlock title="CLI: existing token tunnel" code={commands.cliToken} />
           <CodeBlock title="CLI: API-managed dynamic hostname" code={commands.cliManaged} />
+          <CodeBlock title="CLI: Tailscale Serve" code={commands.cliTailscaleServe} />
+          <CodeBlock title="CLI: Tailscale ephemeral" code={commands.cliTailscaleEphemeral} />
           <CodeBlock title="Aspire: standalone inspector" code={commands.standalone} />
           <CodeBlock title="Aspire: quick public tunnel" code={commands.quick} />
+          <CodeBlock title="Aspire: Tailscale Serve" code={commands.tailscaleServe} />
         </div>
       </section>
     );
@@ -390,12 +470,12 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
           <MiniPanel title="CLI">
             Use `tap run` when you have one upstream URL and want a tunnel or inspector immediately.
             The CLI reads flags, environment variables, and optional `tap.config`, then starts
-            cloudflared and Tap.Server for the current terminal session.
+            cloudflared or Tailscale, then starts Tap.Server for the current terminal session.
           </MiniPanel>
           <MiniPanel title="Aspire">
             Use Tap.Hosting when inspectors and tunnels are part of the app model. Aspire resolves
-            resource endpoints, shows URLs in the dashboard, and runs lifecycle provisioning before
-            cloudflared starts.
+            resource endpoints, shows URLs in the dashboard, and runs provider lifecycle provisioning
+            before cloudflared or the Tailscale bootstrapper starts.
           </MiniPanel>
         </div>
         <div className="code-grid">
@@ -422,7 +502,10 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             ["Token tunnel", "Runs an existing dashboard-managed Cloudflare Tunnel connector token."],
             ["API-managed", "Tap creates or reuses a named tunnel through the Cloudflare API."],
             ["Dynamic hostname", "Tap mints a fresh hostname under your zone and creates DNS."],
-            ["Docker connector", "Use --docker to run cloudflared as cloudflare/cloudflared:latest."],
+            ["Tailscale Serve", "Private tailnet-only HTTPS via tailscale serve. This is the default for --tailscale."],
+            ["Tailscale Funnel", "Public internet URL via tailscale funnel. Pair it with auth."],
+            ["Tailscale ephemeral", "Spawn a userspace tailscaled per run from --tailscale-authkey or TAILSCALE_AUTHKEY."],
+            ["Docker connector", "Use --docker to run cloudflare/cloudflared or tailscale/tailscale, depending on the active provider."],
           ].map(([name, body]) => (
             <article className="mode-card" key={name}>
               <strong>{name}</strong>
@@ -442,8 +525,14 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             ["--account", "Cloudflare account id."],
             ["--api-managed", "Named tunnel to create or reuse."],
             ["--dynamic", "Zone where Tap should mint a fresh hostname."],
-            ["--docker", "Run cloudflared through Docker host networking."],
+            ["--docker", "Run the active provider in Docker: cloudflare/cloudflared or tailscale/tailscale."],
             ["--auto-install", "Install cloudflared if missing."],
+            ["--tailscale", "Route through Tailscale. Default exposure is tailnet-only Serve."],
+            ["--tailscale-public", "Switch from private Serve to public Funnel. Pair with auth flags."],
+            ["--tailscale-port", "Tailscale HTTPS port. Allowed: 443, 8443, 10000."],
+            ["--tailscale-authkey", "Auth key for ephemeral userspace tailscaled. Env: TAILSCALE_AUTHKEY."],
+            ["--tailscale-system", "Force system mode even when an auth key exists in env or profile."],
+            ["--tailscale-login-server", "Override the coordination server for Headscale or other control planes."],
             ["--config", "Load defaults from a JSON tap.config file."],
           ].map(([key, value]) => (
             <div className="config-row" role="row" key={key}>
@@ -455,6 +544,8 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
         <div className="code-grid">
           <CodeBlock title="tap.config" code={commands.cliConfig} />
           <CodeBlock title="Install cloudflared" code="tap install-cloudflared" />
+          <CodeBlock title="Tailscale public Funnel" code={commands.cliTailscalePublic} />
+          <CodeBlock title="Tailscale Docker mode" code={commands.cliTailscaleDocker} />
         </div>
       </section>
     );
@@ -464,6 +555,7 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     return (
       <section className="doc-block" id={doc.id}>
         <DocHeader doc={doc} />
+        <PublicTunnelInlineWarning provider="Cloudflare" />
         <Screenshot
           src="./screenshots/tab-tunnel-dialog.png"
           alt="Tap tunnel dialog showing Cloudflare edge, cloudflared, inspector, and upstream"
@@ -504,6 +596,90 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
         <p className="doc-note">
           Cloudflare docs: <a href="https://developers.cloudflare.com/tunnel/advanced/tunnel-tokens/">tunnel tokens</a>
           {" "}and <a href="https://developers.cloudflare.com/fundamentals/api/reference/permissions/">API token permissions</a>.
+        </p>
+      </section>
+    );
+  }
+
+  if (doc.id === "tailscale") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <PublicTunnelInlineWarning provider="Tailscale Funnel" />
+        <div className="callout warning-callout">
+          <strong>Default to private</strong>
+          <p>
+            `tap run --tailscale` and `WithTailscaleServe(...)` use `tailscale serve`, which is
+            reachable only from devices in your tailnet. Switch to `tailscale funnel` only when you
+            need an internet-facing URL, and pair public Funnel with Tap auth.
+          </p>
+        </div>
+        <div className="mode-grid">
+          {[
+            ["What Tailscale adds", "Tailscale gives each machine a stable HTTPS name like https://machine.tailnet.ts.net. Tap points that HTTPS endpoint at the inspector proxy, then forwards captured traffic to your upstream."],
+            ["Serve", "Private HTTPS inside your tailnet. This is the safe default for CLI and Aspire."],
+            ["Funnel", "Public HTTPS on the internet through your tailnet node. New public hostnames are scanned quickly, so protect them with header, CIDR, country, or OIDC auth."],
+            ["One node, one upstream", "A Tailscale tunnel resource represents one endpoint and one upstream. Register a second Tailscale resource when you need another upstream."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="step-list">
+          <MiniPanel title="System daemon">
+            Reuse the host's logged-in `tailscaled`. Install the `tailscale` CLI, run `tailscale up`,
+            enable HTTPS Certificates in the admin console, then use `--tailscale` or
+            `WithTailscaleServe(..., t =&gt; t.WithSystemDaemon())`.
+          </MiniPanel>
+          <MiniPanel title="Ephemeral userspace">
+            Supply an auth key and Tap starts a per-session userspace `tailscaled` with
+            `--tun=userspace-networking`. The node joins for the run and disappears when Tap stops.
+          </MiniPanel>
+          <MiniPanel title="Docker host mode">
+            Pair an auth key with `--docker` in the CLI or `hostMode: TailscaleHostMode.Docker` in
+            Aspire to run `tailscale/tailscale`. This is the portable choice when no host
+            `tailscaled` binary is available.
+          </MiniPanel>
+          <MiniPanel title="Profiles and Config tab">
+            Saved tunnel profiles now include Tailscale exposure, daemon mode, auth key, login
+            server, and port. The inspector's Config tab exposes those fields alongside the
+            Cloudflare guide and profile list.
+          </MiniPanel>
+        </div>
+        <div className="config-table" role="table" aria-label="Tailscale setup checklist">
+          {[
+            ["Install", "Host modes need tailscale on PATH. Docker mode needs Docker and an auth key."],
+            ["HTTPS Certificates", "Enable once under Tailscale admin DNS. Required for Serve and Funnel."],
+            ["Funnel ACL", "For public Funnel, grant nodeAttrs attr funnel to the node or tag."],
+            ["Auth key", "Required for ephemeral process and Docker modes. Prefer reusable, ephemeral keys with the tags you need."],
+            ["Ports", "Tailscale allows 443, 8443, and 10000."],
+            ["Windows", "System mode is supported. Ephemeral process mode is not; use Docker mode with an auth key."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="CLI: private Serve" code={commands.cliTailscaleServe} />
+          <CodeBlock title="CLI: public Funnel" code={commands.cliTailscalePublic} />
+          <CodeBlock title="CLI: ephemeral userspace" code={commands.cliTailscaleEphemeral} />
+          <CodeBlock title="CLI: Docker mode" code={commands.cliTailscaleDocker} />
+          <CodeBlock title="Aspire: private Serve" code={commands.tailscaleServe} />
+          <CodeBlock title="Aspire: public Funnel + auth" code={commands.tailscalePublic} />
+          <CodeBlock title="Aspire: ephemeral userspace" code={commands.tailscaleEphemeral} />
+          <CodeBlock title="Aspire: Docker mode" code={commands.tailscaleDocker} />
+          <CodeBlock title="Sample AppHost secrets" code={commands.tailscaleSecrets} />
+          <CodeBlock title="Sample scenario filter" code={commands.sampleScenarios} />
+        </div>
+        <p className="doc-note">
+          The inspector Tunnel dialog reads live Tailscale state from the active daemon: backend
+          state, MagicDNS name, tailnet, IPs, version, and current `serve` / `funnel` rules. The QR
+          tab polls until fresh Tailscale hostnames resolve, then renders scannable links for phone
+          testing.
         </p>
       </section>
     );
@@ -554,6 +730,9 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             ["Token", "Dashboard-managed connector token."],
             ["API-managed", "Named tunnel, credentials file, DNS CNAMEs."],
             ["Dynamic", "Fresh per-run hostnames under your zone."],
+            ["Tailscale Serve", "Tailnet-only HTTPS through the node's MagicDNS name. Default for Tailscale."],
+            ["Tailscale Funnel", "Public HTTPS through Tailscale. Opt in only when internet access is needed."],
+            ["Tailscale ephemeral", "Temporary userspace node from an auth key, as a host process or Docker container."],
           ].map(([name, body]) => (
             <article className="mode-card" key={name}>
               <strong>{name}</strong>
@@ -562,6 +741,7 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
           ))}
         </div>
         <CodeBlock title="API-managed dynamic hostnames" code={commands.managed} />
+        <CodeBlock title="Tailscale private Serve" code={commands.tailscaleServe} />
       </section>
     );
   }
@@ -584,22 +764,23 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
           <div className="diagram-node">Tap.Server shared inspector</div>
           <div className="diagram-row">
             <span>cloudflared</span>
+            <span>tailscaled</span>
             <span>React UI + API</span>
             <span>YARP upstream proxy</span>
           </div>
         </div>
         <div className="architecture-grid">
           <MiniPanel title="Tap.Hosting">
-            Aspire extension methods register the inspector project, cloudflared executable, ingress
-            metadata, parent relationships, and Cloudflare tunnel annotations.
+            Aspire extension methods register the inspector project, provider executable resources,
+            ingress metadata, parent relationships, and provider tunnel annotations.
           </MiniPanel>
           <MiniPanel title="Tap.Cli">
             Terminal entry point for one upstream URL. It builds the same inspector options, can
             provision tunnels, and runs Tap.Server directly.
           </MiniPanel>
           <MiniPanel title="Lifecycle hook">
-            Before startup, Tap verifies cloudflared, resolves or creates tunnels, mints hostnames,
-            ensures DNS records, and back-fills Aspire URLs.
+            Before startup, Tap verifies provider CLIs, resolves or creates Cloudflare tunnels,
+            mints hostnames, configures Tailscale Serve/Funnel, and back-fills Aspire URLs.
           </MiniPanel>
           <MiniPanel title="Tap.Server">
             ASP.NET Core binds a proxy port and UI port. The proxy branch captures through middleware,
@@ -607,7 +788,7 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
           </MiniPanel>
           <MiniPanel title="Inspector UI">
             React reads request history, listens to `/api/stream`, replays requests, and surfaces tunnel
-            details through the local UI port.
+            details, QR links, and provider-specific status through the local UI port.
           </MiniPanel>
         </div>
         <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/ARCHITECTURE.md">
@@ -624,9 +805,14 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
         {[
           ["Cloudflare:TunnelToken", "Connector token for token tunnels."],
           ["Cloudflare:ApiToken", "API-managed tunnels, DNS, and tunnel details."],
+          ["Tailscale:AuthKey", "Auth key for ephemeral userspace or Docker Tailscale nodes."],
+          ["Tailscale:UseSystem", "Sample AppHost flag that enables the system-daemon Tailscale scenario."],
+          ["Tailscale:UseDocker", "Sample AppHost flag that enables the Tailscale Docker scenario."],
           ["Inspector__ProxyPort", "Captured application traffic."],
           ["Inspector__UiPort", "Local UI, REST API, and SSE stream."],
+          ["Inspector__Provider", "cloudflare or tailscale; drives provider-specific UI and endpoints."],
           ["Inspector__Ingress", "Serialized hostname-to-upstream routing table."],
+          ["Inspector__Tunnel__*", "Provider context for tunnel details, Tailscale socket path, mode, and status."],
           ["Inspector__Auth__*", "Optional header, CIDR, country, and OIDC checks."],
         ].map(([key, value]) => (
           <div className="config-row" role="row" key={key}>
@@ -645,6 +831,17 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     </section>
   );
 };
+
+const PublicTunnelInlineWarning = ({ provider }: { provider: string }) => (
+  <div className="callout danger-callout" role="alert">
+    <strong>{provider} public exposure needs auth or edge rules</strong>
+    <p>
+      Avoid running public tunnels without Tap auth, Cloudflare Access, or Cloudflare WAF rules.
+      Automated probes often arrive seconds after the hostname is live, and every attempt is visible
+      in the Inspector request log.
+    </p>
+  </div>
+);
 
 const DocHeader = ({ doc }: { doc: DocSection }) => (
   <div className="doc-header">

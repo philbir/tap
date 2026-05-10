@@ -1,11 +1,16 @@
-using Aspire.Hosting.ApplicationModel;
+using Aspire.Hosting.Tunnels;
 using Tap.Core.Cloudflared;
 
 namespace Aspire.Hosting.Cloudflared;
 
 public sealed class CloudflaredTunnelResource(string name, string command, string workingDirectory)
-    : ExecutableResource(name, command, workingDirectory)
+    : TapTunnelResource(name, command, workingDirectory)
 {
+    public override TunnelRoutingModel RoutingModel =>
+        IsQuickTunnel ? TunnelRoutingModel.SinglePublicEndpoint : TunnelRoutingModel.HostnameMultiplexed;
+
+    public override string ProviderId => "cloudflare";
+
     public string DockerImage { get; internal set; } = "cloudflare/cloudflared:latest";
 
     public string? Token { get; internal set; }
@@ -15,14 +20,6 @@ public sealed class CloudflaredTunnelResource(string name, string command, strin
     public string? TunnelId { get; internal set; }
 
     public string? CredentialsFilePath { get; internal set; }
-
-    public List<CloudflaredIngressEntry> IngressEntries { get; } = [];
-
-    public int? InspectorProxyPort { get; internal set; }
-
-    public int? InspectorUiPort { get; internal set; }
-
-    internal TapHandle? AttachedTap { get; set; }
 
     // Cloudflare API-managed tunnel: lifecycle hook will look up or create the tunnel
     // and write credentials before cloudflared launches.
@@ -48,11 +45,4 @@ public sealed class CloudflaredTunnelResource(string name, string command, strin
 
     /// <summary>If true, the lifecycle hook will install cloudflared via the OS package manager when missing.</summary>
     public bool AutoInstall { get; internal set; }
-}
-
-public sealed class CloudflaredIngressEntry(string hostname, IResourceWithEndpoints target, string? endpointName)
-{
-    public string Hostname { get; internal set; } = hostname;
-    public IResourceWithEndpoints Target { get; } = target;
-    public string? EndpointName { get; } = endpointName;
 }

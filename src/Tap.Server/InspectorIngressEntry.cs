@@ -14,6 +14,11 @@ public sealed record InspectorIngressEntry(
 
     [JsonPropertyName("publicUrl")]
     public string? PublicUrl { get; init; }
+
+    /// <summary>True when this entry is reachable from the public internet (any Cloudflare tunnel,
+    /// or Tailscale Funnel). Drives the inspector UI's exposure warning banner.</summary>
+    [JsonPropertyName("publicExpose")]
+    public bool PublicExpose { get; init; }
 }
 
 [JsonSerializable(typeof(InspectorIngressEntry))]
@@ -25,7 +30,12 @@ public sealed record InspectorConfig(
     [property: JsonPropertyName("proxyPort")] int ProxyPort,
     [property: JsonPropertyName("ingress")] InspectorIngressEntry[] Ingress,
     [property: JsonPropertyName("apiMode")] string ApiMode,
-    [property: JsonPropertyName("mode")] string Mode);
+    [property: JsonPropertyName("mode")] string Mode)
+{
+    /// <summary>"cloudflare" | "tailscale" | null. Lets the UI gate provider-specific panes.</summary>
+    [JsonPropertyName("provider")]
+    public string? Provider { get; init; }
+}
 
 public sealed record UpsertHostnameRequest(
     [property: JsonPropertyName("hostname")] string Hostname);

@@ -38,3 +38,9 @@ appsettings.Development.json
 artifacts/
 *.nupkg
 *.snupkg
+
+# Tailscale cert files written into CWD by `tailscale cert <dns>` during funnel pre-warm
+# (the CLI runner and AppHost bootstrapper both invoke this). The hostname is identifying,
+# so don't commit them.
+*.ts.net.crt
+*.ts.net.key

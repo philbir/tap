@@ -16,6 +16,45 @@ public enum TunnelMode
     ApiManaged,
     /// <summary>Same as ApiManaged but hostname is minted on each run.</summary>
     Dynamic,
+    /// <summary>Tailscale Funnel — system tailscaled (CLI) or ephemeral userspace (AppHost).</summary>
+    Tailscale,
+}
+
+public enum TailscaleDaemonMode
+{
+    /// <summary>Use the host's already-running tailscaled.</summary>
+    System,
+    /// <summary>Spin up a per-session userspace tailscaled with an auth key.</summary>
+    Ephemeral,
+}
+
+public enum TailscaleHostMode
+{
+    /// <summary>Spawn `tailscaled` as a host process. Requires the binary on PATH (brew, apt, etc.).</summary>
+    Process,
+    /// <summary>Run `tailscale/tailscale` in Docker. Useful when the host has only the macOS GUI client (no `tailscaled` binary).</summary>
+    Docker,
+}
+
+/// <summary>Tailscale-specific helpers shared between the AppHost lifecycle hook and the CLI runner.</summary>
+public static class TailscaleHelpers
+{
+    /// <summary>
+    /// In Docker mode the funnel target is reached from inside the container, where
+    /// `localhost` is the container itself. Rewrite to Docker's `host.docker.internal`
+    /// alias so the container can reach the host's inspector port.
+    /// </summary>
+    public static string RewriteUpstreamForDocker(string upstream)
+    {
+        if (!Uri.TryCreate(upstream, UriKind.Absolute, out var uri)) return upstream;
+        if (!string.Equals(uri.Host, "localhost", StringComparison.OrdinalIgnoreCase) &&
+            uri.Host != "127.0.0.1" && uri.Host != "::1")
+        {
+            return upstream;
+        }
+        var port = uri.IsDefaultPort ? "" : $":{uri.Port}";
+        return $"{uri.Scheme}://host.docker.internal{port}{uri.PathAndQuery}";
+    }
 }
 
 public sealed class TunnelSpec

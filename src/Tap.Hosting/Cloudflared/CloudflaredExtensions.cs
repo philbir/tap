@@ -1,6 +1,7 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Cloudflared;
 using Aspire.Hosting.Lifecycle;
+using Aspire.Hosting.Tunnels;
 using Microsoft.Extensions.DependencyInjection;
 using Tap.Core.Cloudflared;
 
@@ -241,7 +242,7 @@ public static class CloudflaredExtensions
         tunnel.Resource.InspectorProxyPort = tap.Annotation.ProxyPort;
         tunnel.Resource.InspectorUiPort = tap.Annotation.UiPort;
         tunnel.Resource.AttachedTap = tap;
-        tap.AttachedTunnel = tunnel;
+        tap.AttachedTunnel = tunnel.Resource;
 
         // Mirror any ingress entries that were attached to the tunnel before this call.
         foreach (var entry in tunnel.Resource.IngressEntries)
@@ -266,9 +267,12 @@ public static class CloudflaredExtensions
         // resolve via Cloudflare API, and link to the dashboard.
         tap.WithEnvironment(ctx =>
         {
+            ctx.EnvironmentVariables["Inspector__Provider"] = tunnelResource.ProviderId;
             ctx.EnvironmentVariables["Inspector__Tunnel__Mode"] = TunnelModeOf(tunnelResource);
             ctx.EnvironmentVariables["Inspector__Tunnel__Name"] = tunnelResource.ApiTunnelName ?? tunnelResource.Name;
             ctx.EnvironmentVariables["Inspector__Tunnel__ResourceName"] = tunnelResource.Name;
+            // Cloudflare tunnels are always public.
+            ctx.EnvironmentVariables["Inspector__Tunnel__PublicExpose"] = "true";
 
             var publicUrl = ResolvePublicUrl(tunnelResource);
             if (!string.IsNullOrEmpty(publicUrl))
@@ -349,9 +353,10 @@ public static class CloudflaredExtensions
                 + "Either pass a hostname or call .WithDynamicHostname(zone)/.WithQuickTunnel(...) on the tunnel.");
         }
 
-        var entry = new CloudflaredIngressEntry(hostname ?? string.Empty, builder.Resource, endpointName);
+        var entry = new TapTunnelIngress(builder.Resource, endpointName, hostname);
         tunnel.Resource.IngressEntries.Add(entry);
         builder.WithAnnotation(new CloudflareTunnelAnnotation(tunnel.Resource, hostname ?? string.Empty));
+        builder.WithAnnotation(new TapTunnelAnnotation(tunnel.Resource, hostname));
 
         // If a tap is attached to this tunnel, mirror the ingress so it can proxy + capture
         // the same traffic. (For dynamic hosts, the tap entry gets its hostname later in
@@ -363,6 +368,7 @@ public static class CloudflaredExtensions
                 TunnelMode = TunnelModeOf(tunnel.Resource),
                 TunnelName = tunnel.Resource.ApiTunnelName,
                 PublicUrl = string.IsNullOrEmpty(hostname) ? null : $"https://{hostname}",
+                PublicExpose = true, // Cloudflare tunnels are always public.
             });
         }
 
@@ -420,6 +426,6 @@ public static class CloudflaredExtensions
         return path;
     }
 
-    private static string ResolveLocalUrl(CloudflaredIngressEntry entry) =>
+    private static string ResolveLocalUrl(TapTunnelIngress entry) =>
         TapExtensions.ResolveLocalUrl(new TapIngressEntry(entry.Hostname, entry.Target, entry.EndpointName));
 }

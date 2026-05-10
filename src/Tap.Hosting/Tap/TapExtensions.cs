@@ -2,6 +2,8 @@ using System.Globalization;
 using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Cloudflared;
+using Aspire.Hosting.Tailscale;
+using Aspire.Hosting.Tunnels;
 using Microsoft.Extensions.Configuration;
 
 namespace Aspire.Hosting;
@@ -23,7 +25,7 @@ public sealed record TapIngressEntry(
     IResourceWithEndpoints Target,
     string? EndpointName)
 {
-    /// <summary>"standalone" | "existing" | "api-managed" | "dynamic" | "quick"</summary>
+    /// <summary>"standalone" | "existing" | "api-managed" | "dynamic" | "quick" | "tailscale-system" | "tailscale-ephemeral"</summary>
     public string? TunnelMode { get; init; }
 
     /// <summary>Cloudflare tunnel name (api-managed/dynamic) or null.</summary>
@@ -31,6 +33,13 @@ public sealed record TapIngressEntry(
 
     /// <summary>Public URL the tunnel exposes (e.g. https://managed-tap.p7e.dev).</summary>
     public string? PublicUrl { get; init; }
+
+    /// <summary>
+    /// True when the tunnel is reachable from the public internet (Cloudflare tunnels of any
+    /// kind, or Tailscale Funnel). False for tailnet-only Tailscale serve. Drives the
+    /// inspector UI's public-exposure warning banner.
+    /// </summary>
+    public bool PublicExpose { get; init; }
 }
 
 /// <summary>
@@ -61,7 +70,7 @@ public sealed class TapHandle
     public IDistributedApplicationBuilder ApplicationBuilder { get; }
     public IResource Resource { get; }
     public TapIngressAnnotation Annotation { get; }
-    internal IResourceBuilder<CloudflaredTunnelResource>? AttachedTunnel { get; set; }
+    internal TapTunnelResource? AttachedTunnel { get; set; }
 
     public TapHandle WithEnvironment(Action<EnvironmentCallbackContext> callback)
     {
@@ -203,6 +212,7 @@ public static class TapExtensions
                         tunnelMode = e.TunnelMode,
                         tunnelName = e.TunnelName,
                         publicUrl = e.PublicUrl,
+                        publicExpose = e.PublicExpose,
                     })
                     .ToArray();
                 ctx.EnvironmentVariables["Inspector__Ingress"] = JsonSerializer.Serialize(entries);
@@ -232,13 +242,25 @@ public static class TapExtensions
         string? endpointName = null)
         where T : IResourceWithEndpoints
     {
-        if (tap.AttachedTunnel is { } tunnel)
+        switch (tap.AttachedTunnel)
         {
-            return builder.WithCloudflareTunnel(tunnel, hostname, endpointName);
+            case CloudflaredTunnelResource cf:
+                {
+                    var tunnelBuilder = tap.ApplicationBuilder.CreateResourceBuilder(cf);
+                    return builder.WithCloudflareTunnel(tunnelBuilder, hostname, endpointName);
+                }
+            case TailscaleFunnelResource ts:
+                {
+                    var tunnelBuilder = tap.ApplicationBuilder.CreateResourceBuilder(ts);
+                    return builder.WithTailscaleFunnel(tunnelBuilder, endpointName);
+                }
+            case null:
+                tap.Annotation.Entries.Add(new TapIngressEntry(hostname, builder.Resource, endpointName));
+                return builder;
+            default:
+                throw new InvalidOperationException(
+                    $"Unsupported tunnel resource type '{tap.AttachedTunnel.GetType().Name}'.");
         }
-
-        tap.Annotation.Entries.Add(new TapIngressEntry(hostname, builder.Resource, endpointName));
-        return builder;
     }
 
     internal static string ResolveLocalUrl(TapIngressEntry entry, bool containerHosted = false)

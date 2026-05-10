@@ -19,6 +19,7 @@
     <img alt=".NET" src="https://img.shields.io/badge/.NET-10-512bd4?logo=dotnet">
     <img alt="Aspire" src="https://img.shields.io/badge/Aspire-ready-7b2ff7">
     <img alt="Cloudflare Tunnel" src="https://img.shields.io/badge/Cloudflare-Tunnel-f38020?logo=cloudflare">
+    <img alt="Tailscale Funnel" src="https://img.shields.io/badge/Tailscale-Funnel-5e64f4?logo=tailscale">
     <img alt="UI" src="https://img.shields.io/badge/UI-React%2019-14945f?logo=react">
   </p>
 </div>
@@ -34,6 +35,9 @@ Quick tunnels are free with TryCloudflare and do not need a Cloudflare account. 
 > [!IMPORTANT]
 > Tap makes local services reachable through public URLs. Treat exposed endpoints as internet-facing. Prefer short-lived TryCloudflare tunnels for quick demos, use Cloudflare Access or Tap's inspector auth options for sensitive services, and never tunnel a privileged local admin endpoint without an explicit access boundary.
 
+> [!WARNING]
+> **Public tunnels are scanned within minutes.** The moment a public hostname's TLS cert appears in a CT log (which happens immediately when you bring up Cloudflare Tunnel or Tailscale Funnel), opportunistic scanners hit it looking for admin endpoints, debug routes, and known-CVE banners. **Always pair public tunnels with auth or edge controls.** Tap's auth options (header / CIDR / country / OIDC) gate the proxy port before traffic reaches your upstream; for Cloudflare hostnames, Cloudflare Access and WAF rules are another good outer layer. Those attempts show up directly in the Inspector request log, often seconds after the tunnel is reachable. For Tailscale, prefer `WithTailscaleServe(...)` (tailnet-only) over `WithTailscaleFunnel(...)` (public) unless you actually need internet exposure.
+
 ## Run Modes
 
 | | When to use |
@@ -45,12 +49,15 @@ Quick tunnels are free with TryCloudflare and do not need a Cloudflare account. 
 | **Existing tunnel** | You already manage a tunnel in the Cloudflare dashboard and want Tap to run `cloudflared --token` against it. |
 | **API-managed tunnel** | You want the AppHost to look up or create a named tunnel, write local credentials, and manage DNS. |
 | **Dynamic hostname** | You want fresh per-run hostnames such as `api-1a2b3c4d-tap.example.com` for demos or parallel dev loops. |
+| **Tailscale Serve (default)** | Tailnet-only: reachable from your other tailnet devices but not the public internet. The safe default for Tailscale. |
+| **Tailscale Funnel (public, opt-in)** | Public URL via your tailnet node — pair with auth. |
+| **Tailscale (ephemeral)** | AppHost / CLI: spin up a per-session userspace `tailscaled` from an auth key (Process or Docker). Node disappears when the run stops. |
 
 ## Use Cases
 
 | Use case | Why Tap helps |
 |---|---|
-| **Mobile app callbacks** | Point native or emulator builds at a public URL while still serving from localhost. |
+| **Mobile app callbacks** | Point native or emulator builds at a public URL while still serving from localhost. The inspector's **QR tab** (or `http://localhost:<uiPort>/#qr`) lets you scan the public URL straight onto your phone. |
 | **Webhook development** | See the raw headers, body, status code, and replay path for every provider delivery. |
 | **Auth callbacks** | Test OAuth/OIDC redirect URIs against a real HTTPS hostname. |
 | **Partner demos** | Share a temporary URL to work running on your machine, then tear it down. |
@@ -98,6 +105,24 @@ Pin a version with `$env:TAP_VERSION = "0.2.3"` before running. To uninstall: `d
 
 Cloudflare-tunnel features need [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/) on `PATH`. Install it once with `brew install cloudflared`, `winget install Cloudflare.cloudflared`, or run `tap install-cloudflared` after Tap is installed.
 
+### Tailscale
+
+Tailscale support can use `tailscale serve` for private tailnet-only access or `tailscale funnel` for public internet access. Host-process modes need the [`tailscale`](https://tailscale.com/download) CLI on `PATH`; Docker mode runs the official `tailscale/tailscale` image instead. One-time tailnet setup:
+
+1. Install Tailscale (`brew install tailscale` on macOS, `tailscale.com/download/linux` on Linux, or the GUI installer on Windows) and sign in with `tailscale up` when using system mode.
+2. In the [admin console](https://login.tailscale.com/admin/), enable **HTTPS Certificates** under DNS. This is required for both `serve` and `funnel`.
+3. For public Funnel only, add a `nodeAttrs` rule to your tailnet ACL granting the `funnel` capability:
+
+```json
+{
+  "nodeAttrs": [
+    { "target": ["*"], "attr": ["funnel"] }
+  ]
+}
+```
+
+Verify with `tailscale status --json | grep -i funnel` — `"funnel"` should appear in your node's `CapMap`. Funnel only listens on ports `443`, `8443`, and `10000`. `tailscale serve` is the Tap default and stays private to your tailnet.
+
 ## Quick Start
 
 ### CLI
@@ -137,6 +162,35 @@ If `cloudflared` is not installed, run:
 ```bash
 tap install-cloudflared
 ```
+
+Use Tailscale (system tailscaled — requires the Tailscale CLI on PATH and a tailnet you're signed in on):
+
+```bash
+# Tailnet-only (safe default — reachable from your other tailnet devices, not the public internet):
+tap run http://localhost:3000 --tailscale
+
+# Public Funnel (URL is on the internet — pair with auth):
+tap run http://localhost:3000 --tailscale --tailscale-public \
+  --auth-header "X-Tap-Key=$TAP_KEY"
+```
+
+Or run a per-session userspace `tailscaled` with an auth key (no system Tailscale install needed beyond the CLI):
+
+```bash
+export TAILSCALE_AUTHKEY=tskey-...        # or pass --tailscale-authkey
+tap run http://localhost:3000 --tailscale
+```
+
+The CLI spawns `tailscaled --tun=userspace-networking` under a temp state dir, runs `tailscale up --authkey ...`, configures `tailscale serve` (or `funnel` with `--tailscale-public`), and tears everything down (including the state dir) on Ctrl+C. macOS/Linux only — on Windows pair the auth key with `--docker` to use the `tailscale/tailscale` container.
+
+Don't have a host `tailscaled` binary? Run the official `tailscale/tailscale` Docker image instead — works on any host with Docker, including macOS where the GUI Tailscale client doesn't expose `tailscaled`:
+
+```bash
+export TAILSCALE_AUTHKEY=tskey-...
+tap run http://localhost:3000 --tailscale --docker
+```
+
+The same `--docker` flag controls Cloudflare and Tailscale: with `--tailscale` it runs `tailscale/tailscale`; without, it runs `cloudflare/cloudflared`. For Tailscale, tap starts the container with `TS_USERSPACE=true` and drives funnel config via `docker exec` (bind-mounted unix sockets don't survive macOS Docker Desktop's VM boundary). The container reaches the inspector through Docker's `host.docker.internal` host-gateway alias (auto on Docker Desktop; `--add-host` is added on Linux). Container is `--rm` and force-removed on shutdown.
 
 CLI options can also come from environment variables and an optional `tap.config` file. Command-line flags win, then environment variables, then config file defaults.
 
@@ -212,6 +266,56 @@ dotnet user-secrets set Cloudflare:TunnelToken "<token>" \
 
 `WithExistingTunnel` expects a Cloudflare Tunnel you have already created. Create the tunnel in the Cloudflare dashboard first, copy its connector token, and pass that token to Tap. Tap will run `cloudflared tunnel run --token ...`; it will not create or reconfigure that dashboard-managed tunnel.
 
+### Aspire: Tailscale (private by default)
+
+```csharp
+using Aspire.Hosting;
+
+var builder = DistributedApplication.CreateBuilder(args);
+
+var api = builder.AddProject<Projects.Sample_Api>("api");
+
+// Tailnet-only — reachable only from other devices on your tailnet (the safe default).
+var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleServe("tap-serve", t => t.WithSystemDaemon());
+api.WithTap(tap);
+
+builder.Build().Run();
+```
+
+For a public URL on the internet (pair with auth!):
+
+```csharp
+var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleFunnel("tap-funnel", t => t.WithSystemDaemon())
+    .WithHeaderAuth("X-Tap-Key", builder.Configuration["Tap:Key"]!);
+api.WithTap(tap);
+```
+
+For a per-session userspace daemon (clean tailnet membership, throw-away node):
+
+```csharp
+var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleFunnel("tap-funnel", t => t
+        .WithEphemeralDaemon(builder.Configuration["Tailscale:AuthKey"]!)
+        .WithFunnelPort(8443));   // 443 (default), 8443, or 10000
+api.WithTap(tap);
+```
+
+Or run the userspace daemon in Docker (`tailscale/tailscale` image — useful on macOS where the GUI client doesn't expose a `tailscaled` binary):
+
+```csharp
+var tap = builder.AddTap<Projects.Tap_Server>(mode: "tunnel")
+    .WithTailscaleFunnel("tap-funnel", t => t
+        .WithEphemeralDaemon(builder.Configuration["Tailscale:AuthKey"]!),
+        hostMode: TailscaleHostMode.Docker);
+api.WithTap(tap);
+```
+
+In Docker mode the funnel target is auto-rewritten from `localhost:<port>` to `host.docker.internal:<port>` so the container can reach the inspector on the host. The companion `tailscaled` Aspire resource shows up in the dashboard as a `docker run` child of the funnel resource — its logs are the container's logs, and Aspire's shutdown kills the docker process which `--rm`s the container.
+
+Funnel exposes one URL per tailnet node, so each `WithTailscaleFunnel(...)` is bound to exactly one upstream — register multiple funnels for multiple upstreams. Tap shells out to `tailscale funnel` and parses MagicDNS for the public URL; the `TailscaleLifecycleHook` provisions everything before the funnel resource starts and removes only the path-specific rule on shutdown so other funnel/serve rules survive.
+
 ### Aspire: API-managed tunnel and DNS
 
 ```csharp
@@ -250,8 +354,14 @@ The lifecycle hook runs before `cloudflared` starts. It looks up or creates the 
 | `--account` | Cloudflare account id. |
 | `--api-managed` | Named tunnel to create or reuse. |
 | `--dynamic` | Zone where Tap should mint a fresh hostname. |
-| `--docker` | Run `cloudflared` through Docker host networking. |
+| `--docker` | Run the active provider in Docker. With `--tailscale`: `tailscale/tailscale` (ephemeral, userspace networking). Without: `cloudflare/cloudflared`. |
 | `--auto-install` | Install `cloudflared` if missing. |
+| `--tailscale` | Route through Tailscale (system `tailscaled` by default — tailnet-only via `tailscale serve`; pair with `--tailscale-public` for `tailscale funnel`). |
+| `--tailscale-public` | Switch from `serve` (tailnet-only, default) to `funnel` (public internet). Pair with auth flags. |
+| `--tailscale-port` | Funnel/serve port. Allowed: `443` (default), `8443`, `10000`. |
+| `--tailscale-authkey` | Auth key. Switches to ephemeral mode — the CLI spawns a userspace `tailscaled` per session and joins the tailnet with the key. Env: `TAILSCALE_AUTHKEY`. |
+| `--tailscale-system` | Force system mode even when an auth key is present (CLI flag, env, or profile). Use when `TAILSCALE_AUTHKEY` is exported globally but you want one run on the host's existing node. |
+| `--tailscale-login-server` | Override Tailscale coordination server (Headscale, etc.). Env: `TAILSCALE_LOGIN_SERVER`. |
 | `--config` | Load defaults from a JSON `tap.config` file. |
 
 Useful environment variables:
@@ -262,6 +372,28 @@ Useful environment variables:
 | `CLOUDFLARE_TUNNEL_TOKEN` | Token tunnel connector token. |
 | `CLOUDFLARE_API_TOKEN` | API-managed tunnel token. |
 | `CLOUDFLARE_ACCOUNT_ID` | Cloudflare account id. |
+| `TAILSCALE_AUTHKEY` | Tailscale auth key — picked up by `--tailscale` to enable ephemeral mode. |
+| `TAILSCALE_LOGIN_SERVER` | Override Tailscale coordination server (Headscale, etc.). |
+
+## Tailscale Setup
+
+> [!CAUTION]
+> Default to **`tailscale serve`** (tailnet-only). Only switch to **`tailscale funnel`** (public) when you actually need internet exposure, and always pair public tunnels with auth — opportunistic scanners hit new public hostnames within minutes.
+
+System mode (CLI + AppHost):
+
+1. Install Tailscale and run `tailscale up` so the node is authenticated.
+2. Enable **HTTPS Certificates** in the admin console (one-time per tailnet — needed for both `serve` and `funnel`).
+3. For Funnel only: grant the `funnel` capability via tailnet ACL `nodeAttrs` (see the install section above). `serve` mode doesn't need this.
+
+Ephemeral mode (CLI + AppHost):
+
+1. Generate a reusable auth key in the admin console under **Settings → Keys** and apply tags that grant the `funnel` capability.
+2. CLI: pass `--tailscale-authkey`, set `TAILSCALE_AUTHKEY`, or save the key in a profile. Tap spawns `tailscaled --tun=userspace-networking` for the run, then tears it down on Ctrl+C.
+3. AppHost: stash it in user-secrets with `dotnet user-secrets set Tailscale:AuthKey "tskey-..." --project samples/Sample.AppHost`, then use `WithEphemeralDaemon(authKey)`.
+4. Windows ephemeral process mode is not supported; pair the auth key with `--docker` in the CLI or `hostMode: TailscaleHostMode.Docker` in Aspire.
+
+The inspector dialog (Tunnel chip in the Inspector header) shows live daemon state — backend state, MagicDNS name, tailnet, version — and a table of every active `tailscale funnel` / `serve` rule on the node.
 
 ## Cloudflare Setup
 
@@ -324,9 +456,9 @@ Enabled checks are combined. If header auth, CIDR allowlist, country allowlist, 
 
 | Package | Purpose |
 |---|---|
-| `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `tap.WithTunnel`, `tap.WithQuickTunnel`, `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`. |
+| `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `tap.WithTunnel`, `tap.WithQuickTunnel`, `tap.WithTailscaleServe` (tailnet-only, default), `tap.WithTailscaleFunnel` (public, opt-in), `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon`/`WithEphemeralDaemon`/`WithFunnelPort`. |
 | `Tap.Server` | ASP.NET Core capture server: YARP reverse proxy, capture middleware, REST API, SSE stream, and bundled React UI. |
-| `Tap.Cli` | Local command host that reuses the same inspector server code. |
+| `Tap.Cli` | Local command host that reuses the same inspector server code. Tailscale system-mode profiles run from the CLI; ephemeral mode requires the AppHost. |
 
 Both entry points use the same `Tap.Server` host internally. The CLI builds `TapInspectorOptions` from command-line flags, environment variables, and optional `tap.config`; Aspire writes the same options through project environment variables.
 
@@ -352,6 +484,22 @@ Consumer AppHost projects must reference both `Tap.Hosting` and `Tap.Server`. `T
 
 For API-managed DNS, the Cloudflare token needs tunnel edit permission on the account and DNS edit permission on the relevant zone.
 
+### AppHost Tailscale settings
+
+| Key | Purpose |
+|---|---|
+| `Tailscale:AuthKey` | Auth key used by `WithEphemeralDaemon(authKey)` to spawn a userspace `tailscaled` per AppHost run. Reusable keys are recommended. |
+| `Tailscale:UseSystem` | Sample AppHost only: set to `true` to enable the system-daemon Tailscale scenario. |
+| `Tailscale:UseDocker` | Sample AppHost only: set to `true` (with `Tailscale:AuthKey`) to enable the Tailscale + Docker scenario. |
+
+The sample AppHost can be filtered by provider:
+
+```bash
+dotnet run --project samples/Sample.AppHost                          # all scenarios (default)
+dotnet run --project samples/Sample.AppHost -- --scenarios tailscale  # standalone + ts-* only
+dotnet run --project samples/Sample.AppHost -- --scenarios cloudflare # standalone + cf-* only
+```
+
 ### Inspector server settings
 
 Tap.Hosting writes these for you when running under Aspire. The CLI maps its flags to the same server options.
@@ -361,8 +509,10 @@ Tap.Hosting writes these for you when running under Aspire. The CLI maps its fla
 | `Inspector__ProxyPort` | Port that receives proxied app traffic. Default `5199`. |
 | `Inspector__UiPort` | Port for the local inspector UI and API. Default `5198`. |
 | `Inspector__Mode` | `standalone` or `tunnel`. |
+| `Inspector__Provider` | `cloudflare` or `tailscale`. Gates provider-specific UI panes and API endpoints. |
 | `Inspector__Ingress` | JSON array of `{ hostname, upstream, tunnelMode, tunnelName, publicUrl }`. |
 | `Inspector__Tunnel__*` | Optional tunnel context surfaced by `/api/tunnel/details`. |
+| `Inspector__Tunnel__SocketPath` | Tailscale daemon socket path (set automatically in ephemeral mode). |
 | `Inspector__Auth__*` | Optional proxy-side auth gate: header, CIDR, country, and OIDC settings. |
 
 ## Development
@@ -400,11 +550,12 @@ The docs site is a static Vite app configured with `base: "./"` so the built `di
 At runtime Tap splits traffic across two ports:
 
 ```text
-Internet -> Cloudflare -> cloudflared -> Tap proxy port -> upstream app
-                                      \-> Tap UI port -> inspector UI/API
+Internet -> Cloudflare      -> cloudflared -> Tap proxy port -> upstream app
+         -> Tailscale Funnel -> tailscaled  -> Tap proxy port -> upstream app
+                                            \-> Tap UI port -> inspector UI/API
 ```
 
-The proxy branch captures request and response data, stores the latest records in a bounded in-memory ring, and publishes new records over server-sent events. The UI branch serves the React inspector, exposes REST endpoints for request history, replay, ingress, and tunnel details, and can use Cloudflare API credentials to show or update tunnel ingress rules.
+The proxy branch captures request and response data, stores the latest records in a bounded in-memory ring, and publishes new records over server-sent events. The UI branch serves the React inspector and exposes REST endpoints for request history, replay, ingress, and tunnel details. With Cloudflare credentials configured the UI can show and update tunnel ingress rules; with Tailscale it shows live daemon state and active funnel/serve rules read from `tailscale status --json` and `tailscale serve status --json`.
 
 For the deeper technical background, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

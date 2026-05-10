@@ -25,6 +25,14 @@ public sealed class TunnelProfile
     [JsonPropertyName("docker")] public bool Docker { get; init; }
     [JsonPropertyName("autoInstall")] public bool AutoInstall { get; init; }
 
+    // Tailscale fields (used when TunnelMode == Tailscale).
+    [JsonPropertyName("tailscaleDaemonMode")] public TailscaleDaemonMode? TailscaleDaemonMode { get; init; }
+    [JsonPropertyName("tailscaleAuthKey")] public string? TailscaleAuthKey { get; init; }
+    [JsonPropertyName("tailscaleLoginServer")] public string? TailscaleLoginServer { get; init; }
+    [JsonPropertyName("tailscaleFunnelPort")] public int? TailscaleFunnelPort { get; init; }
+    /// <summary>True = `tailscale funnel` (public); false / null = `tailscale serve` (tailnet-only, default).</summary>
+    [JsonPropertyName("tailscalePublic")] public bool? TailscalePublic { get; init; }
+
     [JsonPropertyName("authHeader")] public string? AuthHeader { get; init; }
     [JsonPropertyName("authCidrs")] public string[]? AuthCidrs { get; init; }
     [JsonPropertyName("authCountries")] public string[]? AuthCountries { get; init; }
@@ -40,4 +48,5 @@ public sealed class TunnelProfile
 [JsonSerializable(typeof(TunnelProfile[]))]
 [JsonSerializable(typeof(List<TunnelProfile>))]
 [JsonSerializable(typeof(TunnelMode))]
+[JsonSerializable(typeof(TailscaleDaemonMode))]
 public sealed partial class TunnelProfileJson : JsonSerializerContext;

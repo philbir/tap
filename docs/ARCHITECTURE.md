@@ -40,7 +40,7 @@ flowchart TD
     User["Developer terminal"]
     Run["tap run http://localhost:3000 --quick"]
     Options["Build TapInspectorOptions\nfrom flags, env, tap.config"]
-    Tunnel["Provision/start cloudflared\nnone, quick, token, API-managed, dynamic"]
+    Tunnel["Provision/start tunnel\nCloudflare or Tailscale"]
     Server["Tap.Server\nproxy :4444, UI :4445"]
     App["Local upstream\nhttp://localhost:3000"]
 
@@ -49,7 +49,7 @@ flowchart TD
     Server --> App
 ```
 
-The CLI owns process orchestration. It can install `cloudflared`, provision tunnels, start `cloudflared`, print the public URL, and then run the shared inspector server until Ctrl+C.
+The CLI owns process orchestration. It can install `cloudflared`, provision Cloudflare tunnels, start `cloudflared`, configure Tailscale `serve` / `funnel`, run ephemeral `tailscaled` processes or the `tailscale/tailscale` Docker image, print the public URL, and then run the shared inspector server until Ctrl+C.
 
 ### Aspire
 
@@ -149,7 +149,7 @@ flowchart TB
 | `tap run <upstream> --tailscale --tailscale-public` | Switch to public `tailscale funnel`; pair with auth flags. |
 | `tap run <upstream> --tailscale --tailscale-authkey <key>` | Ephemeral mode: CLI spawns a userspace tailscaled, authenticates with the key, and tears it down on shutdown. |
 | `tap run <upstream> --tailscale --docker` | Ephemeral mode via the `tailscale/tailscale` Docker image (same `--docker` flag also drives `cloudflare/cloudflared` when not in Tailscale mode). |
-| `tap run --name <profile>` | Run a saved profile. Tailscale-mode profiles run via the system `tailscale` CLI; ephemeral mode is AppHost-only and the CLI logs a fallback warning. |
+| `tap run --name <profile>` | Run a saved profile. Tailscale profiles can use system mode, ephemeral process mode from an auth key, or ephemeral Docker mode via `--docker`. |
 | `tap install-cloudflared` | Install `cloudflared` with the host package manager. |
 
 The CLI reads command flags first, then environment variables (`TAP_UPSTREAM`, `CLOUDFLARE_TUNNEL_TOKEN`, `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `TAILSCALE_AUTHKEY`, `TAILSCALE_LOGIN_SERVER`), then optional `tap.config` defaults.
@@ -262,6 +262,7 @@ Both entry points converge on `TapInspectorOptions`.
 | Ingress | upstream argument / `TAP_UPSTREAM` / `tap.config` | resolved Aspire resource endpoint |
 | Tunnel mode | `--quick`, `--token`, `--api-managed`, `--dynamic` | tunnel extension methods |
 | Cloudflare credentials | CLI flags or env vars | .NET configuration / user-secrets |
+| Tailscale auth key / login server | `--tailscale-authkey`, `TAILSCALE_AUTHKEY`, `--tailscale-login-server`, `TAILSCALE_LOGIN_SERVER`, profile | .NET configuration / user-secrets passed to `WithEphemeralDaemon(...)` |
 | Auth | CLI auth flags | `Inspector:Auth` configuration |
 
 The server itself does not care whether options came from a terminal command or an Aspire AppHost.

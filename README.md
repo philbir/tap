@@ -36,7 +36,7 @@ Quick tunnels are free with TryCloudflare and do not need a Cloudflare account. 
 > Tap makes local services reachable through public URLs. Treat exposed endpoints as internet-facing. Prefer short-lived TryCloudflare tunnels for quick demos, use Cloudflare Access or Tap's inspector auth options for sensitive services, and never tunnel a privileged local admin endpoint without an explicit access boundary.
 
 > [!WARNING]
-> **Public tunnels are scanned within minutes.** The moment a public hostname's TLS cert appears in a CT log (which happens immediately when you bring up Cloudflare Tunnel or Tailscale Funnel), opportunistic scanners hit it looking for admin endpoints, debug routes, and known-CVE banners. **Always pair public tunnels with auth.** Tap's auth options (header / CIDR / country / OIDC) gate the proxy port before traffic reaches your upstream. For Tailscale, prefer `WithTailscaleServe(...)` (tailnet-only) over `WithTailscaleFunnel(...)` (public) unless you actually need internet exposure.
+> **Public tunnels are scanned within minutes.** The moment a public hostname's TLS cert appears in a CT log (which happens immediately when you bring up Cloudflare Tunnel or Tailscale Funnel), opportunistic scanners hit it looking for admin endpoints, debug routes, and known-CVE banners. **Always pair public tunnels with auth or edge controls.** Tap's auth options (header / CIDR / country / OIDC) gate the proxy port before traffic reaches your upstream; for Cloudflare hostnames, Cloudflare Access and WAF rules are another good outer layer. Those attempts show up directly in the Inspector request log, often seconds after the tunnel is reachable. For Tailscale, prefer `WithTailscaleServe(...)` (tailnet-only) over `WithTailscaleFunnel(...)` (public) unless you actually need internet exposure.
 
 ## Run Modes
 
@@ -107,11 +107,11 @@ Cloudflare-tunnel features need [`cloudflared`](https://developers.cloudflare.co
 
 ### Tailscale
 
-Tailscale Funnel needs the [`tailscale`](https://tailscale.com/download) CLI on `PATH` and one-time tailnet configuration:
+Tailscale support can use `tailscale serve` for private tailnet-only access or `tailscale funnel` for public internet access. Host-process modes need the [`tailscale`](https://tailscale.com/download) CLI on `PATH`; Docker mode runs the official `tailscale/tailscale` image instead. One-time tailnet setup:
 
-1. Install Tailscale (`brew install tailscale` on macOS, `tailscale.com/download/linux` on Linux, or the GUI installer on Windows) and sign in with `tailscale up`.
-2. In the [admin console](https://login.tailscale.com/admin/), enable **HTTPS Certificates** under DNS.
-3. Add a `nodeAttrs` rule to your tailnet ACL granting the `funnel` capability:
+1. Install Tailscale (`brew install tailscale` on macOS, `tailscale.com/download/linux` on Linux, or the GUI installer on Windows) and sign in with `tailscale up` when using system mode.
+2. In the [admin console](https://login.tailscale.com/admin/), enable **HTTPS Certificates** under DNS. This is required for both `serve` and `funnel`.
+3. For public Funnel only, add a `nodeAttrs` rule to your tailnet ACL granting the `funnel` capability:
 
 ```json
 {
@@ -121,7 +121,7 @@ Tailscale Funnel needs the [`tailscale`](https://tailscale.com/download) CLI on 
 }
 ```
 
-Verify with `tailscale status --json | grep -i funnel` — `"funnel"` should appear in your node's `CapMap`. Funnel only listens on ports `443`, `8443`, and `10000`.
+Verify with `tailscale status --json | grep -i funnel` — `"funnel"` should appear in your node's `CapMap`. Funnel only listens on ports `443`, `8443`, and `10000`. `tailscale serve` is the Tap default and stays private to your tailnet.
 
 ## Quick Start
 
@@ -386,11 +386,12 @@ System mode (CLI + AppHost):
 2. Enable **HTTPS Certificates** in the admin console (one-time per tailnet — needed for both `serve` and `funnel`).
 3. For Funnel only: grant the `funnel` capability via tailnet ACL `nodeAttrs` (see the install section above). `serve` mode doesn't need this.
 
-Ephemeral mode (AppHost only):
+Ephemeral mode (CLI + AppHost):
 
 1. Generate a reusable auth key in the admin console under **Settings → Keys** and apply tags that grant the `funnel` capability.
-2. Stash it in user-secrets: `dotnet user-secrets set Tailscale:AuthKey "tskey-..."`.
-3. Use `WithEphemeralDaemon(authKey)` on the funnel resource. The CLI's `tap run --name <profile>` falls back to system mode and warns if it sees an auth key, since supervising a userspace `tailscaled` belongs in the AppHost lifecycle hook rather than the CLI.
+2. CLI: pass `--tailscale-authkey`, set `TAILSCALE_AUTHKEY`, or save the key in a profile. Tap spawns `tailscaled --tun=userspace-networking` for the run, then tears it down on Ctrl+C.
+3. AppHost: stash it in user-secrets with `dotnet user-secrets set Tailscale:AuthKey "tskey-..." --project samples/Sample.AppHost`, then use `WithEphemeralDaemon(authKey)`.
+4. Windows ephemeral process mode is not supported; pair the auth key with `--docker` in the CLI or `hostMode: TailscaleHostMode.Docker` in Aspire.
 
 The inspector dialog (Tunnel chip in the Inspector header) shows live daemon state — backend state, MagicDNS name, tailnet, version — and a table of every active `tailscale funnel` / `serve` rule on the node.
 

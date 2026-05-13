@@ -3,7 +3,9 @@ import type { RequestRecord, SseEvent, WebSocketMessage } from './types'
 import { useCodeView } from './CodeViewer'
 import { TokenInspector } from './TokenInspector'
 import { decodeJwt, findAuthHeader } from './jwt'
-import { HttpFileDialog } from './HttpFileDialog'
+import { ExportDialog } from './ExportDialog'
+import { EditReplayDialog } from './EditReplayDialog'
+import { parseRequestCookies, parseResponseCookies, type ResponseCookieAttr } from './cookies'
 
 interface Props {
   record: RequestRecord | null
@@ -20,12 +22,308 @@ function SectionLabel({ text }: { text: string }) {
   )
 }
 
+function splitPath(path: string): { pathname: string; query: string; params: Array<[string, string]> } {
+  const qIdx = path.indexOf('?')
+  if (qIdx < 0) return { pathname: path, query: '', params: [] }
+  const pathname = path.slice(0, qIdx)
+  const query = path.slice(qIdx + 1)
+  const params: Array<[string, string]> = []
+  for (const part of query.split('&')) {
+    if (!part) continue
+    const eq = part.indexOf('=')
+    const rawK = eq < 0 ? part : part.slice(0, eq)
+    const rawV = eq < 0 ? '' : part.slice(eq + 1)
+    let k = rawK
+    let v = rawV
+    try { k = decodeURIComponent(rawK.replace(/\+/g, ' ')) } catch { /* keep raw */ }
+    try { v = decodeURIComponent(rawV.replace(/\+/g, ' ')) } catch { /* keep raw */ }
+    params.push([k, v])
+  }
+  return { pathname, query, params }
+}
+
+function looksLikeJwt(value: string): boolean {
+  // Three base64url segments separated by dots, each non-empty. Cheaper guard
+  // than calling decodeJwt() on every param.
+  if (!value || value.length < 16) return false
+  const parts = value.split('.')
+  if (parts.length !== 3) return false
+  return parts.every((p) => p.length > 0 && /^[A-Za-z0-9_-]+$/.test(p))
+}
+
+function QueryParamsPanel({ params, theme, defaultExpanded = true }: { params: Array<[string, string]>; theme: 'light' | 'dark'; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+  const [search, setSearch] = useState('')
+  const [openTokens, setOpenTokens] = useState<Set<number>>(new Set())
+
+  const filtered = useMemo(() => {
+    if (!search) return params.map((p, i) => [p, i] as const)
+    const q = search.toLowerCase()
+    return params
+      .map((p, i) => [p, i] as const)
+      .filter(([[k, v]]) => k.toLowerCase().includes(q) || v.toLowerCase().includes(q))
+  }, [params, search])
+
+  const toggleToken = (i: number) => {
+    setOpenTokens((prev) => {
+      const next = new Set(prev)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
+      return next
+    })
+  }
+
+  return (
+    <div style={{ flexShrink: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: expanded ? '6px' : 0 }}>
+        <button
+          onClick={() => setExpanded((v) => !v)}
+          style={{
+            background: 'transparent',
+            border: 'none',
+            padding: '2px 4px',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            color: 'var(--text-muted)',
+            fontSize: '10px',
+            fontWeight: 600,
+            textTransform: 'uppercase',
+            letterSpacing: '0.08em',
+          }}
+        >
+          <span style={{ display: 'inline-block', width: '10px', transform: expanded ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▸</span>
+          Query ({params.length})
+        </button>
+        {expanded && params.length > 0 && (
+          <input
+            type="text"
+            placeholder="Search params…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            style={{ flex: 1, maxWidth: '260px', fontSize: '11px', padding: '2px 6px' }}
+          />
+        )}
+      </div>
+      {expanded && (
+        <div style={{ maxHeight: '320px', overflowY: 'auto', border: '1px solid var(--border)', borderRadius: '4px', background: 'var(--bg-input)' }}>
+          {filtered.length === 0 ? (
+            <div style={{ padding: '8px 10px', color: 'var(--text-muted)', fontSize: '12px' }}>
+              {params.length === 0 ? '(none)' : 'No matches.'}
+            </div>
+          ) : (
+            <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'SF Mono, Menlo, monospace', fontSize: '12px' }}>
+              <tbody>
+                {filtered.map(([[k, v], idx]) => {
+                  const jwt = looksLikeJwt(v) && decodeJwt(v) !== null
+                  const isOpen = openTokens.has(idx)
+                  return (
+                    <Fragment key={`${k}-${idx}`}>
+                      <tr
+                        onClick={jwt ? () => toggleToken(idx) : undefined}
+                        style={jwt ? { cursor: 'pointer' } : undefined}
+                        title={jwt ? (isOpen ? 'Hide decoded token' : 'Click to decode JWT') : undefined}
+                      >
+                        <td style={{ padding: '3px 12px 3px 10px', color: 'var(--text-muted)', verticalAlign: 'top', whiteSpace: 'nowrap', width: '1%' }}>
+                          {jwt && (
+                            <span style={{ display: 'inline-block', width: '10px', color: 'var(--accent)', transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▸</span>
+                          )}
+                          {k}
+                        </td>
+                        <td style={{ padding: '3px 10px 3px 0', wordBreak: 'break-all', color: jwt ? 'var(--accent)' : undefined }}>
+                          {v || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>(empty)</span>}
+                          {jwt && (
+                            <span style={{ marginLeft: 8, fontSize: 9.5, color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.06em' }}>
+                              JWT
+                            </span>
+                          )}
+                        </td>
+                      </tr>
+                      {jwt && isOpen && (
+                        <tr>
+                          <td colSpan={2} style={{ padding: '0 10px 10px' }}>
+                            <TokenInspector authHeader={v} theme={theme} />
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function CookieAttrChip({ attr }: { attr: ResponseCookieAttr }) {
+  const label = attr.value === null
+    ? attr.key
+    : `${attr.key}=${attr.value}`
+  // Highlight security-relevant attributes.
+  const isSec = attr.key === 'secure' || attr.key === 'httponly' || attr.key === 'samesite' || attr.key === 'partitioned'
+  return (
+    <span
+      title={label}
+      style={{
+        display: 'inline-block',
+        fontSize: 10,
+        padding: '1px 6px',
+        borderRadius: 3,
+        border: '1px solid var(--border)',
+        background: 'var(--bg-raised)',
+        color: isSec ? 'var(--accent)' : 'var(--text-muted)',
+        marginRight: 4,
+        marginTop: 2,
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {label}
+    </span>
+  )
+}
+
+// Browser per-cookie limit is 4096 bytes for the `name=value` pair (RFC 6265 §6.1
+// recommends ≥4096; every major browser caps at exactly that). Total per-domain
+// budget is typically ~80 cookies. We flag individual cookies near/over 4 KB.
+const COOKIE_BYTE_WARN = 4096
+const TEXT_ENCODER = typeof TextEncoder !== 'undefined' ? new TextEncoder() : null
+
+function byteLen(s: string): number {
+  if (!s) return 0
+  if (TEXT_ENCODER) return TEXT_ENCODER.encode(s).length
+  // Fallback for environments without TextEncoder.
+  let n = 0
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c < 0x80) n += 1
+    else if (c < 0x800) n += 2
+    else if (c >= 0xd800 && c <= 0xdbff) { n += 4; i++ }
+    else n += 3
+  }
+  return n
+}
+
+function cookiePairBytes(name: string, value: string): number {
+  // Bytes counted toward the browser's per-cookie storage limit: name + "=" + value.
+  return byteLen(name) + 1 + byteLen(value)
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  return `${(n / 1024).toFixed(n < 10 * 1024 ? 2 : 1)} KB`
+}
+
+function SizeBadge({ bytes, warn }: { bytes: number; warn?: boolean }) {
+  return (
+    <span
+      title={warn ? `${bytes} bytes — exceeds typical browser per-cookie limit (4096 B)` : `${bytes} bytes`}
+      style={{
+        display: 'inline-block',
+        fontSize: 10,
+        padding: '0 6px',
+        borderRadius: 3,
+        marginLeft: 6,
+        color: warn ? 'var(--warn)' : 'var(--text-muted)',
+        border: `1px solid ${warn ? 'var(--warn)' : 'var(--border)'}`,
+        background: 'transparent',
+        whiteSpace: 'nowrap',
+        fontWeight: warn ? 600 : 400,
+      }}
+    >
+      {formatBytes(bytes)}
+    </span>
+  )
+}
+
+function CookiePanel({ raw, mode }: { raw: string; mode: 'request' | 'response' }) {
+  const reqCookies = useMemo(() => mode === 'request' ? parseRequestCookies(raw) : [], [raw, mode])
+  const respCookies = useMemo(() => mode === 'response' ? parseResponseCookies(raw) : [], [raw, mode])
+  const total = mode === 'request' ? reqCookies.length : respCookies.length
+
+  const sizes = useMemo(() => {
+    const list = mode === 'request'
+      ? reqCookies.map((c) => cookiePairBytes(c.name, c.value))
+      : respCookies.map((c) => cookiePairBytes(c.name, c.value))
+    return { list, total: list.reduce((a, b) => a + b, 0) }
+  }, [mode, reqCookies, respCookies])
+
+  if (total === 0) return null
+
+  return (
+    <div style={{ marginTop: 6, border: '1px solid var(--border)', borderRadius: 4, background: 'var(--bg-raised)', overflow: 'hidden' }}>
+      <div
+        style={{
+          padding: '4px 10px',
+          borderBottom: '1px solid var(--border)',
+          fontSize: 10,
+          color: 'var(--text-muted)',
+          fontWeight: 600,
+          textTransform: 'uppercase',
+          letterSpacing: '0.06em',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+        }}
+      >
+        <span>{total} cookie{total === 1 ? '' : 's'}</span>
+        <span style={{ opacity: 0.5 }}>·</span>
+        <span>total {formatBytes(sizes.total)}</span>
+      </div>
+      <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'SF Mono, Menlo, monospace', fontSize: 12 }}>
+        <tbody>
+          {mode === 'request' && reqCookies.map((c, i) => (
+            <tr key={`${c.name}-${i}`} style={{ borderTop: i === 0 ? undefined : '1px solid var(--border)' }}>
+              <td style={{ padding: '4px 12px 4px 10px', color: 'var(--text-muted)', verticalAlign: 'top', whiteSpace: 'nowrap', width: '1%' }}>
+                {c.name}
+                <SizeBadge bytes={sizes.list[i]} warn={sizes.list[i] > COOKIE_BYTE_WARN} />
+              </td>
+              <td style={{ padding: '4px 10px 4px 0', wordBreak: 'break-all', color: 'var(--text)' }}>
+                {c.value || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>(empty)</span>}
+              </td>
+            </tr>
+          ))}
+          {mode === 'response' && respCookies.map((c, i) => (
+            <tr key={`${c.name}-${i}`} style={{ borderTop: i === 0 ? undefined : '1px solid var(--border)' }}>
+              <td style={{ padding: '4px 12px 4px 10px', color: 'var(--text-muted)', verticalAlign: 'top', whiteSpace: 'nowrap', width: '1%' }}>
+                {c.name}
+                <SizeBadge bytes={sizes.list[i]} warn={sizes.list[i] > COOKIE_BYTE_WARN} />
+              </td>
+              <td style={{ padding: '4px 10px 4px 0', wordBreak: 'break-all' }}>
+                <span style={{ color: 'var(--text)' }}>
+                  {c.value || <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>(empty)</span>}
+                </span>
+                {c.attrs.length > 0 && (
+                  <div style={{ marginTop: 4 }}>
+                    {c.attrs.map((a, ai) => <CookieAttrChip key={`${a.key}-${ai}`} attr={a} />)}
+                  </div>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function HeadersPanel({ headers, theme, defaultExpanded = true }: { headers: Record<string, string>; theme: 'light' | 'dark'; defaultExpanded?: boolean }) {
   const authHeader = findAuthHeader(headers)
   const hasJwt = useMemo(() => (authHeader ? decodeJwt(authHeader) !== null : false), [authHeader])
   const [expanded, setExpanded] = useState(defaultExpanded)
   const [search, setSearch] = useState('')
-  const [tokenOpen, setTokenOpen] = useState(false)
+  const [openRows, setOpenRows] = useState<Set<string>>(new Set())
+
+  const toggleRow = (key: string) => {
+    setOpenRows((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
   const entries = Object.entries(headers)
   const filtered = useMemo(() => {
@@ -76,29 +374,64 @@ function HeadersPanel({ headers, theme, defaultExpanded = true }: { headers: Rec
             <table style={{ borderCollapse: 'collapse', width: '100%', fontFamily: 'SF Mono, Menlo, monospace', fontSize: '12px' }}>
               <tbody>
                 {filtered.map(([k, v]) => {
-                  const isAuth = k.toLowerCase() === 'authorization' && hasJwt
-                  const clickable = isAuth
+                  const lk = k.toLowerCase()
+                  const isAuth = lk === 'authorization' && hasJwt
+                  const isCookieReq = lk === 'cookie'
+                  const isCookieResp = lk === 'set-cookie'
+                  const reqCookies = isCookieReq ? parseRequestCookies(v) : null
+                  const respCookies = isCookieResp ? parseResponseCookies(v) : null
+                  const cookieCount = reqCookies?.length ?? respCookies?.length ?? 0
+                  const isCookie = (isCookieReq || isCookieResp) && cookieCount > 0
+                  const clickable = isAuth || isCookie
+                  const isOpen = openRows.has(k)
+                  const cookieList = reqCookies ?? respCookies ?? []
+                  const totalCookieBytes = cookieList.reduce((sum, c) => sum + cookiePairBytes(c.name, c.value), 0)
+                  const summary = isCookie
+                    ? `${cookieCount} cookie${cookieCount === 1 ? '' : 's'} · ${formatBytes(totalCookieBytes)} · ${cookieList.map((c) => c.name).join(', ')}`
+                    : v
+                  const title = isAuth
+                    ? (isOpen ? 'Hide decoded token' : 'Click to decode JWT')
+                    : isCookie
+                    ? (isOpen ? 'Hide cookie list' : 'Click to expand cookies')
+                    : undefined
                   return (
                     <Fragment key={k}>
                       <tr
-                        onClick={clickable ? () => setTokenOpen((o) => !o) : undefined}
+                        onClick={clickable ? () => toggleRow(k) : undefined}
                         style={clickable ? { cursor: 'pointer' } : undefined}
-                        title={clickable ? (tokenOpen ? 'Hide decoded token' : 'Click to decode JWT') : undefined}
+                        title={title}
                       >
                         <td style={{ padding: '3px 12px 3px 10px', color: 'var(--text-muted)', verticalAlign: 'top', whiteSpace: 'nowrap', width: '1%' }}>
                           {clickable && (
-                            <span style={{ display: 'inline-block', width: '10px', color: 'var(--accent)', transform: tokenOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▸</span>
+                            <span style={{ display: 'inline-block', width: '10px', color: 'var(--accent)', transform: isOpen ? 'rotate(90deg)' : 'none', transition: 'transform 0.15s' }}>▸</span>
                           )}
                           {k}
                         </td>
-                        <td style={{ padding: '3px 10px 3px 0', wordBreak: 'break-all', color: clickable ? 'var(--accent)' : undefined }}>
-                          {v}
+                        <td
+                          style={{
+                            padding: '3px 10px 3px 0',
+                            wordBreak: 'break-all',
+                            color: clickable ? 'var(--accent)' : undefined,
+                            // Avoid blowing up the table when a cookie blob is huge — show the summary collapsed.
+                            ...(isCookie && !isOpen
+                              ? { whiteSpace: 'nowrap' as const, overflow: 'hidden' as const, textOverflow: 'ellipsis' as const, maxWidth: 0 }
+                              : {}),
+                          }}
+                        >
+                          {isCookie && !isOpen ? summary : v}
                         </td>
                       </tr>
-                      {clickable && tokenOpen && authHeader && (
+                      {isAuth && isOpen && authHeader && (
                         <tr>
                           <td colSpan={2} style={{ padding: '0 10px 10px' }}>
                             <TokenInspector authHeader={authHeader} theme={theme} />
+                          </td>
+                        </tr>
+                      )}
+                      {isCookie && isOpen && (
+                        <tr>
+                          <td colSpan={2} style={{ padding: '0 10px 10px' }}>
+                            <CookiePanel raw={v} mode={isCookieReq ? 'request' : 'response'} />
                           </td>
                         </tr>
                       )}
@@ -300,7 +633,10 @@ export function RequestDetail({ record, theme }: Props) {
   const showWs = !!record?.isWebSocket || (!!record?.webSocketMessages && record.webSocketMessages.length > 0)
   const [tab, setTab] = useState<Tab>('request')
   const [replayState, setReplayState] = useState<{ status: 'idle' | 'pending' | 'ok' | 'err'; message?: string }>({ status: 'idle' })
-  const [httpDialogOpen, setHttpDialogOpen] = useState(false)
+  const [exportDialogOpen, setExportDialogOpen] = useState(false)
+  const [editReplayOpen, setEditReplayOpen] = useState(false)
+  const [showRawUrl, setShowRawUrl] = useState(false)
+  const split = useMemo(() => (record ? splitPath(record.path) : { pathname: '', query: '', params: [] }), [record])
 
   // If selection moves away from a streamed/ws record, drop the matching tab.
   useEffect(() => {
@@ -378,16 +714,46 @@ export function RequestDetail({ record, theme }: Props) {
       {/* Meta row */}
       <div style={{ padding: '12px 16px', borderBottom: '1px solid var(--border)', flexShrink: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '6px' }}>
-          <div style={{ fontFamily: 'SF Mono, Menlo, monospace', fontSize: '13px', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            <span style={{ fontWeight: 600 }}>{record.method}</span>{' '}
-            <span style={{ color: 'var(--text-muted)' }}>{record.scheme}://</span>
-            {record.host}
-            {record.path}
+          <div style={{ fontFamily: 'SF Mono, Menlo, monospace', fontSize: '13px', flex: 1, overflow: 'hidden', display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0, flex: 1 }}>
+              <span style={{ fontWeight: 600 }}>{record.method}</span>{' '}
+              <span style={{ color: 'var(--text-muted)' }}>{record.scheme}://</span>
+              {record.host}
+              {showRawUrl ? record.path : split.pathname}
+              {!showRawUrl && split.params.length > 0 && (
+                <span style={{ color: 'var(--text-muted)' }}> ?{split.params.length}</span>
+              )}
+            </span>
+            {split.query && (
+              <button
+                onClick={() => setShowRawUrl((v) => !v)}
+                title={showRawUrl ? 'Show path only' : 'Show raw URL with query string'}
+                style={{
+                  background: 'transparent',
+                  border: '1px solid var(--border)',
+                  color: 'var(--text-muted)',
+                  fontSize: 10,
+                  padding: '1px 6px',
+                  borderRadius: 3,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.06em',
+                  flexShrink: 0,
+                }}
+              >
+                {showRawUrl ? 'path' : 'raw'}
+              </button>
+            )}
           </div>
-          <button onClick={() => setHttpDialogOpen(true)} title="Preview & export as .http file">
-            Export .http
+          <button onClick={() => setExportDialogOpen(true)} title="Preview & export — .http, cURL, or HAR">
+            Export…
           </button>
-          <button onClick={replay} disabled={replayState.status === 'pending'} title="Replay this request through the proxy">
+          <button
+            onClick={() => setEditReplayOpen(true)}
+            title="Open editor to tweak method, URL, headers, body before replaying"
+          >
+            Edit & replay…
+          </button>
+          <button onClick={replay} disabled={replayState.status === 'pending'} title="Replay this request as-is through the proxy">
             {replayState.status === 'pending' ? 'Replaying…' : 'Replay'}
           </button>
         </div>
@@ -477,7 +843,10 @@ export function RequestDetail({ record, theme }: Props) {
 
       {/* Content region: headers (shrink) + body (flex:1 with its own scroll) */}
       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', padding: '12px 16px', gap: '12px', overflow: 'hidden', minHeight: 0 }}>
-        {isBodyTab && <HeadersPanel headers={isRequest ? record.requestHeaders : record.responseHeaders} theme={theme} />}
+        {isBodyTab && isRequest && split.params.length > 0 && (
+          <QueryParamsPanel params={split.params} theme={theme} />
+        )}
+        {isBodyTab && <HeadersPanel headers={isRequest ? record.requestHeaders : record.responseHeaders} theme={theme} defaultExpanded={!(isRequest && split.params.length > 0)} />}
         {isSse && <HeadersPanel headers={record.responseHeaders} theme={theme} defaultExpanded={false} />}
         {isWs && <HeadersPanel headers={record.requestHeaders} theme={theme} defaultExpanded={false} />}
 
@@ -498,7 +867,8 @@ export function RequestDetail({ record, theme }: Props) {
         )}
       </div>
 
-      <HttpFileDialog record={record} open={httpDialogOpen} onClose={() => setHttpDialogOpen(false)} />
+      <ExportDialog record={record} open={exportDialogOpen} onClose={() => setExportDialogOpen(false)} />
+      <EditReplayDialog record={record} open={editReplayOpen} onClose={() => setEditReplayOpen(false)} />
     </div>
   )
 }

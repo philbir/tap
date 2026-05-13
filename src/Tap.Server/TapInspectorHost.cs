@@ -1,3 +1,5 @@
+using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using Tap.Core.Auth;
 using Yarp.ReverseProxy.Configuration;
@@ -101,6 +103,11 @@ public static class TapInspectorHost
             builder.Logging.AddFilter("Microsoft.AspNetCore", LogLevel.Warning);
             builder.Logging.AddFilter("Microsoft.Hosting.Lifetime", LogLevel.Warning);
             builder.Logging.AddFilter("Yarp", LogLevel.Warning);
+
+            // Compact single-line colored output for anything that does make it through
+            // (auth rejections, unexpected errors), so it sits well next to the Spectre table.
+            builder.Logging.ClearProviders();
+            builder.Logging.AddProvider(new TapCompactConsoleLoggerProvider());
         }
         builder.Logging.AddFilter("Yarp.ReverseProxy.Forwarder.HttpForwarder", LogLevel.Error);
 
@@ -152,6 +159,7 @@ public static class TapInspectorHost
             // WebSockets: must come before CaptureMiddleware so ctx.WebSockets.IsWebSocketRequest
             // resolves correctly when we intercept the upgrade.
             proxy.UseWebSockets();
+            proxy.Use(ServeErrorPageAssets);
             if (options.Auth is not null)
             {
                 proxy.UseTapAuth(options.Auth);
@@ -178,6 +186,43 @@ public static class TapInspectorHost
         });
 
         return app;
+    }
+
+    private static async Task ServeErrorPageAssets(HttpContext ctx, RequestDelegate next)
+    {
+        var assetName = ctx.Request.Path.Value switch
+        {
+            "/tap-error-broken.png" => "tap-error-broken.png",
+            "/tap-error-denied.png" => "tap-error-denied.png",
+            _ => null
+        };
+
+        if (assetName is null)
+        {
+            await next(ctx);
+            return;
+        }
+
+        var env = ctx.RequestServices.GetRequiredService<IWebHostEnvironment>();
+        var webRoot = !string.IsNullOrEmpty(env.WebRootPath)
+            ? env.WebRootPath
+            : Path.Combine(env.ContentRootPath, "wwwroot");
+        var path = Path.Combine(webRoot, assetName);
+
+        if (!File.Exists(path))
+        {
+            path = Path.Combine(AppContext.BaseDirectory, "wwwroot", assetName);
+        }
+
+        if (!File.Exists(path))
+        {
+            await next(ctx);
+            return;
+        }
+
+        ctx.Response.ContentType = "image/png";
+        ctx.Response.Headers.CacheControl = "public, max-age=3600";
+        await ctx.Response.SendFileAsync(path, ctx.RequestAborted);
     }
 
     private static async Task RejectCrossOriginUnsafeRequests(HttpContext ctx, RequestDelegate next)
@@ -399,14 +444,24 @@ public static class TapInspectorHost
             var record = store.GetAll().FirstOrDefault(r => r.Id == id);
             if (record is null) return Results.NotFound();
 
-            using var req = new HttpRequestMessage(new HttpMethod(record.Method),
+            if (!TryCreateHttpMethod(record.Method, out var replayMethod))
+            {
+                return Results.Json(new ReplayResponse(false, Error: "Invalid method."),
+                    RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+            }
+
+            using var req = new HttpRequestMessage(replayMethod,
                 $"http://localhost:{proxyPort}{record.Path}");
             req.Headers.Host = record.Host;
 
             if (!string.IsNullOrEmpty(record.RequestBody))
             {
-                var mediaType = record.RequestContentType?.Split(';')[0].Trim() ?? "application/octet-stream";
-                req.Content = new StringContent(record.RequestBody, System.Text.Encoding.UTF8, mediaType);
+                if (!TryCreateReplayContent(record.RequestBody, record.RequestContentType, out var content, out var error))
+                {
+                    return Results.Json(new ReplayResponse(false, Error: error),
+                        RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+                }
+                req.Content = content;
             }
 
             foreach (var (key, value) in record.RequestHeaders)
@@ -424,11 +479,107 @@ public static class TapInspectorHost
             {
                 var client = httpClientFactory.CreateClient("replay");
                 using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
-                return Results.Json(new { replayed = true, status = (int)resp.StatusCode });
+                return Results.Json(new ReplayResponse(true, Status: (int)resp.StatusCode),
+                    RequestRecordJsonContext.Default.ReplayResponse);
             }
             catch (Exception ex)
             {
-                return Results.Json(new { replayed = false, error = ex.Message }, statusCode: 500);
+                return Results.Json(new ReplayResponse(false, Error: ex.Message),
+                    RequestRecordJsonContext.Default.ReplayResponse, statusCode: 500);
+            }
+        });
+
+        // Edit-and-replay: a fully editable request payload, fired either through the
+        // local proxy (path-mode → captured by the inspector) or against an absolute URL
+        // (url-mode → off-proxy, useful for replaying against staging/prod for compare).
+        ep.MapPost("/api/replay", async (HttpContext httpCtx, IHttpClientFactory httpClientFactory, CancellationToken ct) =>
+        {
+            ReplayRequest? body;
+            try
+            {
+                body = await JsonSerializer.DeserializeAsync(httpCtx.Request.Body,
+                    RequestRecordJsonContext.Default.ReplayRequest, ct);
+            }
+            catch (JsonException ex)
+            {
+                return Results.Json(new ReplayResponse(false, Error: $"Invalid JSON: {ex.Message}"),
+                    RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+            }
+            if (body is null || string.IsNullOrWhiteSpace(body.Method))
+            {
+                return Results.Json(new ReplayResponse(false, Error: "Missing method."),
+                    RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+            }
+
+            string targetUrl;
+            string? hostHeader = null;
+            if (!string.IsNullOrWhiteSpace(body.Url))
+            {
+                if (!Uri.TryCreate(body.Url, UriKind.Absolute, out var parsed) ||
+                    (parsed.Scheme != Uri.UriSchemeHttp && parsed.Scheme != Uri.UriSchemeHttps))
+                {
+                    return Results.Json(new ReplayResponse(false, Error: "Url must be absolute http(s)."),
+                        RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+                }
+                targetUrl = parsed.ToString();
+            }
+            else if (!string.IsNullOrWhiteSpace(body.Path))
+            {
+                var path = body.Path.StartsWith('/') ? body.Path : "/" + body.Path;
+                targetUrl = $"http://localhost:{proxyPort}{path}";
+                hostHeader = body.Host;
+            }
+            else
+            {
+                return Results.Json(new ReplayResponse(false, Error: "Either path or url is required."),
+                    RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+            }
+
+            if (!TryCreateHttpMethod(body.Method, out var method))
+            {
+                return Results.Json(new ReplayResponse(false, Error: "Invalid method."),
+                    RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+            }
+
+            using var req = new HttpRequestMessage(method, targetUrl);
+            if (!string.IsNullOrEmpty(hostHeader)) req.Headers.Host = hostHeader;
+
+            if (!string.IsNullOrEmpty(body.Body))
+            {
+                if (!TryCreateReplayContent(body.Body, body.ContentType, out var content, out var error))
+                {
+                    return Results.Json(new ReplayResponse(false, Error: error),
+                        RequestRecordJsonContext.Default.ReplayResponse, statusCode: 400);
+                }
+                req.Content = content;
+            }
+
+            if (body.Headers is not null)
+            {
+                foreach (var (key, value) in body.Headers)
+                {
+                    if (string.IsNullOrWhiteSpace(key)) continue;
+                    if (string.Equals(key, "Host", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(key, "Content-Length", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (string.Equals(key, "Content-Type", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!req.Headers.TryAddWithoutValidation(key, value) && req.Content is not null)
+                    {
+                        req.Content.Headers.TryAddWithoutValidation(key, value);
+                    }
+                }
+            }
+
+            try
+            {
+                var client = httpClientFactory.CreateClient("replay");
+                using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct);
+                return Results.Json(new ReplayResponse(true, Status: (int)resp.StatusCode),
+                    RequestRecordJsonContext.Default.ReplayResponse);
+            }
+            catch (Exception ex)
+            {
+                return Results.Json(new ReplayResponse(false, Error: ex.Message),
+                    RequestRecordJsonContext.Default.ReplayResponse, statusCode: 500);
             }
         });
 
@@ -437,6 +588,54 @@ public static class TapInspectorHost
         ProfileEndpoints.Map(ep);
 
         ep.MapFallbackToFile("index.html");
+    }
+
+    private static bool TryCreateHttpMethod(string value, out HttpMethod method)
+    {
+        method = HttpMethod.Get;
+        var trimmed = value.Trim();
+        if (trimmed.Length == 0)
+        {
+            return false;
+        }
+
+        foreach (var ch in trimmed)
+        {
+            if (ch <= 32 || ch >= 127 || "()<>@,;:\\\"/[]?={} \t".Contains(ch, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        method = new HttpMethod(trimmed.ToUpperInvariant());
+        return true;
+    }
+
+    private static bool TryCreateReplayContent(
+        string body,
+        string? contentType,
+        out StringContent content,
+        out string? error)
+    {
+        content = new StringContent(body, Encoding.UTF8);
+        error = null;
+
+        if (string.IsNullOrWhiteSpace(contentType))
+        {
+            content.Headers.ContentType = new MediaTypeHeaderValue("application/octet-stream");
+            return true;
+        }
+
+        if (!MediaTypeHeaderValue.TryParse(contentType, out var parsed))
+        {
+            content.Dispose();
+            content = null!;
+            error = "Invalid content type.";
+            return false;
+        }
+
+        content.Headers.ContentType = parsed;
+        return true;
     }
 
     private static (RouteConfig[] routes, ClusterConfig[] clusters) BuildYarpConfig(IReadOnlyList<InspectorIngressEntry> ingress)
@@ -467,5 +666,60 @@ public static class TapInspectorHost
         }
 
         return (routes, clusters);
+    }
+}
+
+internal sealed class TapCompactConsoleLoggerProvider : ILoggerProvider
+{
+    public ILogger CreateLogger(string categoryName) => TapCompactConsoleLogger.Instance;
+    public void Dispose() { }
+}
+
+internal sealed class TapCompactConsoleLogger : ILogger
+{
+    public static readonly TapCompactConsoleLogger Instance = new();
+    private static readonly object ConsoleLock = new();
+
+    private TapCompactConsoleLogger() { }
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+
+    public void Log<TState>(
+        LogLevel logLevel,
+        EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (!IsEnabled(logLevel))
+        {
+            return;
+        }
+
+        var message = formatter(state, exception);
+        if (string.IsNullOrWhiteSpace(message) && exception is null)
+        {
+            return;
+        }
+
+        var icon = logLevel switch
+        {
+            LogLevel.Critical => "🚨",
+            LogLevel.Error => "❌",
+            LogLevel.Warning => "⚠️",
+            LogLevel.Information => "ℹ️",
+            _ => "•"
+        };
+
+        lock (ConsoleLock)
+        {
+            Console.WriteLine($"{DateTimeOffset.Now:HH:mm:ss} {icon}  {message}");
+            if (exception is not null)
+            {
+                Console.WriteLine(exception);
+            }
+        }
     }
 }

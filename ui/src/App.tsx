@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { RequestList } from './RequestList'
 import { RequestDetail } from './RequestDetail'
 import { TunnelPanel } from './TunnelPanel'
@@ -90,6 +90,10 @@ export function App() {
   const [tunnelOpen, setTunnelOpen] = useState(false)
   const [tunnelInfoOpen, setTunnelInfoOpen] = useState(false)
   const [selectedHostname, setSelectedHostname] = useState<string | null>(null)
+  /** When non-null, the next inbound record (sequence greater than `armedAt`) is auto-selected. */
+  const [captureNext, setCaptureNext] = useState<{ armedAt: number } | null>(null)
+  const captureMissedRef = useRef(false)
+  const [captureMissed, setCaptureMissed] = useState(false)
 
   const selected = useMemo(
     () => records.find((r) => r.id === selectedId) ?? null,
@@ -114,6 +118,46 @@ export function App() {
     () => (selectedHostname ? records.filter((r) => r.host === selectedHostname) : records),
     [records, selectedHostname],
   )
+
+  // Capture-next: when armed, watch for a brand-new record (sequence > armedAt)
+  // and auto-select the first one that matches the active hostname filter. If
+  // the next record arrives but is hidden by the host pill, briefly flash a
+  // hint so the user knows the capture fired but can't see the result here.
+  useEffect(() => {
+    if (!captureNext) return
+    if (records.length === 0) return
+    // Newest record is records[0] (useRequestStream prepends).
+    const newest = records[0]
+    if (newest.sequence <= captureNext.armedAt) return
+    // Find the first record after armedAt that's visible under the host filter.
+    const candidate = visibleRecords.find((r) => r.sequence > captureNext.armedAt)
+    if (candidate) {
+      setSelectedId(candidate.id)
+      captureMissedRef.current = false
+      setCaptureMissed(false)
+    } else {
+      captureMissedRef.current = true
+      setCaptureMissed(true)
+      setTimeout(() => {
+        if (captureMissedRef.current) {
+          captureMissedRef.current = false
+          setCaptureMissed(false)
+        }
+      }, 3500)
+    }
+    setCaptureNext(null)
+  }, [captureNext, records, visibleRecords])
+
+  const toggleCaptureNext = () => {
+    if (captureNext) {
+      setCaptureNext(null)
+      return
+    }
+    const armedAt = records[0]?.sequence ?? 0
+    setCaptureNext({ armedAt })
+    setCaptureMissed(false)
+    captureMissedRef.current = false
+  }
 
   const showSelector = view === 'inspector' && ingress.length >= 2
 
@@ -277,6 +321,9 @@ export function App() {
             filter={filter}
             onSelect={setSelectedId}
             onFilterChange={setFilter}
+            captureArmed={captureNext !== null}
+            captureMissed={captureMissed}
+            onToggleCapture={toggleCaptureNext}
           />
           <RequestDetail record={selected} theme={theme} />
         </div>

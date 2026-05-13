@@ -209,7 +209,12 @@ public sealed class UpstreamErrorPageMiddleware
       backdrop-filter: blur(18px);
     }
 
-    svg { width: 100%; height: auto; display: block; }
+    .art img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 6px;
+    }
 
     .flow {
       grid-column: 1 / -1;
@@ -300,66 +305,7 @@ public sealed class UpstreamErrorPageMiddleware
       {{upstreamLink}}
     </section>
     <section class="art" aria-label="Tap upstream failure diagram">
-      <svg viewBox="0 0 920 430" role="img" aria-label="A broken Tap pipe between the public edge and upstream">
-        <defs>
-          <linearGradient id="pipe" x1="0" x2="1">
-            <stop offset="0" stop-color="#7e70ef" stop-opacity="0.45"/>
-            <stop offset="0.48" stop-color="#20d4e6" stop-opacity="0.78"/>
-            <stop offset="1" stop-color="#7e70ef" stop-opacity="0.35"/>
-          </linearGradient>
-          <filter id="shadow" x="-20%" y="-30%" width="140%" height="160%">
-            <feDropShadow dx="0" dy="18" stdDeviation="18" flood-color="#5745ba" flood-opacity="0.22"/>
-          </filter>
-          <filter id="hard-shadow" x="-20%" y="-20%" width="140%" height="140%">
-            <feDropShadow dx="0" dy="12" stdDeviation="8" flood-color="#17142b" flood-opacity="0.18"/>
-          </filter>
-        </defs>
-        <path d="M72 126 C90 70 138 45 193 61 C220 15 286 12 325 54 C356 48 389 66 404 97 C454 99 492 131 492 174 C492 222 452 252 402 252 L119 252 C71 252 34 218 34 173 C34 150 49 133 72 126Z" fill="#fff" opacity="0.88" filter="url(#shadow)"/>
-        <path d="M658 103 C679 55 723 36 772 52 C795 17 850 15 880 54 C913 58 936 82 936 116 C936 158 900 184 856 184 L704 184 C665 184 635 158 635 123 C635 114 643 107 658 103Z" fill="#fff" opacity="0.58" filter="url(#shadow)"/>
-        <g filter="url(#shadow)">
-          <rect x="112" y="178" width="430" height="86" rx="43" fill="url(#pipe)" stroke="#ffffff" stroke-width="4"/>
-          <rect x="152" y="199" width="318" height="9" rx="4.5" fill="#25e4ef" opacity="0.9"/>
-          <rect x="188" y="227" width="236" height="9" rx="4.5" fill="#a6fff7" opacity="0.82"/>
-          <circle cx="542" cy="221" r="48" fill="rgba(255,255,255,0.52)" stroke="#b6aafb" stroke-width="5"/>
-          <path d="M574 190 C614 194 641 212 657 240" fill="none" stroke="url(#pipe)" stroke-width="82" stroke-linecap="round"/>
-          <path d="M574 190 C614 194 641 212 657 240" fill="none" stroke="#ffffff" stroke-opacity="0.58" stroke-width="6" stroke-linecap="round"/>
-          <path d="M688 259 C716 276 739 300 752 336" fill="none" stroke="url(#pipe)" stroke-width="72" stroke-linecap="round" opacity="0.82"/>
-          <path d="M688 259 C716 276 739 300 752 336" fill="none" stroke="#ffffff" stroke-opacity="0.52" stroke-width="6" stroke-linecap="round"/>
-          <path d="M638 222 L694 202 L667 247 L724 231 L671 304 L681 255 L626 273Z" fill="#fff8d9" stroke="#ff8a1f" stroke-width="6" stroke-linejoin="round"/>
-          <path d="M615 176 L642 205 M630 169 L663 199 M640 246 L610 284 M662 254 L634 295" stroke="#ffffff" stroke-width="5" stroke-linecap="round" opacity="0.86"/>
-        </g>
-        <g transform="translate(672 96)">
-          <rect width="210" height="170" rx="22" fill="#272060" stroke="#dcd5ff" stroke-width="7" filter="url(#shadow)"/>
-          <rect x="22" y="24" width="166" height="122" rx="12" fill="#342879"/>
-          <rect x="42" y="44" width="70" height="12" rx="6" fill="#24d0dc"/>
-          <rect x="42" y="70" width="118" height="12" rx="6" fill="#72e4ee" opacity="0.86"/>
-          <rect x="42" y="96" width="142" height="12" rx="6" fill="#8268ff"/>
-          <rect x="42" y="122" width="92" height="12" rx="6" fill="#19c5d4"/>
-        </g>
-        <g transform="translate(82 286) rotate(-5)" filter="url(#hard-shadow)">
-          <path d="M32 52 C48 33 65 33 81 52 S113 70 122 52" fill="none" stroke="#2dd4bf" stroke-linecap="round" stroke-width="18" opacity=".22"/>
-          <path d="M32 52 C48 33 65 33 81 52 S113 70 122 52" fill="none" stroke="#7057e9" stroke-linecap="round" stroke-width="9"/>
-          <path d="M75 22 h18 v23 h-18z" fill="#c9c2ea"/>
-          <path d="M56 16 h56 v16 h-56z" fill="#ece8ff"/>
-          <circle cx="56" cy="24" r="9" fill="#ffffff"/>
-          <circle cx="112" cy="24" r="9" fill="#ffffff"/>
-          <path d="M58 48 h52 a12 12 0 0 1 12 12 v4 a12 12 0 0 1 -12 12 h-18 v18 a7 7 0 0 1 -14 0 v-18 h-20 a12 12 0 0 1 -12 -12 v-4 a12 12 0 0 1 12 -12z" fill="#d9d4f8" stroke="#6d5ab7" stroke-width="3"/>
-          <path d="M94 76 C117 82 128 96 128 120" fill="none" stroke="#2dd4bf" stroke-linecap="round" stroke-width="8"/>
-          <circle cx="130" cy="124" r="5" fill="#ff8a1f"/>
-        </g>
-        <g transform="translate(280 286)" filter="url(#shadow)">
-          <rect width="238" height="102" rx="18" fill="rgba(255,255,255,0.78)" stroke="#d8d0ff" stroke-width="3"/>
-          <circle cx="32" cy="30" r="10" fill="#18b879"/>
-          <circle cx="32" cy="62" r="10" fill="#18c5d4"/>
-          <circle cx="32" cy="94" r="10" fill="#ff8a1f"/>
-          <rect x="58" y="24" width="64" height="10" rx="5" fill="#b8acf2"/>
-          <rect x="58" y="56" width="96" height="10" rx="5" fill="#b8acf2"/>
-          <rect x="58" y="88" width="52" height="10" rx="5" fill="#b8acf2"/>
-          <path d="M148 29 C162 20 174 40 190 29 C204 18 214 34 226 26" fill="none" stroke="#16c6d7" stroke-width="3"/>
-          <path d="M148 62 C164 52 177 72 194 60 C207 50 217 68 228 57" fill="none" stroke="#7057e9" stroke-width="3"/>
-          <path d="M148 94 C164 83 176 106 194 93 C208 82 218 101 228 90" fill="none" stroke="#ff8a1f" stroke-width="3"/>
-        </g>
-      </svg>
+      <img src="/tap-error-broken.png" alt="A translucent Tap pipe cracked before reaching an upstream application">
       <div class="meta">YARP forwarding failed: {{safeErrorKind}}</div>
     </section>
   </main>

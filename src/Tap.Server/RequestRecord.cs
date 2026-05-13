@@ -99,6 +99,26 @@ public sealed record WebSocketMessageEnvelope(
     [property: JsonPropertyName("sequence")] int Sequence,
     [property: JsonPropertyName("message")] WebSocketMessage Message);
 
+/// <summary>
+/// Edit-and-replay payload posted to <c>POST /api/replay</c>. Either <see cref="Path"/>
+/// or <see cref="Url"/> must be set; <see cref="Path"/> sends through the local proxy
+/// (so the replay is itself captured), <see cref="Url"/> sends to an absolute upstream
+/// (off-proxy — useful for replaying against staging/prod).
+/// </summary>
+public sealed record ReplayRequest(
+    [property: JsonPropertyName("method")] string Method,
+    [property: JsonPropertyName("path")] string? Path,
+    [property: JsonPropertyName("url")] string? Url,
+    [property: JsonPropertyName("host")] string? Host,
+    [property: JsonPropertyName("headers")] Dictionary<string, string>? Headers,
+    [property: JsonPropertyName("body")] string? Body,
+    [property: JsonPropertyName("contentType")] string? ContentType);
+
+public sealed record ReplayResponse(
+    [property: JsonPropertyName("replayed")] bool Replayed,
+    [property: JsonPropertyName("status")] int? Status = null,
+    [property: JsonPropertyName("error")] string? Error = null);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(RequestRecord))]
 [JsonSerializable(typeof(List<RequestRecord>))]
@@ -106,4 +126,6 @@ public sealed record WebSocketMessageEnvelope(
 [JsonSerializable(typeof(SseEventEnvelope))]
 [JsonSerializable(typeof(WebSocketMessage))]
 [JsonSerializable(typeof(WebSocketMessageEnvelope))]
+[JsonSerializable(typeof(ReplayRequest))]
+[JsonSerializable(typeof(ReplayResponse))]
 internal sealed partial class RequestRecordJsonContext : JsonSerializerContext;

@@ -153,7 +153,7 @@ public sealed class TapAuthMiddleware(
             var ip = ResolveClientIp(ctx);
             if (ip is null || !_cidrs.Any(n => n.Contains(ip)))
             {
-                await Reject(ctx, 403, $"Source IP {ip} not in allowlist.");
+                await Reject(ctx, 403, "IP not in allowlist.");
                 return;
             }
         }
@@ -176,17 +176,48 @@ public sealed class TapAuthMiddleware(
 
     private async Task Reject(HttpContext ctx, int status, string reason)
     {
-        logger.LogWarning("Auth rejected {Method} {Path} from {Ip}: {Reason}",
-            ctx.Request.Method, ctx.Request.Path, ctx.Connection.RemoteIpAddress, reason);
+        var clientIp = ResolveClientIp(ctx) ?? ctx.Connection.RemoteIpAddress;
+        logger.LogWarning("Auth {Status} {Method} {Path} from {Ip}: {Reason}",
+            status, ctx.Request.Method, ctx.Request.Path, clientIp, reason);
         ctx.Response.StatusCode = status;
-        ctx.Response.ContentType = "text/plain";
-        await ctx.Response.WriteAsync(reason);
+        ctx.Response.Headers.CacheControl = "no-store";
+
+        if (WantsHtml(ctx.Request))
+        {
+            ctx.Response.ContentType = "text/html; charset=utf-8";
+            await ctx.Response.WriteAsync(AuthErrorPage.Render(status), ctx.RequestAborted);
+            return;
+        }
+
+        ctx.Response.ContentType = "text/plain; charset=utf-8";
+        await ctx.Response.WriteAsync(AuthErrorPage.ResponseText(status), ctx.RequestAborted);
+    }
+
+    private static bool WantsHtml(HttpRequest request)
+    {
+        if (!request.Headers.TryGetValue("Accept", out var accept) || accept.Count == 0)
+        {
+            return false;
+        }
+
+        var value = accept.ToString();
+        return value.Contains("text/html", StringComparison.OrdinalIgnoreCase) ||
+            value.Contains("application/xhtml+xml", StringComparison.OrdinalIgnoreCase);
     }
 
     private static System.Net.IPNetwork[]? ParseCidrs(List<string>? cidrs)
     {
         if (cidrs is not { Count: > 0 }) return null;
-        return cidrs.Select(c => System.Net.IPNetwork.Parse(c.Trim())).ToArray();
+        return cidrs.Select(c =>
+        {
+            var trimmed = c.Trim();
+            if (!trimmed.Contains('/') && IPAddress.TryParse(trimmed, out var ip))
+            {
+                var prefix = ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? 128 : 32;
+                trimmed = $"{trimmed}/{prefix}";
+            }
+            return System.Net.IPNetwork.Parse(trimmed);
+        }).ToArray();
     }
 
     private static IPAddress? ResolveClientIp(HttpContext ctx)
@@ -298,6 +329,155 @@ public sealed class JwtTokenValidator
         }
 
         return (true, null);
+    }
+}
+
+internal static class AuthErrorPage
+{
+    public static string ResponseText(int statusCode) =>
+        statusCode == StatusCodes.Status401Unauthorized
+            ? "Authentication required."
+            : "Access denied.";
+
+    public static string Render(int statusCode)
+    {
+        var title = statusCode == StatusCodes.Status401Unauthorized
+            ? "Authentication required"
+            : "Access denied";
+        var safeTitle = WebUtility.HtmlEncode(title);
+        var safeResponseText = WebUtility.HtmlEncode(ResponseText(statusCode));
+
+        return $$"""
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{statusCode}} {{safeTitle}} - Tap access denied</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #17142b;
+      --muted: #655f83;
+      --line: rgba(111, 92, 202, 0.22);
+      --panel: rgba(255, 255, 255, 0.78);
+      --violet: #7057e9;
+      --cyan: #18c5d4;
+      --green: #81c783;
+      --orange: #ff8a1f;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 32px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 18%, rgba(255, 255, 255, 0.95), transparent 22%),
+        radial-gradient(circle at 78% 18%, rgba(139, 119, 236, 0.24), transparent 28%),
+        radial-gradient(circle at 10% 88%, rgba(112, 190, 133, 0.28), transparent 24%),
+        linear-gradient(145deg, #fbf7ff 0%, #f2ecff 46%, #f7fbf5 100%);
+    }
+
+    main {
+      width: min(1320px, 100%);
+      display: grid;
+      grid-template-columns: minmax(300px, 0.8fr) minmax(620px, 1.2fr);
+      gap: 30px 42px;
+      align-items: center;
+    }
+
+    .status {
+      margin: 0 0 22px;
+      color: var(--violet);
+      font-size: clamp(92px, 16vw, 178px);
+      font-weight: 780;
+      letter-spacing: 0;
+      line-height: 0.86;
+      text-shadow: 0 18px 48px rgba(93, 68, 203, 0.22);
+    }
+
+    h1 {
+      margin: 0 0 12px;
+      font-size: clamp(34px, 5vw, 62px);
+      letter-spacing: 0;
+      line-height: 1;
+    }
+
+    p {
+      max-width: 58ch;
+      margin: 0;
+      color: var(--muted);
+      font-size: 18px;
+      line-height: 1.55;
+    }
+
+    .reason {
+      display: inline-block;
+      max-width: 100%;
+      margin-top: 18px;
+      padding: 10px 12px;
+      overflow-wrap: anywhere;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.56);
+      color: #332b68;
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      font-size: 15px;
+    }
+
+    .art {
+      min-height: 410px;
+      padding: 20px;
+      border: 1px solid rgba(255, 255, 255, 0.72);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: 0 24px 80px rgba(72, 58, 149, 0.18);
+      backdrop-filter: blur(18px);
+    }
+
+    .art img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 6px;
+    }
+
+    .meta {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 760px) {
+      body { padding: 22px; place-items: start center; }
+      main { grid-template-columns: 1fr; gap: 28px; }
+      .art { min-height: 0; padding: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section>
+      <div class="status">{{statusCode}}</div>
+      <h1>{{safeTitle}}</h1>
+      <p>Tap received the request, but this tunnel is protected and the request did not pass the configured access checks.</p>
+      <div class="reason">{{safeResponseText}}</div>
+    </section>
+    <section class="art" aria-label="Tap unauthorized request diagram">
+      <img src="/tap-error-denied.png" alt="A Tap access gate with a 403 shield blocking incoming requests">
+      <div class="meta">Tap auth blocked the request before proxying.</div>
+    </section>
+  </main>
+</body>
+</html>
+""";
     }
 }
 

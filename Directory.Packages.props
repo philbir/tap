@@ -1,18 +1,28 @@
 <Project>
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
-    <AspireVersion>13.3.0</AspireVersion>
+    <AspireVersion>13.4.2</AspireVersion>
     <AspNetCoreVersion>10.0.7</AspNetCoreVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="Aspire.AppHost.Sdk" Version="$(AspireVersion)" />
     <PackageVersion Include="Aspire.Hosting" Version="$(AspireVersion)" />
-    <PackageVersion Include="Aspire.Hosting.AppHost" Version="$(AspireVersion)" />
     <PackageVersion Include="Aspire.Hosting.JavaScript" Version="$(AspireVersion)" />
     <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="$(AspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="$(AspNetCoreVersion)" />
     <PackageVersion Include="Spectre.Console" Version="0.50.0" />
     <PackageVersion Include="Spectre.Console.Cli" Version="0.50.0" />
+    <PackageVersion Include="Markdig" Version="0.38.0" />
+    <PackageVersion Include="YamlDotNet" Version="16.2.1" />
+    <PackageVersion Include="Azure.Identity" Version="1.13.1" />
+    <PackageVersion Include="Azure.Security.KeyVault.Secrets" Version="4.7.0" />
+
+    <!-- Demo.Api dependencies — only consumed by samples/Demo.Api. -->
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.0.3" />
+    <PackageVersion Include="HotChocolate.Subscriptions.InMemory" Version="16.0.3" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(AspNetCoreVersion)" />
+    <PackageVersion Include="OpenIddict.AspNetCore" Version="7.5.0" />
+    <PackageVersion Include="OpenIddict.EntityFrameworkCore" Version="7.5.0" />
   </ItemGroup>
 </Project>

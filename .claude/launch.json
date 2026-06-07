@@ -1,0 +1,28 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "studio-api",
+      "runtimeExecutable": "dotnet",
+      "runtimeArgs": [
+        "run",
+        "--project",
+        "src/Tap.Studio/Tap.Studio.csproj",
+        "-p:SkipTapUiBuild=true",
+        "--",
+        "--Studio:WorkspaceRoot=samples/Studio.AppHost/sample-workspace",
+        "--Studio:Port=5298"
+      ],
+      "port": 5298
+    },
+    {
+      "name": "studio-ui",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "STUDIO_API_URL=http://localhost:5298",
+        "scripts/studio-ui-dev.sh"
+      ],
+      "port": 5297
+    }
+  ]
+}

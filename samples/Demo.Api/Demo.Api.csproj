@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Demo.Api</RootNamespace>
+    <AssemblyName>Demo.Api</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="HotChocolate.AspNetCore" />
+    <PackageReference Include="HotChocolate.Subscriptions.InMemory" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />
+    <PackageReference Include="OpenIddict.AspNetCore" />
+    <PackageReference Include="OpenIddict.EntityFrameworkCore" />
+  </ItemGroup>
+</Project>

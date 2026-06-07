@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-mcp",
+  "//": "Project-scoped MCP servers for the Tap repo. Auto-loaded by Claude Code when this directory is opened. Each contributor is prompted once to approve the server before it runs.",
+  "mcpServers": {
+    "//": "Context7 surfaces up-to-date docs + code snippets for any library indexed at context7.com. Used here so the Mantine v9 skill can fetch authoritative prop signatures + examples on demand. No API key needed.",
+    "context7": {
+      "command": "npx",
+      "args": ["-y", "@upstash/context7-mcp@latest"]
+    }
+  }
+}

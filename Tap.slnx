@@ -4,9 +4,13 @@
     <Project Path="src/Tap.Hosting/Tap.Hosting.csproj" />
     <Project Path="src/Tap.Server/Tap.Server.csproj" />
     <Project Path="src/Tap.Cli/Tap.Cli.csproj" />
+    <Project Path="src/Tap.Workspace/Tap.Workspace.csproj" />
+    <Project Path="src/Tap.Studio/Tap.Studio.csproj" />
   </Folder>
   <Folder Name="/samples/">
+    <Project Path="samples/Demo.Api/Demo.Api.csproj" />
     <Project Path="samples/Sample.Api/Sample.Api.csproj" />
     <Project Path="samples/Sample.AppHost/Sample.AppHost.csproj" />
+    <Project Path="samples/Studio.AppHost/Studio.AppHost.csproj" />
   </Folder>
 </Solution>

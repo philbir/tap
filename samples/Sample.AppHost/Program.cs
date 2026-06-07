@@ -78,6 +78,14 @@ var api = builder.AddProject<Projects.Sample_Api>("api")
     .WithEnvironment("Jwt__Issuer", jwtIssuer)
     .WithEnvironment("Jwt__Audience", jwtAudience);
 
+// Demo.Api — broad surface area for testing Tap features end-to-end:
+//   HTTP verbs + content types, file uploads, SSE, WebSockets, GraphQL (HotChocolate),
+//   and a real OAuth2/OIDC token endpoint (OpenIddict, in-memory store).
+// Runs alongside Sample.Api so any scenario tap can be pointed at either.
+builder.AddProject<Projects.Demo_Api>("demo-api")
+    .WithHttpEndpoint(port: 5180, name: "http")
+    .WithExternalHttpEndpoints();
+
 // Collect tap entries to pass to the Sample.Client. Local-only proxies use the
 // localhost URL directly (no host filter on the YARP route); tunnel-routed taps
 // need the public URL since YARP filters by Host header.

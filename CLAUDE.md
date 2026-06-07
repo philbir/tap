@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Developer flow
+
+- **Frontend changes (`ui/`, `ui-studio/`)**: always verify in a browser before reporting done. Use the Claude Preview / Chrome MCP to load the dev server, exercise the changed feature, and check the console for errors. Type-check + build passing is not enough — the UI must actually render and behave correctly.
+- **Backend changes (`Tap.Hosting`, `Tap.Server`, `Tap.Studio`, AppHost)**: use the Aspire CLI to rebuild and restart only the affected resource rather than restarting the whole AppHost. Prefer `aspire` over `dotnet run`/manual kill loops — it keeps tunnels, daemons, and sibling resources warm and gives faster turnaround.
+
 ## Build, run, test
 
 - SDK is pinned in `global.json` to .NET 10 (`10.0.201`). Targets `net10.0` everywhere.
@@ -13,10 +18,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### UI
 
-- `ui/` is yarn 4.9.1 (Berry) — use `yarn`, not `npm`. Scripts: `yarn dev` (Vite, port 5197), `yarn build` (`tsc -b && vite build`), `yarn preview`.
+- **Two UIs.** `ui/` is the inspector (vanilla CSS modules + base-ui primitives, embedded in Tap.Server). `ui-studio/` is the workbench (Mantine v9.2.1 + Tabler icons + Zustand). They share zero runtime code.
+- Both are yarn 4.9.1 (Berry) — use `yarn`, not `npm`. Scripts: `yarn dev` / `yarn build` / `yarn preview`. Inspector dev port is 5197; Studio dev port is 5297.
 - `Tap.Server.csproj` has a `BuildTapUi` MSBuild target that runs `yarn install` + `yarn build` and copies `ui/dist/**` into `src/Tap.Server/wwwroot/` on every server build. Set `-p:SkipTapUiBuild=true` to skip when iterating on C# only.
-- For UI hot-reload against a running AppHost: `cd ui && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`); set that env var to whatever UI port the AppHost allocated.
+- For inspector hot-reload against a running AppHost: `cd ui && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`).
+- For Studio hot-reload: `cd ui-studio && yarn dev` against the Studio.AppHost (`VITE_STUDIO_API_URL`, default `http://localhost:5298`).
 - `src/Tap.Server/wwwroot/*` is gitignored (regenerated artifact) — never hand-edit it.
+
+### Studio UI conventions (`ui-studio/`)
+
+- **Mantine-only**. The component library is `@mantine/core` v9.2.1 plus `@mantine/hooks`, `@mantine/modals`, `@mantine/notifications`, `@mantine/form`. Do not introduce other UI libs. Icons come from `@tabler/icons-react`. The provider stack lives in `src/main.tsx`; theme in `src/theme.ts`.
+- **Skill**: `.claude/skills/mantine/SKILL.md` documents the v9 gotchas, our conventions, color tokens, and the per-kind editor recipe. Load it whenever editing `ui-studio/`.
+- **Live docs MCP**: `.mcp.json` registers Context7 (`@upstash/context7-mcp`). Use `mcp__context7__resolve-library-id` + `get-library-docs` for authoritative v9 prop signatures.
+- **State**: Zustand store at `src/store/index.ts`. Global slices (`info / tree / envs / collections / auths / knownWorkspaces / tabs / activeEnvByRoot / generation`) live there; editor-local form state stays in `useState`. UI state (open tabs + per-workspace active env) is persisted to localStorage via `persist` middleware.
+- **Editor pattern**: every editor maintains a typed `spec` + `savedSpec` and PUTs to `/api/{kind}/spec` on save. The server (in `src/Tap.Studio/Specs/`) is the sole producer of canonical YAML — clients never assemble YAML strings. Dirty = `JSON.stringify(spec) !== JSON.stringify(savedSpec)`. Source tab is read-only.
+- **No CSS modules in editors.** Spacing via Mantine props (`mb="md"`, `gap="xs"`), layout via `<Stack>` / `<Group>` / `<SimpleGrid>`. The one exception is `VariableInput.module.css` (painted-overlay token highlighter).
 
 ## Architecture
 

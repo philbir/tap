@@ -160,14 +160,15 @@ public sealed class CaptureMiddleware
             return;
         }
 
-        ctx.Request.EnableBuffering();
-
+        // Decide BEFORE EnableBuffering — buffering an unread binary upload would spill the
+        // whole payload to a temp file (and copy it again on forward) for no benefit.
         if (!IsTextContentType(ctx.Request.ContentType) || length > MaxCaptureBytes)
         {
             record.RequestBodyTruncated = true;
             return;
         }
 
+        ctx.Request.EnableBuffering();
         using var ms = new MemoryStream();
         await ctx.Request.Body.CopyToAsync(ms);
         record.RequestBody = Encoding.UTF8.GetString(ms.ToArray());

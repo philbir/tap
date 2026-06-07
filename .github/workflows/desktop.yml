@@ -1,0 +1,231 @@
+name: Build desktop app
+
+on:
+  push:
+    # Plain SemVer tags, no `v` prefix — `0.1.0`, `0.2.0-alpha.4`, etc.
+    tags: ["[0-9]+.[0-9]+.[0-9]+*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: arm64 only. macos-13 (Intel) runners are deprecated/scarce
+          # and Rosetta runs the arm64 binary fine on Intel Macs. Add a native
+          # x86_64 row if/when we ship a non-Rosetta build.
+          - { runner: macos-14,        target: aarch64-apple-darwin,        bundles: "app,dmg"  }
+          # Linux: deb only — AppImage bundling via linuxdeploy is fragile in
+          # CI and not our primary distribution channel.
+          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu,    bundles: "deb"      }
+          - { runner: windows-latest,  target: x86_64-pc-windows-msvc,      bundles: "msi,nsis" }
+
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.target }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - run: corepack enable
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux deps
+        if: startsWith(matrix.runner, 'ubuntu-')
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libayatana-appindicator3-dev \
+            patchelf
+
+      # ui-studio uses yarn 4 (Berry); install at the desktop dir level so the
+      # @tauri-apps/cli is in scope for tauri-action's bundling step.
+      - name: Install desktop deps
+        working-directory: apps/tap-studio-desktop
+        run: yarn install --immutable
+
+      # Defensive sync: rewrite apps/tap-studio-desktop/package.json,
+      # src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock
+      # to the tag version so the bundled installers' filenames and Info.plist
+      # always match the tag — even when a release PR forgets to bump them.
+      - name: Sync desktop version from tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: node apps/tap-studio-desktop/scripts/sync-version.mjs "${GITHUB_REF_NAME}"
+
+      # Build the SPA, then publish the sidecar + stage wwwroot for the target
+      # triple. compile-server.mjs is cross-platform (no bash) so the Windows
+      # runner can invoke it without WSL.
+      - name: Build Studio UI
+        working-directory: ui-studio
+        run: |
+          corepack enable
+          yarn install --immutable
+          yarn build
+
+      - name: Compile sidecar
+        run: node apps/tap-studio-desktop/scripts/compile-server.mjs ${{ matrix.target }}
+
+      # Notarization needs the App Store Connect .p8 private key on disk.
+      # The secret holds the base64-encoded file; decode and export the path so
+      # tauri-action picks it up. No-op on non-macOS runners and when the
+      # secret isn't set.
+      - name: Decode App Store Connect API key (macOS only)
+        if: startsWith(matrix.runner, 'macos-')
+        env:
+          APPLE_API_KEY_BASE64: ${{ secrets.APPLE_API_KEY_BASE64 }}
+        run: |
+          if [ -n "$APPLE_API_KEY_BASE64" ]; then
+            mkdir -p "$HOME/.private_keys"
+            echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$HOME/.private_keys/AuthKey.p8"
+            echo "APPLE_API_KEY_PATH=$HOME/.private_keys/AuthKey.p8" >> "$GITHUB_ENV"
+          fi
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS code-signing + notarization. Tauri-action only acts on these
+          # when bundling for macOS targets; on other runners they resolve to
+          # empty strings and are ignored. Until the secrets are populated on
+          # GitHub the build falls back to ad-hoc signing (suitable for local
+          # dev; users get a Gatekeeper prompt on first launch).
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Notarization via App Store Connect API key (preferred over
+          # app-specific passwords). Set ALL of APPLE_API_* together.
+          # APPLE_API_KEY_PATH is exported by the decode step above.
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          # Updater artifact signing. Generate the keypair once with:
+          #   npx @tauri-apps/cli signer generate -w ~/.tauri/tap-studio.key
+          # Store the private key in TAURI_SIGNING_PRIVATE_KEY and the password
+          # (if any) in TAURI_SIGNING_PRIVATE_KEY_PASSWORD. tauri-action will
+          # sign every installable artifact; the publish-updater job composes
+          # latest.json from the resulting .sig files.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          projectPath: apps/tap-studio-desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: "Tap Studio ${{ github.ref_name }}"
+          # Publish immediately so artifacts are downloadable from Releases.
+          # Tags with a dash (e.g. 0.2.0-alpha.3) are marked as pre-releases.
+          releaseDraft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          # tauri-action's own latest.json emitter trips over the asset rename
+          # it does on upload, so the manifest is skipped and .sig files never
+          # get attached. We compose latest.json ourselves in publish-updater.
+          includeUpdaterJson: false
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+
+      # tauri-action uploads the user-facing bundles (.dmg / .msi / .exe /
+      # .deb / .app.tar.gz) but not the .sig files needed for the updater
+      # manifest. Upload them here, renaming so each sig matches the
+      # release-asset name tauri-action picked.
+      - name: Attach updater signatures to release
+        if: github.ref_type == 'tag'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TARGET: ${{ matrix.target }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BUNDLE="apps/tap-studio-desktop/src-tauri/target/${TARGET}/release/bundle"
+          case "${TARGET}" in
+            aarch64-apple-darwin)
+              cp "${BUNDLE}/macos/Tap Studio.app.tar.gz.sig" \
+                 "Tap-Studio_aarch64.app.tar.gz.sig"
+              gh release upload "${VERSION}" \
+                "Tap-Studio_aarch64.app.tar.gz.sig" --clobber
+              ;;
+            x86_64-pc-windows-msvc)
+              # The updater downloads + unpacks the .nsis.zip; the .sig is over
+              # the zip. The .zip isn't a tauri-action default upload, so push
+              # both.
+              ZIP="${BUNDLE}/nsis/Tap Studio_${VERSION}_x64-setup.nsis.zip"
+              gh release upload "${VERSION}" "${ZIP}" "${ZIP}.sig" --clobber
+              ;;
+            x86_64-unknown-linux-gnu)
+              echo "Linux ships .deb only — no updater bundle, skipping."
+              ;;
+          esac
+
+  # Compose latest.json from the per-platform sigs the matrix attached and
+  # publish it to the release. The updater client at
+  # github.com/philbir/tap/releases/latest/download/latest.json reads this.
+  publish-updater:
+    needs: build
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Generate and upload latest.json
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p sigs
+          gh release download "${VERSION}" --pattern '*.sig' --dir sigs
+
+          BASE="https://github.com/${GH_REPO}/releases/download/${VERSION}"
+          PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          NOTES=$(gh release view "${VERSION}" --json body --jq '.body // ""')
+
+          PLATFORMS='{}'
+
+          MAC_SIG_PATH="sigs/Tap-Studio_aarch64.app.tar.gz.sig"
+          if [ -f "${MAC_SIG_PATH}" ]; then
+            MAC_SIG=$(cat "${MAC_SIG_PATH}")
+            PLATFORMS=$(jq -n \
+              --arg sig "${MAC_SIG}" \
+              --arg url "${BASE}/Tap-Studio_aarch64.app.tar.gz" \
+              '{ "darwin-aarch64": { signature: $sig, url: $url } }')
+          fi
+
+          WIN_SIG_PATH="sigs/Tap Studio_${VERSION}_x64-setup.nsis.zip.sig"
+          if [ -f "${WIN_SIG_PATH}" ]; then
+            WIN_SIG=$(cat "${WIN_SIG_PATH}")
+            PLATFORMS=$(echo "${PLATFORMS}" | jq \
+              --arg sig "${WIN_SIG}" \
+              --arg url "${BASE}/Tap Studio_${VERSION}_x64-setup.nsis.zip" \
+              '. + { "windows-x86_64": { signature: $sig, url: $url } }')
+          fi
+
+          jq -n \
+            --arg version "${VERSION}" \
+            --arg notes "${NOTES}" \
+            --arg pub_date "${PUB_DATE}" \
+            --argjson platforms "${PLATFORMS}" \
+            '{ version: $version, notes: $notes, pub_date: $pub_date, platforms: $platforms }' \
+            > latest.json
+
+          echo "--- latest.json ---"
+          cat latest.json
+          gh release upload "${VERSION}" latest.json --clobber

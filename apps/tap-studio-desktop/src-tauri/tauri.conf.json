@@ -1,0 +1,69 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Tap Studio",
+  "version": "0.1.0",
+  "identifier": "dev.philbir.tap-studio",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Tap Studio",
+        "width": 1400,
+        "height": 900,
+        "minWidth": 1000,
+        "minHeight": 700,
+        "url": "index.html",
+        "visible": true,
+        "decorations": true,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "externalBin": [
+      "binaries/tap-studio"
+    ],
+    "resources": [
+      "binaries/wwwroot/**/*"
+    ],
+    "category": "DeveloperTool",
+    "shortDescription": "API workbench",
+    "longDescription": "Tap Studio — an API request workbench backed by a local sidecar.",
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "tap-studio"
+        ]
+      }
+    },
+    "updater": {
+      "endpoints": [
+        "https://github.com/philbir/tap/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_ME_WITH_BASE64_MINISIGN_PUBKEY",
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}

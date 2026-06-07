@@ -229,19 +229,45 @@ public static class TapExtensions
     }
 
     /// <summary>
+    /// Sentinel for <see cref="WithTap{T}"/>'s <c>maxRequestBodyBytes</c> default: 5 GiB.
+    /// Large enough that the upstream's Kestrel won't reject practical uploads (videos,
+    /// archives, large form posts), while still bounded so a runaway request can't grow
+    /// without limit. Pass <c>null</c> to skip the injection entirely, or any explicit
+    /// value to use that instead.
+    /// </summary>
+    public const long DefaultMaxRequestBodyBytes = 5L * 1024 * 1024 * 1024;
+
+    /// <summary>
     /// Route traffic to <paramref name="builder"/>'s endpoint through the given tap.
     /// If the tap has a tunnel attached (via <see cref="CloudflaredExtensions.WithTunnel"/>
     /// or <see cref="CloudflaredExtensions.WithQuickTunnel"/>), the upstream is also published
     /// through that tunnel. <paramref name="hostname"/> is required for existing/api-managed
     /// tunnels with no dynamic-host zone.
+    ///
+    /// <para>
+    /// By default this also injects <c>Kestrel__Limits__MaxRequestBodySize</c> into the
+    /// upstream's environment so its Kestrel doesn't reject large uploads with a 413 mid-
+    /// stream. Tap itself is a transparent proxy and removes its own cap; without lifting
+    /// the upstream's cap too, a tunneled video upload would 413 (or hang while the client
+    /// uploads the rest) at the upstream Kestrel's default 30 MB. Pass
+    /// <c>maxRequestBodyBytes: null</c> to keep the upstream's own configured limit.
+    /// </para>
     /// </summary>
     public static IResourceBuilder<T> WithTap<T>(
         this IResourceBuilder<T> builder,
         TapHandle tap,
         string? hostname = null,
-        string? endpointName = null)
-        where T : IResourceWithEndpoints
+        string? endpointName = null,
+        long? maxRequestBodyBytes = DefaultMaxRequestBodyBytes)
+        where T : IResourceWithEndpoints, IResourceWithEnvironment
     {
+        if (maxRequestBodyBytes is { } bytes)
+        {
+            builder.WithEnvironment(
+                "Kestrel__Limits__MaxRequestBodySize",
+                bytes.ToString(CultureInfo.InvariantCulture));
+        }
+
         switch (tap.AttachedTunnel)
         {
             case CloudflaredTunnelResource cf:

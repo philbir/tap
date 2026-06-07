@@ -95,6 +95,11 @@ public static class TapInspectorHost
             $"http://{options.ProxyHost}:{options.ProxyPort}",
             $"http://{options.UiHost}:{options.UiPort}");
 
+        // The inspector is a transparent proxy — body-size policy belongs to the upstream API,
+        // not to Tap. Kestrel's default 30 MB cap would otherwise reject large uploads (videos,
+        // datasets, etc.) with 413 before they ever reach the upstream.
+        builder.WebHost.ConfigureKestrel(k => k.Limits.MaxRequestBodySize = null);
+
         if (options.Quiet)
         {
             // Suppress per-request and lifetime chatter — the CLI renders its own log.

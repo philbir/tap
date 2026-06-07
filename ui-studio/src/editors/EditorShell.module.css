@@ -1,0 +1,39 @@
+/* Resize handles for react-resizable-panels. Mirrors VS Code's hover-to-show pattern —
+   the handle is a 1px line at rest, expands on hover, glows with the accent color when
+   the user is actively dragging. */
+
+.handleHorizontal {
+  height: 1px;
+  background: var(--mantine-color-default-border);
+  position: relative;
+  transition: background-color 0.15s, height 0.15s;
+}
+.handleHorizontal::before {
+  content: '';
+  position: absolute;
+  inset: -3px 0;             /* expand hit area vertically without changing visual size */
+}
+.handleHorizontal:hover,
+.handleHorizontal[data-resize-handle-active] {
+  background: var(--mantine-color-tap-filled);
+  height: 2px;
+  cursor: row-resize;
+}
+
+.handleVertical {
+  width: 1px;
+  background: var(--mantine-color-default-border);
+  position: relative;
+  transition: background-color 0.15s, width 0.15s;
+}
+.handleVertical::before {
+  content: '';
+  position: absolute;
+  inset: 0 -3px;
+}
+.handleVertical:hover,
+.handleVertical[data-resize-handle-active] {
+  background: var(--mantine-color-tap-filled);
+  width: 2px;
+  cursor: col-resize;
+}

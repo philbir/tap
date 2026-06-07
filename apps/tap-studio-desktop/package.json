@@ -1,0 +1,18 @@
+{
+  "name": "tap-studio-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tap Studio desktop shell (Tauri 2 + Tap.Studio sidecar)",
+  "packageManager": "yarn@4.9.1",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "compile-server": "node scripts/compile-server.mjs",
+    "sync-version": "node scripts/sync-version.mjs",
+    "icons": "tauri icon"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0"
+  }
+}

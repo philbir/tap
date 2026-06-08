@@ -126,6 +126,7 @@ public static class StudioHost
         ExecuteEndpoint.Map(app);
         ExecuteStreamEndpoint.Map(app);
         FileEndpoints.Map(app);
+        FilesystemEndpoints.Map(app);
         GraphQLSchemaEndpoint.Map(app);
         AuthFlowEndpoints.Map(app);
         VariableEndpoints.Map(app);

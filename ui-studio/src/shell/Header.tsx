@@ -1,9 +1,10 @@
 import { ActionIcon, Badge, Box, Button, Divider, Group, Modal, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconChevronDown, IconFolders, IconPencil, IconPlus, IconStack2 } from '@tabler/icons-react'
+import { IconBrandGit, IconChevronDown, IconFolders, IconPencil, IconPlus, IconStack2 } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
 import { MANIFEST_TAB_PATH, useActiveEnv, useTapStore } from '../store'
+import { DirectoryPicker } from './DirectoryPicker'
 
 const ADD_WORKSPACE_SENTINEL = '__add_workspace__'
 const ADD_ENV_SENTINEL = '__add_env__'
@@ -100,7 +101,6 @@ export function Header({ rightAction }: Props) {
             allowDeselect={false}
             leftSection={<IconFolders size={16} stroke={1.7} />}
             rightSectionWidth={52}
-            rightSectionPointerEvents="auto"
             rightSection={
               <Group gap={2} wrap="nowrap" pr={4}>
                 <Tooltip label="Edit workspace" withArrow>
@@ -112,11 +112,12 @@ export function Header({ rightAction }: Props) {
                     onMouseDown={(e) => e.stopPropagation()}
                     disabled={!hasWorkspace}
                     aria-label="Edit workspace"
+                    style={{ pointerEvents: 'auto' }}
                   >
                     <IconPencil size={14} />
                   </ActionIcon>
                 </Tooltip>
-                <IconChevronDown size={14} stroke={1.6} style={{ color: 'var(--mantine-color-dimmed)', pointerEvents: 'none' }} />
+                <IconChevronDown size={14} stroke={1.6} style={{ color: 'var(--mantine-color-dimmed)' }} />
               </Group>
             }
           />
@@ -124,6 +125,26 @@ export function Header({ rightAction }: Props) {
             <Badge color="red" variant="light" size="sm" title={`${info.errors.length} workspace error(s)`}>
               {info.errors.length} err
             </Badge>
+          )}
+          {activeWs?.git && (
+            <Tooltip
+              label={
+                <Box>
+                  <Text size="xs">{activeWs.path}</Text>
+                  <Text size="xs">git root: {activeWs.git.root}</Text>
+                  {activeWs.git.originUrl && <Text size="xs">origin: {activeWs.git.originUrl}</Text>}
+                </Box>
+              }
+              withArrow
+            >
+              <Badge
+                color="orange" variant="light" size="sm"
+                leftSection={<IconBrandGit size={11} />}
+                style={{ maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis' }}
+              >
+                {activeWs.git.branch}
+              </Badge>
+            </Tooltip>
           )}
         </Group>
       </Group>
@@ -140,7 +161,6 @@ export function Header({ rightAction }: Props) {
             disabled={!hasWorkspace}
             leftSection={<IconStack2 size={16} stroke={1.7} />}
             rightSectionWidth={52}
-            rightSectionPointerEvents="auto"
             rightSection={
               <Group gap={2} wrap="nowrap" pr={4}>
                 <Tooltip label={activeEnvSummary ? 'Edit environment' : 'No environment selected'} withArrow>
@@ -152,11 +172,12 @@ export function Header({ rightAction }: Props) {
                     onMouseDown={(e) => e.stopPropagation()}
                     disabled={!activeEnvSummary}
                     aria-label="Edit environment"
+                    style={{ pointerEvents: 'auto' }}
                   >
                     <IconPencil size={14} />
                   </ActionIcon>
                 </Tooltip>
-                <IconChevronDown size={14} stroke={1.6} style={{ color: 'var(--mantine-color-dimmed)', pointerEvents: 'none' }} />
+                <IconChevronDown size={14} stroke={1.6} style={{ color: 'var(--mantine-color-dimmed)' }} />
               </Group>
             }
           />
@@ -167,7 +188,11 @@ export function Header({ rightAction }: Props) {
         {rightAction}
       </Group>
 
-      <AddWorkspaceModal opened={addOpened} onClose={addControls.close} onAdd={addAndActivateWorkspace} />
+      <DirectoryPicker
+        opened={addOpened}
+        onClose={addControls.close}
+        onPick={(path) => addAndActivateWorkspace(path)}
+      />
       <AddEnvModal opened={addEnvOpened} onClose={addEnvControls.close} onAdd={createEnv} />
     </Group>
   )
@@ -234,52 +259,3 @@ function nameToSlug(name: string): string {
     .slice(0, 60)
 }
 
-function AddWorkspaceModal({ opened, onClose, onAdd }: {
-  opened: boolean
-  onClose: () => void
-  onAdd: (path: string) => Promise<void>
-}) {
-  const [path, setPath] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  async function submit() {
-    if (!path.trim()) return
-    setBusy(true); setError(null)
-    try {
-      await onAdd(path.trim())
-      setPath('')
-      onClose()
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e))
-    } finally { setBusy(false) }
-  }
-
-  return (
-    <Modal
-      opened={opened}
-      onClose={() => { setPath(''); setError(null); onClose() }}
-      title="Add workspace"
-      size="md"
-    >
-      <Stack gap="sm">
-        <Text size="sm" c="dimmed">Absolute path to a folder containing a <code>.tap/</code> subdirectory.</Text>
-        <TextInput
-          placeholder="/Users/you/projects/myapp"
-          value={path}
-          onChange={(e) => setPath(e.currentTarget.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter') void submit() }}
-          autoFocus
-          styles={{ input: { fontFamily: 'var(--mono)' } }}
-        />
-        {error && <Box c="red" fz="xs">{error}</Box>}
-        <Group justify="flex-end" gap="xs" mt="xs">
-          <Button variant="default" onClick={onClose} disabled={busy}>Cancel</Button>
-          <Button leftSection={<IconPlus size={14} />} onClick={submit} loading={busy} disabled={!path.trim()}>
-            Add & switch
-          </Button>
-        </Group>
-      </Stack>
-    </Modal>
-  )
-}

@@ -31,8 +31,16 @@ public sealed class KnownWorkspaceStore
         // Heal a stale active path (folder removed since last run) by falling back to
         // the options-supplied root. The user can switch again from the UI.
         var activeStillValid = !string.IsNullOrEmpty(_state.Active)
-            && Directory.Exists(Path.Combine(_state.Active, WorkspaceLoader.TapDirectoryName));
+            && Directory.Exists(_state.Active);
         if (!activeStillValid) _state = _state with { Active = options.WorkspaceRoot };
+
+        // Backfill GitRoot for workspaces persisted before git tracking existed. Re-running
+        // discovery is cheap; the alternative (lazy on first read) would force every list
+        // request to walk the filesystem.
+        var backfilled = _state.Workspaces.Select(w => w.GitRoot is null
+            ? w with { GitRoot = GitInspector.FindGitRoot(w.Path) }
+            : w).ToArray();
+        _state = _state with { Workspaces = backfilled };
 
         Persist();
     }
@@ -50,8 +58,13 @@ public sealed class KnownWorkspaceStore
     public KnownWorkspace Add(string fullPath)
     {
         var canonical = Path.GetFullPath(fullPath);
-        if (!Directory.Exists(Path.Combine(canonical, WorkspaceLoader.TapDirectoryName)))
-            throw new DirectoryNotFoundException($"No '.tap/' folder under '{canonical}'.");
+        if (!Directory.Exists(canonical))
+            throw new DirectoryNotFoundException($"Folder '{canonical}' does not exist.");
+
+        // `.tap/` is the spec-file home, not a registration requirement — bootstrap it
+        // silently so the loader has something to read on first switch. Any explicit init
+        // step would just be ceremony.
+        EnsureTapDir(canonical);
 
         lock (_gate)
         {
@@ -78,8 +91,10 @@ public sealed class KnownWorkspaceStore
     public void Activate(string fullPath)
     {
         var canonical = Path.GetFullPath(fullPath);
-        if (!Directory.Exists(Path.Combine(canonical, WorkspaceLoader.TapDirectoryName)))
-            throw new DirectoryNotFoundException($"No '.tap/' folder under '{canonical}'.");
+        if (!Directory.Exists(canonical))
+            throw new DirectoryNotFoundException($"Folder '{canonical}' does not exist.");
+
+        EnsureTapDir(canonical);
 
         lock (_gate)
         {
@@ -89,12 +104,25 @@ public sealed class KnownWorkspaceStore
         }
     }
 
+    /// <summary>Bootstrap the <c>.tap/</c> folder if it's missing. Lets the picker accept
+    /// any directory; the loader still wants the subfolder to exist before it can walk it.</summary>
+    private static void EnsureTapDir(string root)
+    {
+        var tapDir = Path.Combine(root, WorkspaceLoader.TapDirectoryName);
+        if (!Directory.Exists(tapDir)) Directory.CreateDirectory(tapDir);
+    }
+
     private void EnsureRegistered(string canonical)
     {
         if (_state.Workspaces.Any(w => PathsEqual(w.Path, canonical))) return;
+        // Discover the enclosing git repo once at add-time and pin its root path. Branch +
+        // remote URLs are computed fresh on every read (those change as the user works) but
+        // the discovery walk is the slow part and the root rarely moves.
+        var gitRoot = GitInspector.FindGitRoot(canonical);
+        var label = Path.GetFileName(canonical.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         _state = _state with
         {
-            Workspaces = [.. _state.Workspaces, new KnownWorkspace(canonical, Path.GetFileName(canonical.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)))],
+            Workspaces = [.. _state.Workspaces, new KnownWorkspace(canonical, label, gitRoot)],
         };
     }
 
@@ -116,7 +144,7 @@ public sealed class KnownWorkspaceStore
             OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal);
 }
 
-public sealed record KnownWorkspace(string Path, string Label);
+public sealed record KnownWorkspace(string Path, string Label, string? GitRoot = null);
 
 public sealed record KnownWorkspacesFile
 {

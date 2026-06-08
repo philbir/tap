@@ -3,6 +3,7 @@ import type {
   AuthExecuteResponse,
   AuthSpec,
   AuthSummary,
+  BrowseResponse,
   CollectionDetail,
   CollectionSpec,
   CollectionSummary,
@@ -120,9 +121,17 @@ export const api = {
 
   // Workspace switcher
   knownWorkspaces: () => get<KnownWorkspace[]>('/api/workspaces'),
-  addWorkspace: (path: string) => post<KnownWorkspace>('/api/workspaces', { path }),
+  addWorkspace: (path: string) =>
+    post<KnownWorkspace>('/api/workspaces', { path }),
   activateWorkspace: (path: string) => post<null>('/api/workspaces/activate', { path }),
   removeWorkspace: (path: string) => del(`/api/workspaces?path=${encodeURIComponent(path)}`),
+
+  // Filesystem picker. `path` undefined → server uses the user's home directory.
+  browse: (path?: string) =>
+    get<BrowseResponse>(`/api/fs/browse${path ? `?path=${encodeURIComponent(path)}` : ''}`),
+  /** Creates a new directory at `{parent}/{name}` and returns its canonical absolute path. */
+  createDirectory: (parent: string, name: string) =>
+    post<{ path: string }>('/api/fs/folders', { parent, name }),
 
   // Requests
   requests: () => get<RequestSummary[]>('/api/requests'),

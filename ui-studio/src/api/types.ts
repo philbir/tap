@@ -15,6 +15,35 @@ export interface KnownWorkspace {
   label: string
   isActive: boolean
   available: boolean
+  git: GitInfo | null
+}
+
+export interface GitInfo {
+  root: string
+  branch: string
+  isDetached: boolean
+  originUrl: string | null
+  remotes: GitRemote[]
+}
+
+export interface GitRemote {
+  name: string
+  url: string
+}
+
+export interface DirectoryEntry {
+  name: string
+  path: string
+  hasTap: boolean
+}
+
+export interface BrowseResponse {
+  path: string
+  parent: string | null
+  home: string
+  isWorkspace: boolean
+  gitRoot: string | null
+  entries: DirectoryEntry[]
 }
 
 export interface WorkspaceErrorDto {

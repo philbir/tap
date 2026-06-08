@@ -124,7 +124,8 @@ public static class WorkspaceEndpoints
                     Path: k.Path,
                     Label: k.Label,
                     IsActive: string.Equals(k.Path, active, StringComparison.Ordinal),
-                    Available: Directory.Exists(Path.Combine(k.Path, WorkspaceLoader.TapDirectoryName))))
+                    Available: Directory.Exists(k.Path),
+                    Git: BuildGitDto(k.GitRoot)))
                 .ToArray();
             return Results.Ok((IReadOnlyList<KnownWorkspaceDto>)dtos);
         });
@@ -134,15 +135,17 @@ public static class WorkspaceEndpoints
             try
             {
                 var added = store.Add(body.Path);
-                return Results.Ok(new KnownWorkspaceDto(added.Path, added.Label, IsActive: false, Available: true));
+                return Results.Ok(new KnownWorkspaceDto(
+                    added.Path, added.Label, IsActive: false, Available: true,
+                    Git: BuildGitDto(added.GitRoot)));
             }
-            catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { code = "no-tap-dir", message = ex.Message }); }
+            catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { code = "missing-folder", message = ex.Message }); }
         });
 
         w.MapPost("/activate", (ActivateWorkspaceDto body, WorkspaceService svc) =>
         {
             try { svc.SwitchTo(body.Path); return Results.NoContent(); }
-            catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { code = "no-tap-dir", message = ex.Message }); }
+            catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { code = "missing-folder", message = ex.Message }); }
         });
 
         w.MapDelete("/", (string path, KnownWorkspaceStore store) =>
@@ -217,4 +220,20 @@ public static class WorkspaceEndpoints
     private static bool TryResolveWorkspacePath(WorkspaceService svc, string relative,
         out string full, out string error)
         => WorkspacePathResolver.TryResolve(svc, relative, out full, out error);
+
+    /// <summary>Re-runs <see cref="GitInspector.Inspect(string)"/> against the persisted
+    /// git root so branch + remote URLs are fresh on every list call. Returns null when
+    /// no root was discovered or the repo has since been deleted.</summary>
+    private static GitInfoDto? BuildGitDto(string? gitRoot)
+    {
+        if (string.IsNullOrEmpty(gitRoot)) return null;
+        var info = GitInspector.Inspect(gitRoot);
+        if (info is null) return null;
+        return new GitInfoDto(
+            Root: info.Root,
+            Branch: info.Branch,
+            IsDetached: info.IsDetached,
+            OriginUrl: info.OriginUrl,
+            Remotes: info.Remotes.Select(r => new GitRemoteDto(r.Name, r.Url)).ToArray());
+    }
 }

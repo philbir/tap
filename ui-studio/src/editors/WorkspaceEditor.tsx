@@ -1,12 +1,12 @@
 import {
-  ActionIcon, Badge, Code, Group, Select, Stack, Tabs, Text, TextInput,
+  ActionIcon, Anchor, Badge, Box, Code, Group, Select, Stack, Tabs, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import {
-  IconCode, IconLayoutDashboard, IconPlug, IconPlus, IconX,
+  IconBrandGit, IconCode, IconFolder, IconLayoutDashboard, IconPlug, IconPlus, IconX,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { ProviderConfig, WorkspaceDetail, WorkspaceSpec } from '../api/types'
+import type { KnownWorkspace, ProviderConfig, WorkspaceDetail, WorkspaceSpec } from '../api/types'
 import { modeForProviderType } from '../api/types'
 import { useTapStore } from '../store'
 import { EditorShell } from './EditorShell'
@@ -24,6 +24,7 @@ const KNOWN_TYPES = [
 export function WorkspaceEditor() {
   const generation = useTapStore((s) => s.generation)
   const envs = useTapStore((s) => s.envs)
+  const activeWs = useTapStore((s) => s.knownWorkspaces.find((w) => w.isActive) ?? null)
 
   const [detail, setDetail] = useState<WorkspaceDetail | null>(null)
   const [spec, setSpec] = useState<WorkspaceSpec | null>(null)
@@ -107,6 +108,7 @@ export function WorkspaceEditor() {
 
         <Tabs.Panel value="general">
           <Stack gap="md" maw={760}>
+            {activeWs && <LocationCard workspace={activeWs} />}
             <TextInput
               label="Name"
               value={spec.name}
@@ -180,6 +182,81 @@ export function WorkspaceEditor() {
       </Tabs>
     </EditorShell>
   )
+}
+
+/** Read-only summary of where this workspace lives on disk and the enclosing git repo,
+ *  if any. The path comes from the active <see cref="KnownWorkspace"/>; git info was
+ *  resolved server-side via LibGit2Sharp and refreshed on every <c>/api/workspaces</c>
+ *  list call, so branch + remote URL stay current as the user works. */
+function LocationCard({ workspace }: { workspace: KnownWorkspace }) {
+  const git = workspace.git
+  return (
+    <Box
+      p="sm"
+      style={{
+        border: '1px solid var(--mantine-color-default-border)',
+        borderRadius: 6,
+        background: 'var(--mantine-color-default)',
+      }}
+    >
+      <Stack gap={6}>
+        <Group gap="xs" wrap="nowrap">
+          <IconFolder size={14} stroke={1.7} />
+          <Text size="xs" c="dimmed" fw={600}>Path</Text>
+        </Group>
+        <Code fz="xs" style={{ background: 'transparent', padding: 0, wordBreak: 'break-all' }}>
+          {workspace.path}
+        </Code>
+        {git ? (
+          <>
+            <Group gap="xs" mt={6} wrap="nowrap">
+              <IconBrandGit size={14} stroke={1.7} color="var(--mantine-color-orange-6)" />
+              <Text size="xs" c="dimmed" fw={600}>Git</Text>
+              <Badge size="xs" variant="light" color="orange">{git.branch}</Badge>
+              {git.isDetached && <Badge size="xs" variant="light" color="gray">detached</Badge>}
+            </Group>
+            {git.root !== workspace.path && (
+              <Text size="xs" c="dimmed">
+                Repository root:{' '}
+                <Code fz="xs" style={{ background: 'transparent', padding: 0 }}>{git.root}</Code>
+              </Text>
+            )}
+            {git.remotes.length > 0 ? (
+              <Stack gap={2} mt={2}>
+                {git.remotes.map((r) => (
+                  <Group key={r.name} gap="xs" wrap="nowrap">
+                    <Badge size="xs" variant="outline" color="gray">{r.name}</Badge>
+                    {isHttpUrl(r.url) ? (
+                      <Tooltip label="Open remote" withArrow>
+                        <Anchor href={r.url} target="_blank" rel="noopener noreferrer" size="xs">
+                          {r.url}
+                        </Anchor>
+                      </Tooltip>
+                    ) : (
+                      <Code fz="xs" style={{ background: 'transparent', padding: 0, wordBreak: 'break-all' }}>
+                        {r.url}
+                      </Code>
+                    )}
+                  </Group>
+                ))}
+              </Stack>
+            ) : (
+              <Text size="xs" c="dimmed">No remotes configured.</Text>
+            )}
+          </>
+        ) : (
+          <Group gap="xs" mt={6} wrap="nowrap">
+            <IconBrandGit size={14} stroke={1.7} style={{ opacity: 0.4 }} />
+            <Text size="xs" c="dimmed">Not under git version control.</Text>
+          </Group>
+        )}
+      </Stack>
+    </Box>
+  )
+}
+
+function isHttpUrl(url: string): boolean {
+  return url.startsWith('http://') || url.startsWith('https://')
 }
 
 function ProviderRow({

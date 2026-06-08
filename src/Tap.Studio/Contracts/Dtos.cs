@@ -16,11 +16,48 @@ public sealed record WorkspaceInfoDto(
     IReadOnlyList<WorkspaceErrorDto> Errors);
 
 /// <summary>Entry in the workspace switcher dropdown. <c>Available</c> is false if the
-/// folder no longer contains a <c>.tap/</c> directory — the UI greys it out.</summary>
-public sealed record KnownWorkspaceDto(string Path, string Label, bool IsActive, bool Available);
+/// folder no longer contains a <c>.tap/</c> directory — the UI greys it out. <c>Git</c> is
+/// filled when an enclosing git repository was discovered at add-time (and is still on
+/// disk); the UI shows branch + origin chips.</summary>
+public sealed record KnownWorkspaceDto(string Path, string Label, bool IsActive, bool Available, GitInfoDto? Git);
 
 public sealed record AddWorkspaceDto(string Path);
 public sealed record ActivateWorkspaceDto(string Path);
+
+/// <summary>Snapshot of the git repository enclosing a workspace. <c>Root</c> is the
+/// working-directory root (the folder containing <c>.git/</c>), which may sit several
+/// levels above the workspace path itself.</summary>
+public sealed record GitInfoDto(
+    string Root,
+    string Branch,
+    bool IsDetached,
+    string? OriginUrl,
+    IReadOnlyList<GitRemoteDto> Remotes);
+
+public sealed record GitRemoteDto(string Name, string Url);
+
+/// <summary>One subdirectory in the picker. <c>HasTap</c> is set when the entry already
+/// contains a <c>.tap/</c> directory, so the UI can draw a workspace badge.</summary>
+public sealed record DirectoryEntryDto(string Name, string Path, bool HasTap);
+
+/// <summary>Body for <c>POST /api/fs/folders</c>. Creates <c>{Parent}/{Name}</c>.
+/// <see cref="Name"/> must be a single leaf — path separators and <c>..</c> are rejected.</summary>
+public sealed record CreateDirectoryDto(string Parent, string Name);
+
+/// <summary>Response from <c>POST /api/fs/folders</c>. The picker uses <see cref="Path"/>
+/// to descend straight into the new folder.</summary>
+public sealed record CreateDirectoryResponseDto(string Path);
+
+/// <summary>Response from <c>GET /api/fs/browse</c>. <c>Parent</c> is null at the filesystem
+/// root. <c>IsWorkspace</c> says the listed directory itself contains a <c>.tap/</c> —
+/// the picker enables the confirm button on that signal.</summary>
+public sealed record BrowseResponseDto(
+    string Path,
+    string? Parent,
+    string Home,
+    bool IsWorkspace,
+    string? GitRoot,
+    IReadOnlyList<DirectoryEntryDto> Entries);
 
 /// <summary>Body for <c>POST /api/workspace/folders</c> — creates an empty directory under
 /// <c>.tap/</c>. Folders are pure grouping for the explorer tree; no spec file is written.</summary>
@@ -559,6 +596,14 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(CollectionStageSpecDto))]
 [JsonSerializable(typeof(IReadOnlyList<CollectionStageSpecDto>))]
 [JsonSerializable(typeof(KnownWorkspaceDto))]
+[JsonSerializable(typeof(GitInfoDto))]
+[JsonSerializable(typeof(GitRemoteDto))]
+[JsonSerializable(typeof(IReadOnlyList<GitRemoteDto>))]
+[JsonSerializable(typeof(DirectoryEntryDto))]
+[JsonSerializable(typeof(IReadOnlyList<DirectoryEntryDto>))]
+[JsonSerializable(typeof(BrowseResponseDto))]
+[JsonSerializable(typeof(CreateDirectoryDto))]
+[JsonSerializable(typeof(CreateDirectoryResponseDto))]
 [JsonSerializable(typeof(AddWorkspaceDto))]
 [JsonSerializable(typeof(ActivateWorkspaceDto))]
 [JsonSerializable(typeof(CreateFolderDto))]

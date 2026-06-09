@@ -78,7 +78,7 @@ export function detectRawSubType(contentType: string | null | undefined): RawSub
   return 'text'
 }
 
-function looksLikeGraphql(body: string): boolean {
+export function looksLikeGraphql(body: string): boolean {
   try {
     const obj = JSON.parse(body)
     return typeof obj === 'object' && obj !== null && typeof (obj as { query?: unknown }).query === 'string'

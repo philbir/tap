@@ -3,7 +3,7 @@ import {
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconEye, IconFile, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconSparkles, IconUpload, IconVariable, IconX,
+  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconEye, IconFile, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconPlayerStopFilled, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -15,8 +15,9 @@ import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { useVariableView, variableMap } from '../workspace/useVariables'
 import {
-  BODY_MODE_LABELS, contentTypeForBodyMode, detectBodyMode, detectRawSubType,
-  parseFormBody, parseMultipartBody, serializeFormBody, serializeMultipartBody, tryPrettyJson,
+  BODY_MODE_LABELS, contentTypeForBodyMode, detectBodyMode, detectRawSubType, looksLikeGraphql,
+  parseFormBody, parseGraphQLBody, parseMultipartBody, serializeFormBody, serializeGraphQLBody,
+  serializeMultipartBody, tryPrettyJson,
   RAW_SUB_LABELS, type BodyMode, type RawSubType,
 } from './body-mode'
 import { EditorShell } from './EditorShell'
@@ -55,14 +56,20 @@ export function RequestEditor({ path }: Props) {
   const [execution, setExecution] = useState<ExecutionResult | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [busy, setBusy] = useState<'render' | 'send' | null>(null)
+  // Set when the user aborts an in-flight Send — keeps the partial result on screen but
+  // tags it so the panel can show a "cancelled" marker instead of pretending it finished.
+  const [stopped, setStopped] = useState(false)
   const [stage, setStage] = useState<string | null>(null)
   const [varsOpened, varsCtl] = useDisclosure(false)
   // Holds the in-flight stream controller so we can abort on Send-again / close.
   const streamCtrlRef = useRef<AbortController | null>(null)
+  // Wall-clock start of the current Send — lets stop() fill in an approximate duration
+  // since the server's `done` event (which carries the real timing) never arrives on abort.
+  const sendStartRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
-    setError(null); setRendered(null); setExecution(null); setActionError(null)
+    setError(null); setRendered(null); setExecution(null); setActionError(null); setStopped(false)
     api.request(path).then((d) => {
       if (cancelled) return
       setDetail(d)
@@ -116,12 +123,25 @@ export function RequestEditor({ path }: Props) {
     streamCtrlRef.current = null
   }
 
+  // User-initiated cancel of an in-flight Send. Unlike Close, this keeps the partial
+  // response visible — we just abort the stream, stamp an approximate duration, and flip
+  // the panel out of its "streaming…" state into a "cancelled" one.
+  function stop() {
+    if (busy !== 'send') return
+    abortStream()
+    const elapsed = sendStartRef.current ? Math.max(0, Date.now() - sendStartRef.current) : 0
+    setExecution((cur) => (cur ? { ...cur, durationMs: cur.durationMs || elapsed } : cur))
+    setStopped(true)
+    setBusy(null)
+  }
+
   // Cancel any in-flight stream on unmount or when the request file changes.
   useEffect(() => () => abortStream(), [path])
 
   async function send() {
     abortStream()
-    setBusy('send'); setActionError(null); setExecution(null)
+    sendStartRef.current = Date.now()
+    setBusy('send'); setActionError(null); setExecution(null); setStopped(false)
 
     // Build up the ExecutionResult progressively as `meta`, `body`/`sse`/`ws`, and `done`
     // events flow in. We hand the UI the latest snapshot on every event so SSE/WS frames
@@ -150,6 +170,7 @@ export function RequestEditor({ path }: Props) {
             responseHeaders: ev.payload.responseHeaders,
             contentType: ev.payload.contentType,
             protocol: ev.payload.protocol,
+            authStatus: ev.payload.authStatus,
           })
           setRendered({
             method: ev.payload.method,
@@ -248,7 +269,11 @@ export function RequestEditor({ path }: Props) {
             execution={execution}
             error={actionError}
             busy={busy !== null}
-            onClose={() => { abortStream(); setExecution(null); setRendered(null); setActionError(null); setBusy(null) }}
+            stopped={stopped}
+            onStop={busy === 'send' ? stop : undefined}
+            requestPath={path}
+            requestAuth={spec.auth ?? null}
+            onClose={() => { abortStream(); setExecution(null); setRendered(null); setActionError(null); setBusy(null); setStopped(false) }}
           />
         ) : undefined
       }
@@ -300,15 +325,25 @@ export function RequestEditor({ path }: Props) {
             onOpenVariables={varsCtl.open}
           />
         </Box>
-        <Button
-          leftSection={busy === 'send' ? null : <IconPlayerPlayFilled size={14} />}
-          onClick={send}
-          disabled={busy !== null || dirty}
-          loading={busy === 'send'}
-          title={dirty ? 'Save first to send the latest version' : 'Send the request'}
-        >
-          Send
-        </Button>
+        {busy === 'send' ? (
+          <Button
+            color="red"
+            leftSection={<IconPlayerStopFilled size={14} />}
+            onClick={stop}
+            title="Stop the running request"
+          >
+            Stop
+          </Button>
+        ) : (
+          <Button
+            leftSection={<IconPlayerPlayFilled size={14} />}
+            onClick={send}
+            disabled={busy !== null || dirty}
+            title={dirty ? 'Save first to send the latest version' : 'Send the request'}
+          >
+            Send
+          </Button>
+        )}
       </Group>
 
       <Tabs value={tab} onChange={setTab}>
@@ -330,7 +365,6 @@ export function RequestEditor({ path }: Props) {
 
         <Tabs.Panel value="params">
           <Box maw={880}>
-            <Text size="xs" c="dimmed" mb="xs">Query string parameters. Stays in sync with the URL field above.</Text>
             <KvTable
               rows={queryRows}
               onChange={(rows) => update('url', joinUrl({ ...split, query: rows.filter((r) => r.key).map((r) => ({ key: r.key, value: r.value })) }))}
@@ -345,10 +379,6 @@ export function RequestEditor({ path }: Props) {
 
         <Tabs.Panel value="headers">
           <Box maw={880}>
-            <Text size="xs" c="dimmed" mb="xs">
-              Headers merge with the collection's <Code>defaultHeaders</Code> and any auth-injected
-              headers. Values here override both.
-            </Text>
             <KvTable
               rows={headersOnly.map((h) => ({ key: h.name, value: h.value }))}
               onChange={(rows) => {
@@ -382,29 +412,42 @@ export function RequestEditor({ path }: Props) {
 
         <Tabs.Panel value="auth">
           <Stack gap="md" maw={760}>
-            <Text size="xs" c="dimmed">
-              Pick an auth profile. <Code>none</Code> opts out of the linked API's default; leave empty to inherit.
-            </Text>
-            <Select
-              label="Auth profile"
-              data={[
-                { value: '', label: '(inherit from collection)' },
-                { value: 'none', label: 'None (opt out)' },
-                ...auths.map((a) => ({ value: relativizeFrom(path, a.path), label: a.name })),
-              ]}
-              value={spec.auth ?? ''}
-              onChange={(v) => update('auth', v && v !== '' ? v : undefined)}
-              allowDeselect={false}
-            />
+            <Group align="flex-end" gap="xs" wrap="nowrap">
+              <Select
+                label="Auth profile"
+                style={{ flex: 1 }}
+                data={[
+                  { value: '', label: '(inherit from collection)' },
+                  { value: 'none', label: 'None (opt out)' },
+                  ...auths.map((a) => ({ value: relativizeFrom(path, a.path), label: a.name })),
+                ]}
+                value={spec.auth ?? ''}
+                onChange={(v) => update('auth', v && v !== '' ? v : undefined)}
+                allowDeselect={false}
+              />
+              {(() => {
+                const selected = spec.auth && spec.auth !== 'none' && spec.auth !== ''
+                  ? auths.find((a) => relativizeFrom(path, a.path) === spec.auth)
+                  : null
+                return (
+                  <Tooltip label={selected ? `Open ${selected.name}` : 'Select an auth profile to open it'} withArrow>
+                    <Button
+                      variant="default"
+                      leftSection={<IconExternalLink size={14} />}
+                      disabled={!selected}
+                      onClick={() => selected && openTab({ path: selected.path, kind: 'auth', label: selected.name })}
+                    >
+                      Open
+                    </Button>
+                  </Tooltip>
+                )
+              })()}
+            </Group>
           </Stack>
         </Tabs.Panel>
 
         <Tabs.Panel value="vars">
           <Box maw={880}>
-            <Text size="xs" c="dimmed" mb="xs">
-              Request-scoped variables. Highest precedence (workspace → collection → stage → env → request → CLI).
-              Mark rows secret with the eye icon — values are stored as <Code>{`{ default: …, secret: true }`}</Code>.
-            </Text>
             <KvTable
               rows={(() => {
                 const ss = new Set(spec.secrets ?? [])
@@ -598,6 +641,14 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
     }
     if (next === 'raw') {
       onChange(body || undefined, contentTypeForBodyMode('raw', rawSub))
+      return
+    }
+    if (next === 'graphql') {
+      // detectBodyMode only classifies a body as graphql when it's a `{ query }` JSON
+      // envelope. A raw/empty body would be re-detected as 'raw' on the next render and
+      // snap the segmented control back, so seed a minimal envelope to make it stick.
+      const seeded = looksLikeGraphql(body) ? body : serializeGraphQLBody(parseGraphQLBody(body))
+      onChange(seeded, contentTypeForBodyMode('graphql'))
       return
     }
     onChange(body || undefined, contentTypeForBodyMode(next))

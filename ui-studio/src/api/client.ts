@@ -13,10 +13,16 @@ import type {
   EnvSummary,
   ExecutionResult,
   FileUploadResponse,
+  GitBranch,
+  GitCommandResult,
+  GitCommitResult,
+  GitFileChange,
+  GitStatus,
   GraphQLSchemaMode,
   GraphQLSchemaResponse,
   KnownWorkspace,
   OidcDiscovery,
+  PostmanImportResponse,
   RenderedRequest,
   RequestDetail,
   RequestSpec,
@@ -116,6 +122,10 @@ export const api = {
   deleteFolder: (path: string) =>
     del(`/api/workspace/folders?path=${encodeURIComponent(path)}`),
 
+  /** Delete a single workspace file (request / auth / env / `_collection.md`). */
+  deleteFile: (path: string) =>
+    del(`/api/workspace/files?path=${encodeURIComponent(path)}`),
+
   /** Move a file or folder to a new workspace-relative path. */
   moveItem: (from: string, to: string) => post<null>('/api/workspace/move', { from, to }),
 
@@ -168,6 +178,12 @@ export const api = {
   collectionDetail: (slug: string) => get<CollectionDetail>(`/api/collections/${encodeURIComponent(slug)}`),
   saveCollectionSpec: (spec: CollectionSpec) => put('/api/collections/spec', spec),
   deleteCollection: (slug: string) => del(`/api/collections/${encodeURIComponent(slug)}`),
+
+  /** Import a Postman v2.1 collection JSON. <c>collection</c> is the parsed JSON body of
+   *  a Postman export. <c>slug</c> overrides the slug derived from <c>info.name</c>;
+   *  <c>overwrite</c> wipes an existing collection directory before re-importing. */
+  importPostmanCollection: (collection: unknown, slug: string | null, overwrite: boolean) =>
+    post<PostmanImportResponse>('/api/collections/import/postman', { collection, slug, overwrite }),
 
   // Tags
   tags: () => get<TaggedItem[]>('/api/tags'),
@@ -227,6 +243,10 @@ export const api = {
   /** Poll a pending flow until it transitions to completed or failed. */
   authFlow: (id: string) => get<AuthExecuteResponse>(`/api/auth/flows/${encodeURIComponent(id)}`),
 
+  /** Remove the cached runtime token for an auth profile in the active workspace. The
+   *  next request Send will fire without an Authorization header until the flow runs again. */
+  clearAuthToken: (path: string) => post<void>('/api/auth/clear', { path }),
+
   /** Studio-owned OAuth redirect URI. The server derives it from its own base URL so
    *  the value follows whichever port Aspire allocates. The UI displays it read-only and
    *  reminds the user to whitelist it in their identity provider. */
@@ -250,6 +270,33 @@ export const api = {
   /** Lists the active variable providers (system + workspace). Sensitive setting values
    *  are already masked server-side. */
   listVariableProviders: () => get<ProviderSummary[]>('/api/variable-providers'),
+
+  // --- Git ---------------------------------------------------------------------------
+
+  /** Status of the git repo enclosing the active workspace. 409 → no git repo. */
+  gitStatus: async (): Promise<GitStatus | null> => {
+    const r = await fetch('/api/git', { cache: 'no-store' })
+    if (r.status === 409) return null
+    if (!r.ok) throw new ApiError(r.status, `${r.status} ${r.statusText} on GET /api/git`)
+    return (await r.json()) as GitStatus
+  },
+  gitChanges: () => get<GitFileChange[]>('/api/git/changes'),
+  gitBranches: () => get<GitBranch[]>('/api/git/branches'),
+  gitDiff: async (path: string, staged: boolean): Promise<string> => {
+    const r = await fetch(`/api/git/diff?path=${encodeURIComponent(path)}&staged=${staged}`,
+      { cache: 'no-store' })
+    if (!r.ok) throw new ApiError(r.status, `${r.status} ${r.statusText} on GET /api/git/diff`)
+    return r.text()
+  },
+  gitStage: (paths: string[]) => post<null>('/api/git/stage', { paths }),
+  gitUnstage: (paths: string[]) => post<null>('/api/git/unstage', { paths }),
+  gitCommit: (message: string) => post<GitCommitResult>('/api/git/commit', { message }),
+  gitCreateBranch: (name: string, checkout = true) =>
+    post<null>('/api/git/branches', { name, checkout }),
+  gitCheckout: (name: string) => post<null>('/api/git/checkout', { name }),
+  gitFetch: () => post<GitCommandResult>('/api/git/fetch', {}),
+  gitPull: () => post<GitCommandResult>('/api/git/pull', {}),
+  gitPush: (setUpstream = true) => post<GitCommandResult>('/api/git/push', { setUpstream }),
 
   // --- System settings -------------------------------------------------------------
 
@@ -291,6 +338,7 @@ export interface StreamMeta {
   responseHeaders: Record<string, string>
   contentType: string | null
   protocol: 'http' | 'websocket'
+  authStatus: import('./types').AuthStatus
 }
 
 export interface StreamBody {

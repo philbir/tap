@@ -86,6 +86,21 @@ public static class WorkspaceEndpoints
             return Results.NoContent();
         });
 
+        // Delete a single workspace file (request / auth / env / collection meta).
+        // The path is workspace-relative under `.tap/`. Refuses directories — callers
+        // should hit DELETE /folders for those so they get the recursive semantics.
+        g.MapDelete("/files", (string path, WorkspaceService svc) =>
+        {
+            if (!TryResolveWorkspacePath(svc, path, out var full, out var err))
+                return Results.BadRequest(new { code = "invalid-path", message = err });
+            if (Directory.Exists(full))
+                return Results.BadRequest(new { code = "is-directory", message = "Use DELETE /folders for directories." });
+            if (!File.Exists(full))
+                return Results.BadRequest(new { code = "not-found", message = "File does not exist." });
+            File.Delete(full);
+            return Results.NoContent();
+        });
+
         g.MapPost("/move", (MoveItemDto body, WorkspaceService svc) =>
         {
             if (!TryResolveWorkspacePath(svc, body.From, out var fromFull, out var err))
@@ -110,6 +125,9 @@ public static class WorkspaceEndpoints
             Directory.CreateDirectory(Path.GetDirectoryName(toFull)!);
             if (isDir) Directory.Move(fromFull, toFull);
             else File.Move(fromFull, toFull);
+            // The client refetches the moved file at its new path as soon as we return —
+            // the watcher's debounced reload would lose that race and 404.
+            svc.ReloadNow();
             return Results.NoContent();
         });
 

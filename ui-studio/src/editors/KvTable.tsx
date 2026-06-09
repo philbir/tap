@@ -185,10 +185,11 @@ export function KvTable({
         <Button
           size="xs"
           variant="default"
-          leftSection={<IconPlus size={12} />}
+          color="gray"
+          leftSection={<IconPlus size={14} />}
           onClick={add}
         >
-          Add row
+          Add
         </Button>
       </Group>
     </Box>

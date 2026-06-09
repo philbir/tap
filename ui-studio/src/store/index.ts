@@ -56,6 +56,10 @@ export interface TapStore {
   closeOtherTabs: (path: string) => void
   closeAllTabs: () => void
   selectTab: (path: string) => void
+  /** Rename a tab in place — swaps `path` (id) + label, preserving its position
+   *  in the tab strip and active state. Used by the git-diff editor to switch
+   *  Working ↔ Staged without leaving an orphan tab behind. */
+  renameTab: (oldPath: string, newPath: string, newLabel: string) => void
   activateWorkspace: (path: string) => Promise<void>
   addAndActivateWorkspace: (path: string) => Promise<void>
 }
@@ -146,6 +150,26 @@ export const useTapStore = create<TapStore>()(
       closeAllTabs: () => set({ tabs: [], activeTab: null }),
 
       selectTab: (path) => set({ activeTab: path }),
+
+      renameTab: (oldPath, newPath, newLabel) => set((state) => {
+        if (oldPath === newPath) {
+          // Label may still have changed — patch it in place.
+          return {
+            tabs: state.tabs.map((t) => t.path === oldPath ? { ...t, label: newLabel } : t),
+          }
+        }
+        const idx = state.tabs.findIndex((t) => t.path === oldPath)
+        if (idx < 0) return {}
+        const existing = state.tabs.find((t) => t.path === newPath)
+        const tabs = existing
+          // Already-open destination wins; drop the old one so we don't duplicate.
+          ? state.tabs.filter((t) => t.path !== oldPath)
+          : state.tabs.map((t) => t.path === oldPath
+              ? { ...t, path: newPath, label: newLabel }
+              : t)
+        const activeTab = state.activeTab === oldPath ? newPath : state.activeTab
+        return { tabs, activeTab }
+      }),
 
       activateWorkspace: async (path) => {
         await api.activateWorkspace(path)

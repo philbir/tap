@@ -36,6 +36,36 @@ public sealed record GitInfoDto(
 
 public sealed record GitRemoteDto(string Name, string Url);
 
+/// <summary>Snapshot of the active workspace's git repo. <see cref="HasRemote"/> drives the
+/// pull/push UI affordances; <see cref="Ahead"/> / <see cref="Behind"/> are null when the
+/// current branch has no upstream.</summary>
+public sealed record GitStatusDto(
+    string Root,
+    string Branch,
+    bool IsDetached,
+    bool HasRemote,
+    string? Upstream,
+    int? Ahead,
+    int? Behind,
+    int StagedCount,
+    int UnstagedCount);
+
+/// <summary>One changed path. <see cref="IndexStatus"/> is null when the file has no
+/// staged change; <see cref="WorkingStatus"/> is null when the working tree matches the
+/// index. Values: <c>added | modified | deleted | renamed | typechange | untracked |
+/// conflicted</c>.</summary>
+public sealed record GitFileChangeDto(string Path, string? IndexStatus, string? WorkingStatus);
+
+public sealed record GitBranchDto(string Name, bool IsCurrent, bool IsRemote, string? Upstream, string? Tip);
+
+public sealed record GitStagePathsDto(IReadOnlyList<string> Paths);
+public sealed record GitCommitRequestDto(string Message);
+public sealed record GitCommitResultDto(string Sha, string ShortSha, string Message);
+public sealed record GitCreateBranchDto(string Name, bool Checkout);
+public sealed record GitCheckoutDto(string Name);
+public sealed record GitPushRequestDto(bool SetUpstream);
+public sealed record GitCommandResultDto(int ExitCode, string Stdout, string Stderr);
+
 /// <summary>One subdirectory in the picker. <c>HasTap</c> is set when the entry already
 /// contains a <c>.tap/</c> directory, so the UI can draw a workspace badge.</summary>
 public sealed record DirectoryEntryDto(string Name, string Path, bool HasTap);
@@ -201,6 +231,30 @@ public sealed record CollectionStageSpecDto
     public IReadOnlyList<string>? Secrets { get; init; }
 }
 
+/// <summary>Body for <c>POST /api/collections/import/postman</c>. <see cref="Collection"/>
+/// is the raw Postman v2.1 collection JSON (parsed as a free-form object so we don't have
+/// to register the whole Postman schema in the source-generated context).
+/// <see cref="Slug"/> overrides the slug derived from <c>info.name</c>; pass null to take
+/// the default. <see cref="Overwrite"/> allows the importer to clobber an existing
+/// <c>collections/&lt;slug&gt;/</c> directory.</summary>
+public sealed record PostmanImportRequestDto
+{
+    public required System.Text.Json.JsonElement Collection { get; init; }
+    public string? Slug { get; init; }
+    public bool Overwrite { get; init; }
+}
+
+/// <summary>Response for <c>POST /api/collections/import/postman</c>. The Studio
+/// reloads the workspace, opens the collection editor, and surfaces any importer
+/// warnings (e.g. unsupported auth, formdata bodies) in a notification.</summary>
+public sealed record PostmanImportResponseDto(
+    string Slug,
+    string CollectionPath,
+    string? AuthPath,
+    int RequestCount,
+    int FolderCount,
+    IReadOnlyList<string> Warnings);
+
 /// <summary>One entry in <c>/api/tags</c>: a tag applied to a single entity (collection,
 /// request, or auth). The UI groups these client-side for the Tags top-level view.</summary>
 public sealed record TaggedItemDto(string Tag, string Kind, string Path, string Name);
@@ -248,6 +302,10 @@ public sealed record OidcDiscoveryDto(
 
 /// <summary>Body for <c>POST /api/auth/execute</c>.</summary>
 public sealed record AuthExecuteRequestDto(string Path, bool ForceReauthenticate);
+
+/// <summary>Body for <c>POST /api/auth/clear</c> — removes any cached runtime token for the
+/// given auth profile (scoped to the currently active workspace).</summary>
+public sealed record AuthClearRequestDto(string Path);
 
 /// <summary>Response for <c>POST /api/auth/execute</c> and <c>GET /api/auth/flows/{id}</c>.</summary>
 public sealed record AuthExecuteResponseDto(
@@ -541,7 +599,31 @@ public sealed record ExecuteStreamMetaDto(
     string? RequestBody,
     IReadOnlyDictionary<string, string> ResponseHeaders,
     string? ContentType,
-    string Protocol);
+    string Protocol,
+    AuthStatusDto AuthStatus);
+
+/// <summary>
+/// Snapshot of how the auth profile (if any) contributed to a rendered request. The Flow
+/// tab uses this to tell the user whether they need to run an interactive auth step
+/// (popup / device-code / `az login`) before the next Send.
+///
+/// <list type="bullet">
+///   <item><c>none</c> — no auth attached to the request.</item>
+///   <item><c>static</c> — headers were built inline at render time (basic/bearer/apiKey/custom). No flow to run.</item>
+///   <item><c>cached</c> — a runtime-acquired token was found in <see cref="Auth.AuthTokenStore"/> and stamped on the request.</item>
+///   <item><c>expired</c> — token exists but has lapsed; the request was sent without an Authorization header.</item>
+///   <item><c>missing</c> — runtime token is needed but absent; the request was sent without an Authorization header.</item>
+/// </list>
+///
+/// <see cref="Interactive"/> is true when running the auth flow may open a browser
+/// window or device-code prompt — the UI flips the "Run auth" button label accordingly.
+/// </summary>
+public sealed record AuthStatusDto(
+    string? Path,
+    string? Type,
+    string Source,
+    bool Interactive,
+    DateTimeOffset? ExpiresAt);
 
 public sealed record ExecuteStreamWsDto(
     int Seq,
@@ -599,6 +681,18 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(GitInfoDto))]
 [JsonSerializable(typeof(GitRemoteDto))]
 [JsonSerializable(typeof(IReadOnlyList<GitRemoteDto>))]
+[JsonSerializable(typeof(GitStatusDto))]
+[JsonSerializable(typeof(GitFileChangeDto))]
+[JsonSerializable(typeof(IReadOnlyList<GitFileChangeDto>))]
+[JsonSerializable(typeof(GitBranchDto))]
+[JsonSerializable(typeof(IReadOnlyList<GitBranchDto>))]
+[JsonSerializable(typeof(GitStagePathsDto))]
+[JsonSerializable(typeof(GitCommitRequestDto))]
+[JsonSerializable(typeof(GitCommitResultDto))]
+[JsonSerializable(typeof(GitCreateBranchDto))]
+[JsonSerializable(typeof(GitCheckoutDto))]
+[JsonSerializable(typeof(GitPushRequestDto))]
+[JsonSerializable(typeof(GitCommandResultDto))]
 [JsonSerializable(typeof(DirectoryEntryDto))]
 [JsonSerializable(typeof(IReadOnlyList<DirectoryEntryDto>))]
 [JsonSerializable(typeof(BrowseResponseDto))]
@@ -624,6 +718,8 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(IReadOnlyList<CollectionSummaryDto>))]
 [JsonSerializable(typeof(CollectionDetailDto))]
 [JsonSerializable(typeof(CollectionSpecDto))]
+[JsonSerializable(typeof(PostmanImportRequestDto))]
+[JsonSerializable(typeof(PostmanImportResponseDto))]
 [JsonSerializable(typeof(TaggedItemDto))]
 [JsonSerializable(typeof(IReadOnlyList<TaggedItemDto>))]
 [JsonSerializable(typeof(WorkspaceSpecDto))]
@@ -632,6 +728,7 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(RenderedRequestDto))]
 [JsonSerializable(typeof(ExecuteRequestDto))]
 [JsonSerializable(typeof(ExecutionResultDto))]
+[JsonSerializable(typeof(AuthStatusDto))]
 [JsonSerializable(typeof(ExecuteStreamMetaDto))]
 [JsonSerializable(typeof(ExecuteStreamBodyDto))]
 [JsonSerializable(typeof(ExecuteStreamSseDto))]
@@ -651,6 +748,7 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(OidcDiscoveryDto))]
 [JsonSerializable(typeof(AuthExecuteRequestDto))]
 [JsonSerializable(typeof(AuthExecuteResponseDto))]
+[JsonSerializable(typeof(AuthClearRequestDto))]
 [JsonSerializable(typeof(VariableContextDto))]
 [JsonSerializable(typeof(VariableViewDto))]
 [JsonSerializable(typeof(CompileTemplateRequestDto))]

@@ -2,12 +2,12 @@
 kind: request
 name: Whoami (auth code + PKCE)
 auth: ../../../auth/demo-oauth-pkce.auth.md
-tags:
-  - demo
-  - auth
-  - oauth2
-  - pkce
+tags: [demo, auth, oauth2, pkce]
 ---
+
+```http
+GET /demo/auth/whoami/foo
+```
 
 # Authenticated — authorization code + PKCE
 
@@ -21,7 +21,3 @@ Interactive flow. The first time you hit **Execute**:
 
 Subsequent executions reuse the cached token (silently refreshing when it's near
 expiry). Hit the refresh icon in the auth's Try-It panel to force re-auth.
-
-```http
-GET /demo/auth/whoami
-```

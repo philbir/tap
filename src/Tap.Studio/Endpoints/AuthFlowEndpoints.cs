@@ -2,6 +2,7 @@ using System.Text;
 using System.Text.Json;
 using Tap.Studio.Auth;
 using Tap.Studio.Contracts;
+using Tap.Workspace.Model;
 
 namespace Tap.Studio.Endpoints;
 
@@ -55,6 +56,22 @@ public static class AuthFlowEndpoints
         {
             var result = await runner.ExecuteAsync(body.Path, body.ForceReauthenticate, ct).ConfigureAwait(false);
             return Results.Ok(ToDto(result));
+        });
+
+        // ----- Clear cached token -----
+        // Removes the persisted runtime token for an auth profile scoped to the current
+        // workspace. After this call the Flow tab's status flips back to `missing` and the
+        // next request Send will fire without an Authorization header (until the user runs
+        // the auth flow again). 404 when the path doesn't point at an auth file — guards
+        // against accidental writes via a malformed client request.
+        app.MapPost("/api/auth/clear", (AuthClearRequestDto body, WorkspaceService svc, AuthTokenStore tokens) =>
+        {
+            if (string.IsNullOrWhiteSpace(body.Path))
+                return Results.BadRequest(new { code = "missing-path", message = "Path is required." });
+            if (svc.Current.FindByPath(body.Path) is not AuthFile)
+                return Results.NotFound(new { code = "auth-not-found", message = $"Auth profile '{body.Path}' not in workspace." });
+            tokens.Remove(svc.RootDirectory, body.Path);
+            return Results.NoContent();
         });
 
         // ----- Callback URI ------------

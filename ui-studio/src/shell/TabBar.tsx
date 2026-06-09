@@ -1,5 +1,6 @@
 import { ActionIcon, Box, Group, Menu, ScrollArea, Text, UnstyledButton } from '@mantine/core'
 import {
+  IconBrandGit,
   IconDotsVertical,
   IconFolder, IconFolders, IconLayoutDashboard, IconLock, IconSend, IconSettings, IconWorld, IconX,
   type Icon as TablerIcon,
@@ -18,6 +19,7 @@ const KIND_ICON: Record<WorkspaceFileKind, TablerIcon> = {
   collection: IconFolders,
   folder: IconFolder,
   settings: IconSettings,
+  'git-diff': IconBrandGit,
 }
 const KIND_COLOR: Partial<Record<WorkspaceFileKind, string>> = {
   request: 'var(--mantine-color-tap-6)',

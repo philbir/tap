@@ -58,6 +58,10 @@ public static class ExecuteStreamEndpoint
                 variables = rendered.Metadata.VariablesUsed
                     .Select(s => new VariableTraceDto(s.ProviderName, s.Name, s.Resolved, s.IsSecret, s.Duration.TotalMilliseconds))
                     .ToArray();
+                // Snapshot auth state *after* RenderAsync so the cached-token freshness check sees
+                // whatever the executor saw (the renderer doesn't mutate the store, so the order
+                // is just for clarity).
+                var authStatus = svc.BuildAuthStatus(body.Path);
 
                 // WebSocket requests skip the HttpClient path entirely — see WebSocketExecutor.
                 // Same event stream shape, just `ws` frames in place of `body`/`sse`.
@@ -76,7 +80,8 @@ public static class ExecuteStreamEndpoint
                                 RequestBody: rendered.Body,
                                 ResponseHeaders: headers,
                                 ContentType: contentType,
-                                Protocol: rendered.Protocol.ToWire());
+                                Protocol: rendered.Protocol.ToWire(),
+                                AuthStatus: authStatus);
                             await WriteEventAsync(resp, "meta", meta, ictt).ConfigureAwait(false);
                         },
                         emitFrame: async (frame, ictt) =>
@@ -105,7 +110,8 @@ public static class ExecuteStreamEndpoint
                     RequestBody: rendered.Body,
                     ResponseHeaders: responseHeaders,
                     ContentType: contentType,
-                    Protocol: rendered.Protocol.ToWire());
+                    Protocol: rendered.Protocol.ToWire(),
+                    AuthStatus: authStatus);
                 await WriteEventAsync(resp, "meta", meta, ct);
 
                 var isSse = contentType?.Split(';')[0].Trim()

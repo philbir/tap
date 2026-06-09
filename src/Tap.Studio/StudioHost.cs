@@ -75,6 +75,7 @@ public static class StudioHost
         builder.Services.AddSingleton<SystemSettingsStore>();
         builder.Services.AddSingleton<KnownWorkspaceStore>();
         builder.Services.AddSingleton<WorkspaceService>();
+        builder.Services.AddSingleton<GitService>();
         builder.Services.AddHttpContextAccessor();
 
         builder.Services.AddHttpClient("auth");
@@ -127,6 +128,7 @@ public static class StudioHost
         ExecuteStreamEndpoint.Map(app);
         FileEndpoints.Map(app);
         FilesystemEndpoints.Map(app);
+        GitEndpoints.Map(app);
         GraphQLSchemaEndpoint.Map(app);
         AuthFlowEndpoints.Map(app);
         VariableEndpoints.Map(app);

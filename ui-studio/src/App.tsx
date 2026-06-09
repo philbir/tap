@@ -7,6 +7,7 @@ import { AuthEditor } from './editors/AuthEditor'
 import { CollectionEditor } from './editors/CollectionEditor'
 import { CreateNewDialog } from './editors/CreateNewDialog'
 import { EnvEditor } from './editors/EnvEditor'
+import { GitDiffEditor } from './editors/GitDiffEditor'
 import shellStyles from './editors/EditorShell.module.css'
 import { RequestEditor } from './editors/RequestEditor'
 import { SettingsEditor } from './editors/SettingsEditor'
@@ -126,6 +127,7 @@ export function App() {
                 {active?.kind === 'env' && <EnvEditor key={active.path} path={active.path} />}
                 {active?.kind === 'collection' && <CollectionEditor key={active.path} path={active.path} />}
                 {active?.kind === 'settings' && <SettingsEditor />}
+                {active?.kind === 'git-diff' && <GitDiffEditor key={active.path} path={active.path} />}
               </Box>
             </Box>
           </Panel>

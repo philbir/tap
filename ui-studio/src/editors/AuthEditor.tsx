@@ -5,7 +5,7 @@ import {
 import { useClipboard, useDebouncedValue, useDisclosure } from '@mantine/hooks'
 import {
   IconAlertCircle, IconCheck, IconChevronDown, IconChevronRight, IconCode, IconCopy,
-  IconExternalLink, IconKey, IconPlayerPlayFilled, IconRefresh, IconShieldCheck,
+  IconExternalLink, IconKey, IconPlayerPlayFilled, IconRefresh, IconShieldCheck, IconTrash,
 } from '@tabler/icons-react'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
@@ -1059,6 +1059,22 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
                 </ActionIcon>
               </Tooltip>
             )}
+            <Tooltip label="Clear cached token (~/.tap/auth-tokens.json)">
+              <ActionIcon
+                variant="default"
+                color="red"
+                onClick={async () => {
+                  setError(null); setBusy(true); stopPolling()
+                  try { await api.clearAuthToken(path); setResult(null); setLaunchMode(null) }
+                  catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+                  finally { setBusy(false) }
+                }}
+                disabled={busy}
+                aria-label="Clear cached token"
+              >
+                <IconTrash size={14} />
+              </ActionIcon>
+            </Tooltip>
             <Button
               leftSection={<IconPlayerPlayFilled size={12} />}
               size="xs"

@@ -1,4 +1,5 @@
 using Tap.Studio.Auth;
+using Tap.Studio.Contracts;
 using Tap.Studio.Variables;
 using Tap.Workspace;
 using Tap.Workspace.Model;
@@ -232,6 +233,67 @@ public sealed class WorkspaceService : IDisposable
     }
 
     /// <summary>
+    /// Snapshot the auth state the executor would see for <paramref name="requestPath"/>:
+    /// which profile is bound (via request &lt; stage &lt; collection precedence), whether a
+    /// usable runtime token is cached, and whether running the flow would be interactive.
+    /// The Flow tab uses this to decide between "already authorized" vs "Run auth" affordances.
+    /// </summary>
+    public AuthStatusDto BuildAuthStatus(string requestPath)
+    {
+        var ws = Current;
+        if (ws.FindByPath(requestPath) is not RequestFile req)
+            return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
+
+        var auth = ResolveAuth(ws, req);
+        if (auth is null)
+            return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
+
+        // Profiles whose auth contribution is built inline at render time — no runtime
+        // token to acquire, no flow to run.
+        if (auth.Type is "basic" or "bearer" or "apiKey" or "custom" or "aws-sigv4" or "none")
+            return new AuthStatusDto(auth.RelativePath, auth.Type, Source: "static", Interactive: false, ExpiresAt: null);
+
+        // Github PAT mode is functionally static — the renderer stamps the token from the
+        // profile fields without touching the token store.
+        if (auth.Type == "github")
+        {
+            var mode = (auth.Fields.GetValueOrDefault("mode") ?? "pat").Trim();
+            if (mode is "pat" or "")
+                return new AuthStatusDto(auth.RelativePath, auth.Type, Source: "static", Interactive: false, ExpiresAt: null);
+        }
+
+        var interactive = IsInteractive(auth);
+        var cached = _tokens.Get(_root, auth.RelativePath);
+        if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
+            return new AuthStatusDto(auth.RelativePath, auth.Type, Source: "missing", interactive, ExpiresAt: null);
+
+        // Mirror AuthRunner's freshness check (30s slack) so the Flow tab agrees with what the
+        // runner would do on re-execute.
+        if (cached.ExpiresAt is not null && cached.ExpiresAt <= DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30))
+            return new AuthStatusDto(auth.RelativePath, auth.Type, Source: "expired", interactive, cached.ExpiresAt);
+
+        return new AuthStatusDto(auth.RelativePath, auth.Type, Source: "cached", interactive, cached.ExpiresAt);
+    }
+
+    /// <summary>True when running the profile's auth flow may open a browser window or
+    /// device-code prompt. Drives the "Run auth" button label and prominence.</summary>
+    private static bool IsInteractive(AuthFile auth)
+    {
+        switch (auth.Type)
+        {
+            case "oauth2":
+                var flow = (auth.Fields.GetValueOrDefault("flow")
+                            ?? auth.Fields.GetValueOrDefault("grantType")
+                            ?? "authorization_code_pkce").Trim();
+                return flow is "authorization_code" or "authorization_code_pkce" or "device_code" or "device";
+            case "github":
+                return (auth.Fields.GetValueOrDefault("mode") ?? "pat").Trim() == "oauth";
+            default:
+                return false;
+        }
+    }
+
+    /// <summary>
     /// Mirrors <see cref="WorkspaceRenderer"/>'s auth resolution order — request &lt; stage &lt; api —
     /// so the token injector targets the same file the renderer's static <c>ApplyAuthHeaders</c>
     /// saw. Returning null means there's no auth attached (or the ref didn't resolve).
@@ -276,6 +338,16 @@ public sealed class WorkspaceService : IDisposable
 
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content);
+    }
+
+    /// <summary>Synchronously reload the workspace model from disk. For endpoints that
+    /// mutate the filesystem and must serve the fresh model to the very next request —
+    /// the watcher's debounced reload is too slow for a client that refetches immediately.
+    /// Doesn't fire <see cref="Changed"/>; the watcher still does that once it catches up.</summary>
+    public void ReloadNow()
+    {
+        var fresh = _loader.Load(RootDirectory);
+        lock (_gate) _workspace = fresh;
     }
 
     private void OnFsChange(object _, FileSystemEventArgs __)

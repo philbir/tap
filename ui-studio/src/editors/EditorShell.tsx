@@ -1,6 +1,10 @@
-import { ActionIcon, Alert, Badge, Box, Button, Group, ScrollArea, TextInput, Title, Tooltip } from '@mantine/core'
+import { ActionIcon, Alert, Box, Button, Group, ScrollArea, TextInput, Title, Tooltip } from '@mantine/core'
 import { useHotkeys } from '@mantine/hooks'
-import { IconAlertCircle, IconDeviceFloppy, IconPencil } from '@tabler/icons-react'
+import {
+  IconAlertCircle, IconDeviceFloppy, IconFolders, IconLayoutDashboard, IconLock, IconPencil,
+  IconPlug, IconSend, IconWorld,
+  type Icon as TablerIcon,
+} from '@tabler/icons-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
 import styles from './EditorShell.module.css'
@@ -43,6 +47,15 @@ const KIND_COLOR: Record<string, string> = {
   Workspace: 'tap',
 }
 
+const KIND_ICON: Record<string, TablerIcon> = {
+  Request: IconSend,
+  API: IconPlug,
+  Auth: IconLock,
+  Environment: IconWorld,
+  Workspace: IconLayoutDashboard,
+  Collection: IconFolders,
+}
+
 export function EditorShell(props: EditorShellProps) {
   const { title, kindLabel, dirty, saving, errorMessage, onSave, onDiscard, onTitleChange, toolbarExtras, children, rightPane, bottomPane } = props
 
@@ -51,6 +64,7 @@ export function EditorShell(props: EditorShellProps) {
   ])
 
   const chipColor = KIND_COLOR[kindLabel] ?? 'tap'
+  const KindIcon = KIND_ICON[kindLabel] ?? IconSend
   // Stable localStorage key so each editor kind remembers its preferred split sizes.
   const autoSaveId = `tap-studio:split:${kindLabel.toLowerCase()}`
 
@@ -64,9 +78,9 @@ export function EditorShell(props: EditorShellProps) {
         style={{ borderBottom: '1px solid var(--mantine-color-default-border)', flexShrink: 0 }}
       >
         <Group gap="sm" wrap="nowrap" style={{ minWidth: 0, flex: 1 }}>
-          <Badge variant="light" color={chipColor} radius="sm" size="md" tt="uppercase" fw={600}>
-            {kindLabel}
-          </Badge>
+          <Tooltip label={kindLabel} openDelay={400} withArrow>
+            <KindIcon size={20} stroke={1.7} color={`var(--mantine-color-${chipColor}-6)`} aria-label={kindLabel} />
+          </Tooltip>
           <EditableTitle title={title} onChange={onTitleChange} />
           {dirty && (
             <Box

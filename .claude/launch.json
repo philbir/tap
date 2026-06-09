@@ -23,6 +23,12 @@
         "scripts/studio-ui-dev.sh"
       ],
       "port": 5297
+    },
+    {
+      "name": "studio-aspire",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "echo 'attaching to aspire-managed studio on 55446'; while :; do sleep 3600; done"],
+      "port": 55446
     }
   ]
 }

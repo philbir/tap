@@ -1,6 +1,6 @@
 // Mirrors src/Tap.Studio/Contracts/Dtos.cs. Keep in lockstep with the C# DTOs.
 
-export type WorkspaceFileKind = 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'folder' | 'settings'
+export type WorkspaceFileKind = 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'folder' | 'settings' | 'git-diff'
 
 export interface WorkspaceInfo {
   name: string
@@ -392,6 +392,16 @@ export interface CollectionSpec {
   body?: string
 }
 
+/** Response from `POST /api/collections/import/postman` — the importer's report. */
+export interface PostmanImportResponse {
+  slug: string
+  collectionPath: string
+  authPath: string | null
+  requestCount: number
+  folderCount: number
+  warnings: string[]
+}
+
 /** One (tag, entity) row from `GET /api/tags`. */
 export interface TaggedItem {
   tag: string
@@ -517,8 +527,25 @@ export interface ExecutionResult {
   stage: string | null
   error: string | null
   protocol: RequestProtocol
+  /** Snapshot of how the auth profile contributed — surfaced by the stream's `meta` event.
+   *  Drives the Flow tab's "Run auth" affordance. */
+  authStatus?: AuthStatus
   sseEvents?: SseEvent[]
   wsFrames?: WsFrame[]
+}
+
+export type AuthStatusSource = 'cached' | 'expired' | 'static' | 'missing' | 'none'
+
+export interface AuthStatus {
+  /** Resolved auth profile path, or null when no auth is attached. */
+  path: string | null
+  /** Auth profile type — `oauth2`, `github`, etc. Null when path is null. */
+  type: string | null
+  source: AuthStatusSource
+  /** True when running the auth flow may open a browser or device-code prompt. */
+  interactive: boolean
+  /** When the cached token expires (cached + expired sources). */
+  expiresAt: string | null
 }
 
 export interface WsFrame {
@@ -547,6 +574,49 @@ export interface GraphQLSchemaResponse {
 }
 
 export type GraphQLSchemaMode = 'introspection' | 'sdl'
+
+// --- Git ----------------------------------------------------------------------------
+
+export interface GitStatus {
+  root: string
+  branch: string
+  isDetached: boolean
+  hasRemote: boolean
+  upstream: string | null
+  ahead: number | null
+  behind: number | null
+  stagedCount: number
+  unstagedCount: number
+}
+
+export type GitFileStatus =
+  | 'added' | 'modified' | 'deleted' | 'renamed' | 'typechange' | 'untracked' | 'conflicted'
+
+export interface GitFileChange {
+  path: string
+  indexStatus: GitFileStatus | null
+  workingStatus: GitFileStatus | null
+}
+
+export interface GitBranch {
+  name: string
+  isCurrent: boolean
+  isRemote: boolean
+  upstream: string | null
+  tip: string | null
+}
+
+export interface GitCommitResult {
+  sha: string
+  shortSha: string
+  message: string
+}
+
+export interface GitCommandResult {
+  exitCode: number
+  stdout: string
+  stderr: string
+}
 
 /** Response from `POST /api/files/upload`. `ref` is the body marker (e.g.
  *  `< ./.files/foo.png`) the editor embeds in the request body; the executor

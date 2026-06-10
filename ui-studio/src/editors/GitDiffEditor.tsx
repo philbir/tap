@@ -1,6 +1,6 @@
-import { Alert, Box, Loader, SegmentedControl, Stack, Text } from '@mantine/core'
+import { Alert, Box, Loader, Stack, Text } from '@mantine/core'
 import { PatchDiff } from '@pierre/diffs/react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import { useTapStore } from '../store'
 
@@ -37,18 +37,14 @@ export function gitDiffTabLabel(side: 'working' | 'staged', filePath: string): s
 
 /**
  * Editor that renders a unified-diff patch for a single git path via `<PatchDiff>`
- * from `@pierre/diffs/react`. Picks the right side from the tab id; toggling sides
- * mutates the active tab in-place so the user doesn't accumulate one tab per side.
+ * from `@pierre/diffs/react`. The side (working / staged) is fixed at tab-open time
+ * via the tab id — there's no in-editor switch because the sidebar already gives
+ * a click target per side.
  */
 export function GitDiffEditor({ path }: Props) {
   const parsed = decodeGitDiffTabPath(path)
-  const renameTab = useTapStore((s) => s.renameTab)
   const generation = useTapStore((s) => s.generation)
-
-  // Local side state, seeded from the tab id and pushed back on toggle.
-  const [side, setSide] = useState<'working' | 'staged'>(parsed?.side ?? 'working')
-  useEffect(() => { if (parsed && parsed.side !== side) setSide(parsed.side) }, [parsed?.side])
-
+  const side = parsed?.side ?? 'working'
   const filePath = parsed?.filePath ?? null
 
   const [patch, setPatch] = useState<string | null>(null)
@@ -69,36 +65,15 @@ export function GitDiffEditor({ path }: Props) {
     return () => { cancelled = true }
   }, [filePath, side, generation])
 
-  const sideOptions = useMemo(
-    () => [
-      { value: 'working', label: 'Working' },
-      { value: 'staged', label: 'Staged' },
-    ],
-    [],
-  )
-
   if (!parsed) {
     return <Alert color="red" m="md" variant="light">Invalid git diff tab.</Alert>
-  }
-
-  function pickSide(next: 'working' | 'staged') {
-    if (next === side || !filePath) return
-    setSide(next)
-    renameTab(path, encodeGitDiffTabPath(next, filePath), gitDiffTabLabel(next, filePath))
   }
 
   return (
     <Stack gap={0} h="100%">
       <Box p="sm" style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-        <SegmentedControl
-          size="xs"
-          value={side}
-          onChange={(v) => pickSide(v as 'working' | 'staged')}
-          data={sideOptions}
-          maw={240}
-        />
-        <Text size="xs" c="dimmed" mt={6} ff="var(--mono)" title={filePath ?? undefined} truncate>
-          {filePath}
+        <Text size="xs" c="dimmed" ff="var(--mono)" title={filePath ?? undefined} truncate>
+          {filePath} <Text component="span" c="dimmed" tt="uppercase">· {side}</Text>
         </Text>
       </Box>
       <Box style={{ flex: 1, minHeight: 0, overflow: 'auto' }}>

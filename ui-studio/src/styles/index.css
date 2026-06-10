@@ -50,3 +50,17 @@ html, body, #root { height: 100%; margin: 0; }
 .tap-tree-row__actions { opacity: 0; transition: opacity 0.12s; }
 .tap-tree-row:hover .tap-tree-row__actions,
 .tap-tree-row:focus-within .tap-tree-row__actions { opacity: 1; }
+
+/* Git changes list: per-row hover actions (Stage / Unstage / Discard). Hidden by
+   default; revealed on row hover. Positioned absolute so they don't squeeze the
+   filename text on hover. */
+.tap-git-row .tap-git-row__actions {
+  opacity: 0;
+  transition: opacity 0.12s;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.tap-git-row:hover .tap-git-row__actions,
+.tap-git-row:focus-within .tap-git-row__actions { opacity: 1; }

@@ -121,6 +121,50 @@ public sealed class GitService
         Commands.Unstage(repo, arr);
     }
 
+    /// <summary>
+    /// Discard working-tree changes for the given paths.
+    /// <list type="bullet">
+    ///   <item>Untracked files are deleted from disk.</item>
+    ///   <item>Tracked modifications/deletions are reverted via
+    ///         <c>repo.CheckoutPaths("HEAD", …, Force)</c>.</item>
+    /// </list>
+    /// Staged-only paths aren't touched here — they need <see cref="Unstage"/> first.
+    /// </summary>
+    public void Discard(IEnumerable<string> paths)
+    {
+        var root = Root ?? throw new InvalidOperationException("Workspace is not in a git repository.");
+        var normalised = paths.Select(NormalizeSeparators).Where(p => !string.IsNullOrEmpty(p)).ToArray();
+        if (normalised.Length == 0) return;
+        using var repo = new Repository(root);
+
+        var status = repo.RetrieveStatus(new StatusOptions { IncludeUntracked = true });
+        var byPath = status.ToDictionary(e => e.FilePath, e => e.State, StringComparer.OrdinalIgnoreCase);
+
+        var trackedToRestore = new List<string>();
+        foreach (var p in normalised)
+        {
+            var state = byPath.GetValueOrDefault(p, FileStatus.Unaltered);
+            if (state.HasFlag(FileStatus.NewInWorkdir))
+            {
+                // Untracked — just remove from disk.
+                var full = Path.Combine(root, p);
+                if (File.Exists(full)) File.Delete(full);
+            }
+            else
+            {
+                trackedToRestore.Add(p);
+            }
+        }
+
+        if (trackedToRestore.Count > 0)
+        {
+            repo.CheckoutPaths("HEAD", trackedToRestore, new CheckoutOptions
+            {
+                CheckoutModifiers = CheckoutModifiers.Force,
+            });
+        }
+    }
+
     public GitCommitResultDto Commit(string message)
     {
         if (string.IsNullOrWhiteSpace(message))

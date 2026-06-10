@@ -5,8 +5,8 @@ import {
 import { useDisclosure } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
-  IconArrowDown, IconArrowUp, IconBrandGit, IconCheck, IconCloudDownload, IconGitBranch,
-  IconGitCommit, IconGitPullRequest, IconMinus, IconPlus, IconRefresh,
+  IconArrowBackUp, IconArrowDown, IconArrowUp, IconBrandGit, IconCheck, IconCloudDownload,
+  IconGitBranch, IconGitCommit, IconGitPullRequest, IconMinus, IconPlus, IconRefresh,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
@@ -118,6 +118,23 @@ export function GitView() {
     const all = unstaged.map((c) => c.path)
     if (all.length === 0) return
     await run('Stage all', () => api.gitStage(all))
+  }
+  async function handleStageOne(path: string) {
+    await run('Stage', () => api.gitStage([path]))
+  }
+  async function handleUnstageOne(path: string) {
+    await run('Unstage', () => api.gitUnstage([path]))
+  }
+  async function discard(paths: string[], label: string) {
+    if (paths.length === 0) return
+    await run('Discard', async () => {
+      await api.gitDiscard(paths)
+      notifications.show({
+        color: 'gray',
+        title: 'Discarded',
+        message: `Discarded working-tree changes to ${label}.`,
+      })
+    })
   }
   async function handleCommit() {
     const msg = commitMsg.trim()
@@ -273,6 +290,9 @@ export function GitView() {
             onActivate={(c) => openDiffTab(c, 'staged')}
             getStatus={(c) => c.indexStatus}
             sideForRow="staged"
+            rowActions={[
+              { label: 'Unstage', icon: <IconMinus size={13} />, onClick: (p) => void handleUnstageOne(p) },
+            ]}
             rightAction={
               selectedStaged.length > 0 && (
                 <Tooltip label="Unstage selected" withArrow>
@@ -299,19 +319,38 @@ export function GitView() {
             onActivate={(c) => openDiffTab(c, 'working')}
             getStatus={(c) => c.workingStatus}
             sideForRow="working"
+            rowActions={[
+              {
+                label: 'Discard', icon: <IconArrowBackUp size={13} />, color: 'red',
+                onClick: (p) => discard([p], p.split('/').pop() ?? p),
+              },
+              { label: 'Stage', icon: <IconPlus size={13} />, onClick: (p) => void handleStageOne(p) },
+            ]}
             rightAction={
               <Group gap={2} wrap="nowrap">
                 {selectedUnstaged.length > 0 && (
-                  <Tooltip label="Stage selected" withArrow>
-                    <ActionIcon
-                      size="sm" variant="subtle" color="gray"
-                      onClick={() => void handleStage()}
-                      aria-label="Stage selected"
-                      loading={busy === 'Stage'}
-                    >
-                      <IconPlus size={13} />
-                    </ActionIcon>
-                  </Tooltip>
+                  <>
+                    <Tooltip label={`Discard ${selectedUnstaged.length}`} withArrow>
+                      <ActionIcon
+                        size="sm" variant="subtle" color="red"
+                        onClick={() => discard(selectedUnstaged, `${selectedUnstaged.length} files`)}
+                        aria-label="Discard selected"
+                        loading={busy === 'Discard'}
+                      >
+                        <IconArrowBackUp size={13} />
+                      </ActionIcon>
+                    </Tooltip>
+                    <Tooltip label="Stage selected" withArrow>
+                      <ActionIcon
+                        size="sm" variant="subtle" color="gray"
+                        onClick={() => void handleStage()}
+                        aria-label="Stage selected"
+                        loading={busy === 'Stage'}
+                      >
+                        <IconPlus size={13} />
+                      </ActionIcon>
+                    </Tooltip>
+                  </>
                 )}
                 {unstaged.length > 0 && (
                   <Tooltip label="Stage all" withArrow>
@@ -377,6 +416,14 @@ export function GitView() {
   )
 }
 
+interface RowAction {
+  label: string
+  icon: React.ReactNode
+  /** Color the action icon (Mantine theme color name). Default `gray`. */
+  color?: string
+  onClick: (path: string) => void
+}
+
 interface ChangeSectionProps {
   title: string
   files: GitFileChange[]
@@ -387,11 +434,17 @@ interface ChangeSectionProps {
   onActivate: (c: GitFileChange) => void
   getStatus: (c: GitFileChange) => string | null
   sideForRow: 'working' | 'staged'
+  /** Per-row hover actions, shown right-aligned. Visible on row hover. */
+  rowActions?: RowAction[]
+  /** Section-toolbar right slot (bulk actions). */
   rightAction?: React.ReactNode
 }
 
 function ChangeSection(props: ChangeSectionProps) {
-  const { title, files, selected, activeTab, onToggle, onToggleAll, onActivate, getStatus, sideForRow, rightAction } = props
+  const {
+    title, files, selected, activeTab, onToggle, onToggleAll, onActivate, getStatus,
+    sideForRow, rowActions, rightAction,
+  } = props
   if (files.length === 0) return null
   const allSelected = files.every((f) => selected.has(f.path))
   const someSelected = files.some((f) => selected.has(f.path))
@@ -413,6 +466,7 @@ function ChangeSection(props: ChangeSectionProps) {
       {files.map((f) => {
         const tabId = encodeGitDiffTabPath(sideForRow, f.path)
         const isActive = activeTab === tabId
+        const basename = f.path.split('/').pop() ?? f.path
         return (
           <Group
             key={f.path}
@@ -420,11 +474,12 @@ function ChangeSection(props: ChangeSectionProps) {
             wrap="nowrap"
             px="sm"
             py={4}
-            className="tap-tree-row"
+            className="tap-tree-row tap-git-row"
             bg={isActive ? 'var(--mantine-color-default-hover)' : undefined}
             style={{
               borderLeft: `3px solid ${isActive ? 'var(--mantine-color-tap-filled)' : 'transparent'}`,
               cursor: 'pointer',
+              position: 'relative',
             }}
           >
             <Checkbox
@@ -436,13 +491,39 @@ function ChangeSection(props: ChangeSectionProps) {
             />
             <UnstyledButton
               onClick={() => onActivate(f)}
+              title={f.path}
               style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}
             >
               <StatusBadge status={getStatus(f)} />
-              <Text size="xs" ff="var(--mono)" truncate flex={1} title={f.path}>
-                {f.path}
+              <Text size="xs" ff="var(--mono)" truncate flex={1}>
+                {basename}
               </Text>
             </UnstyledButton>
+            {rowActions && rowActions.length > 0 && (
+              <Group
+                className="tap-git-row__actions"
+                gap={2}
+                wrap="nowrap"
+                style={{
+                  background: 'var(--mantine-color-body)',
+                  paddingLeft: 4,
+                }}
+              >
+                {rowActions.map((a) => (
+                  <Tooltip key={a.label} label={a.label} withArrow openDelay={300}>
+                    <ActionIcon
+                      size="sm"
+                      variant="subtle"
+                      color={a.color ?? 'gray'}
+                      onClick={(e) => { e.stopPropagation(); a.onClick(f.path) }}
+                      aria-label={a.label}
+                    >
+                      {a.icon}
+                    </ActionIcon>
+                  </Tooltip>
+                ))}
+              </Group>
+            )}
           </Group>
         )
       })}

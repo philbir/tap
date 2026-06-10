@@ -1,9 +1,9 @@
 import {
-  Badge, Box, Button, Code, Group, Menu, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip, UnstyledButton,
+  Badge, Box, Button, Code, Group, Loader, Menu, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconEye, IconFile, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconPlayerStopFilled, IconSparkles, IconUpload, IconVariable, IconX,
+  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconEye, IconFile, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -272,6 +272,7 @@ export function RequestEditor({ path }: Props) {
             stopped={stopped}
             onStop={busy === 'send' ? stop : undefined}
             requestPath={path}
+            requestName={spec.name || basename(path)}
             requestAuth={spec.auth ?? null}
             onClose={() => { abortStream(); setExecution(null); setRendered(null); setActionError(null); setBusy(null); setStopped(false) }}
           />
@@ -326,9 +327,13 @@ export function RequestEditor({ path }: Props) {
           />
         </Box>
         {busy === 'send' ? (
+          // In-flight: a red, spinner-led button that doubles as the cancel control. The
+          // spinner shows the request is running; clicking it aborts (Mantine's `loading`
+          // prop would disable the button, so we render the Loader ourselves to keep it
+          // clickable).
           <Button
             color="red"
-            leftSection={<IconPlayerStopFilled size={14} />}
+            leftSection={<Loader size={14} color="white" />}
             onClick={stop}
             title="Stop the running request"
           >

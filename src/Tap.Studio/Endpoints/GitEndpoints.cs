@@ -51,6 +51,7 @@ public static class GitEndpoints
 
         g.MapPost("/stage", (GitStagePathsDto body, GitService git) => Run(() => git.Stage(body.Paths ?? [])));
         g.MapPost("/unstage", (GitStagePathsDto body, GitService git) => Run(() => git.Unstage(body.Paths ?? [])));
+        g.MapPost("/discard", (GitStagePathsDto body, GitService git) => Run(() => git.Discard(body.Paths ?? [])));
 
         g.MapPost("/commit", (GitCommitRequestDto body, GitService git) =>
         {

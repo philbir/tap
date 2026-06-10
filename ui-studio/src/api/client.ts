@@ -290,6 +290,10 @@ export const api = {
   },
   gitStage: (paths: string[]) => post<null>('/api/git/stage', { paths }),
   gitUnstage: (paths: string[]) => post<null>('/api/git/unstage', { paths }),
+  /** Discard working-tree changes: untracked files are deleted, tracked
+   *  modifications are reverted to HEAD. Staged-only paths aren't touched —
+   *  call `gitUnstage` first if you want to throw them away. */
+  gitDiscard: (paths: string[]) => post<null>('/api/git/discard', { paths }),
   gitCommit: (message: string) => post<GitCommitResult>('/api/git/commit', { message }),
   gitCreateBranch: (name: string, checkout = true) =>
     post<null>('/api/git/branches', { name, checkout }),

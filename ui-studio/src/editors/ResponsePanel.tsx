@@ -26,6 +26,8 @@ interface Props {
   /** Workspace-relative path of the request being executed. Used to resolve relative
    *  auth paths and look up the owning collection. */
   requestPath?: string
+  /** Display name of the request — used to build the download filename. */
+  requestName?: string
   /** Raw value of `spec.auth` — `undefined`/empty = inherit, `'none'` = explicit opt-out,
    *  anything else = a relative path or `id:` reference. */
   requestAuth?: string | null
@@ -47,7 +49,7 @@ interface Props {
  * 4xx yellow / 5xx red). The "Request" sub-tab shows what was sent on the wire (replaces
  * the old separate Preview pane).
  */
-export function ResponsePanel({ rendered, execution, error, busy, stopped, onStop, requestPath, requestAuth, onClose }: Props) {
+export function ResponsePanel({ rendered, execution, error, busy, stopped, onStop, requestPath, requestName, requestAuth, onClose }: Props) {
   const sseEvents = execution?.sseEvents
   const hasSse = !!sseEvents && sseEvents.length > 0
   const wsFrames = execution?.wsFrames
@@ -187,7 +189,7 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
               </ActionIcon>
             </Tooltip>
           )}
-          {execution && !busy && <ResultActionsMenu execution={execution} />}
+          {execution && !busy && <ResultActionsMenu execution={execution} requestName={requestName} />}
           {onClose && (
             <Tooltip label="Close response" withArrow>
               <ActionIcon variant="subtle" color="gray" size="sm" onClick={onClose} aria-label="Close response panel">
@@ -311,7 +313,7 @@ function StatusStrip({ execution, busy, stopped }: { execution: ExecutionResult;
 
 /** The `⋯` menu in the response header. Copies or downloads whatever the response holds —
  *  the HTTP body, or the accumulated SSE events / WebSocket frames for streaming requests. */
-function ResultActionsMenu({ execution }: { execution: ExecutionResult }) {
+function ResultActionsMenu({ execution, requestName }: { execution: ExecutionResult; requestName?: string }) {
   const clipboard = useClipboard({ timeout: 1500 })
   const text = useMemo(() => resultToText(execution), [execution])
   const downloadable = useMemo(() => isDownloadableImage(execution) || (text != null && text.length > 0), [execution, text])
@@ -344,7 +346,7 @@ function ResultActionsMenu({ execution }: { execution: ExecutionResult }) {
         <Menu.Item
           leftSection={<IconDownload size={14} />}
           disabled={!downloadable}
-          onClick={() => downloadResult(execution)}
+          onClick={() => downloadResult(execution, requestName)}
         >
           Download response
         </Menu.Item>
@@ -389,20 +391,48 @@ function isDownloadableImage(execution: ExecutionResult): boolean {
 
 /** Save the response to disk. Image responses (stored as `data:` URLs) download as the
  *  original binary; everything else writes its text body with an extension guessed from
- *  the content type. */
-function downloadResult(execution: ExecutionResult): void {
+ *  the content type. Filename is `<request-name>_response_<timestamp>.<ext>`. */
+function downloadResult(execution: ExecutionResult, requestName?: string): void {
   const ext = extForContentType(execution.contentType)
+  const filename = buildDownloadName(requestName, ext)
   if (isDownloadableImage(execution)) {
-    triggerDownload(execution.responseBody!, `response.${ext}`)
+    triggerDownload(execution.responseBody!, filename)
     return
   }
   const text = resultToText(execution)
   if (text == null) return
   const blob = new Blob([text], { type: execution.contentType ?? 'text/plain;charset=utf-8' })
   const url = URL.createObjectURL(blob)
-  triggerDownload(url, `response.${ext}`)
+  triggerDownload(url, filename)
   // Revoke after the click has had a chance to start the download.
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+/** Compose the download filename: `<sanitized request name>_response_<timestamp>.<ext>`,
+ *  falling back to `response_<timestamp>.<ext>` when the request has no usable name. */
+function buildDownloadName(requestName: string | undefined, ext: string): string {
+  const base = sanitizeFilenamePart(requestName ?? '')
+  const ts = fileTimestamp()
+  return base ? `${base}_response_${ts}.${ext}` : `response_${ts}.${ext}`
+}
+
+/** Reduce a request name to filesystem-safe characters: anything outside
+ *  `[A-Za-z0-9._-]` becomes `_`, runs collapse, and leading/trailing separators are
+ *  trimmed. Capped so a verbose name can't produce an unwieldy filename. */
+function sanitizeFilenamePart(name: string): string {
+  return name
+    .normalize('NFKD')
+    .replace(/[^A-Za-z0-9._-]+/g, '_')
+    .replace(/_+/g, '_')
+    .replace(/^[_.]+|[_.]+$/g, '')
+    .slice(0, 80)
+}
+
+/** Local wall-clock timestamp as `YYYY-MM-DD_HH-mm-ss` (filename-safe — no colons). */
+function fileTimestamp(): string {
+  const d = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
 }
 
 function triggerDownload(href: string, filename: string): void {

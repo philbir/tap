@@ -5,8 +5,8 @@ type: oauth2
 flow: password
 useDiscovery: true
 authority: http://{{DEMO_API_URL}}
-authorizeUrl: http://localhost:61836/connect/authorize
-tokenUrl: http://localhost:61836/connect/token
+authorizeUrl: http://{{DEMO_API_URL}}/connect/authorize
+tokenUrl: http://{{DEMO_API_URL}}/connect/token
 clientId: tap-demo
 clientSecret: tap-demo-secret
 scopes: [openid, profile, email, api, offline_access]

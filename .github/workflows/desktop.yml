@@ -100,6 +100,21 @@ jobs:
             echo "APPLE_API_KEY_PATH=$HOME/.private_keys/AuthKey.p8" >> "$GITHUB_ENV"
           fi
 
+      # The MSI/WiX bundler can only encode a numeric-only pre-release identifier
+      # in ProductVersion (e.g. 0.5.0-1) and rejects 0.5.0-beta.1 outright. Drop
+      # MSI for pre-release tags — NSIS handles SemVer pre-releases and is what the
+      # Windows updater consumes anyway.
+      - name: Resolve bundles for this tag
+        id: bundles
+        shell: bash
+        run: |
+          B="${{ matrix.bundles }}"
+          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" && "${GITHUB_REF_NAME}" == *-* ]]; then
+            B="nsis"
+            echo "Pre-release tag ${GITHUB_REF_NAME}: building nsis only (skipping msi)."
+          fi
+          echo "value=$B" >> "$GITHUB_OUTPUT"
+
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -137,7 +152,7 @@ jobs:
           # it does on upload, so the manifest is skipped and .sig files never
           # get attached. We compose latest.json ourselves in publish-updater.
           includeUpdaterJson: false
-          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }}
+          args: --target ${{ matrix.target }} --bundles ${{ steps.bundles.outputs.value }}
 
       # tauri-action uploads the user-facing bundles (.dmg / .msi / .exe /
       # .deb / .app.tar.gz) but not the .sig files needed for the updater

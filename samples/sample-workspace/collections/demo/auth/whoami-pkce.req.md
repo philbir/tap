@@ -6,7 +6,7 @@ tags: [demo, auth, oauth2, pkce]
 ---
 
 ```http
-GET /demo/auth/whoami/foo
+GET /demo/auth/whoami
 ```
 
 # Authenticated — authorization code + PKCE

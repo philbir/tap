@@ -92,7 +92,7 @@ public static class PostmanImporter
                 var authSlug = $"{slug}-postman";
                 authPath = $"{AuthRoot}/{authSlug}.auth.md";
                 authFile = new ImportFile(authPath, AuthSpecEmitter.ToFileSource(authSpec with { Path = authPath }));
-                // Auth file lives at .tap/auth/X; request files live at .tap/collections/<slug>/<sub>/Y.
+                // Auth file lives at auth/X; request files live at collections/<slug>/<sub>/Y.
                 // For the collection's defaultAuth we encode the relative path from the
                 // collection file to the auth file.
                 defaultAuth = $"../../{authPath}";

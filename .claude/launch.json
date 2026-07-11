@@ -10,7 +10,7 @@
         "src/backend/Tap.Studio/Tap.Studio.csproj",
         "-p:SkipTapUiBuild=true",
         "--",
-        "--Studio:WorkspaceRoot=samples/Studio.AppHost/sample-workspace",
+        "--Studio:WorkspaceRoot=samples/sample-workspace",
         "--Studio:Port=5298"
       ],
       "port": 5298

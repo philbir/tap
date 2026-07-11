@@ -668,7 +668,7 @@ function uniqueDisplayPath(parentDisplay: string, segment: string, used: Set<str
   return candidate
 }
 
-const REQUEST_TREE_PREFIX = '.tap/collections/'
+const REQUEST_TREE_PREFIX = 'collections/'
 const REQUEST_TREE_UNSAFE_CSS = `${TAP_TREE_UNSAFE_CSS}
   [data-item-type="folder"][aria-level="1"] [data-item-section="icon"]::after,
   [data-item-type="folder"][data-item-path]:not([data-item-path*="/"]) [data-item-section="icon"]::after {

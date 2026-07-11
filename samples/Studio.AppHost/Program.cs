@@ -11,16 +11,16 @@
 
 var builder = DistributedApplication.CreateBuilder(args);
 
-// Resolve the workspace root. Default: the bundled sample-workspace next to this AppHost.
+// Resolve the workspace root. Default: the bundled sample-workspace under samples/.
 var workspaceRoot = Environment.GetEnvironmentVariable("STUDIO_WORKSPACE")
-    ?? Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "sample-workspace"));
+    ?? Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "sample-workspace"));
 
 // Demo.Api — the canonical upstream for trying out Tap Studio. Exercises every
 // content type / HTTP verb plus SSE, WebSockets, GraphQL, and OAuth2/OIDC. Runs
 // independently of Studio so workspace requests can target it (no .WithReference —
 // the studio doesn't talk to the demo API directly; the user's request files do).
 // Port is dynamic; the resolved host:port (no scheme) is forwarded to studio-api as
-// DEMO_API_URL so sample-workspace/.tap/apis/demo.api.md can pick it up via
+// DEMO_API_URL so sample-workspace/apis/demo.api.md can pick it up via
 // `{{DEMO_API_URL}}`. The renderer prepends `http://` for HTTP requests and `ws://`
 // for WebSocket requests, so the same variable serves both transports.
 var demoApi = builder.AddProject<Projects.Demo_Api>("demo-api")
@@ -28,7 +28,7 @@ var demoApi = builder.AddProject<Projects.Demo_Api>("demo-api")
     .WithExternalHttpEndpoints();
 
 // Dev-only fallbacks for the sample auth profiles. Each one is referenced by a
-// `{{env:NAME}}` token in sample-workspace/.tap/auth/*; without a value the env
+// `{{env:NAME}}` token in sample-workspace/auth/*; without a value the env
 // provider raises E_PROVIDER_RESOLUTION_FAILED on first execute. Real usage should
 // set these in the user's shell; we honor that and only inject a deterministic dev
 // fallback when missing so the sample is runnable out of the box.

@@ -90,6 +90,34 @@ fn attach_external(app: &tauri::App, url: String) {
     eprintln!("[studio] attached to external backend at {url}");
 }
 
+/// A macOS/Linux app launched from Finder/Dock inherits only a minimal PATH
+/// (`/usr/bin:/bin:...`) — it never sources the user's shell — so the .NET sidecar
+/// can't find user-installed CLIs like `az`, `gh`, `tailscale`, or `cloudflared`.
+/// Resolve the real PATH from a login+interactive shell so those exec/auth
+/// integrations work in the packaged app. Returns None on Windows or on any
+/// failure, in which case the inherited PATH is left as-is.
+#[cfg(not(target_os = "windows"))]
+fn resolve_user_path() -> Option<String> {
+    let shell = std::env::var("SHELL").ok()?;
+    // Delimit the value so any interactive-shell banner/noise is stripped.
+    let script = "printf '__TAP_PATH__%s__TAP_PATH__' \"$PATH\"";
+    let out = std::process::Command::new(shell)
+        .args(["-ilc", script])
+        .output()
+        .ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    let start = s.find("__TAP_PATH__")? + "__TAP_PATH__".len();
+    let rest = &s[start..];
+    let end = rest.find("__TAP_PATH__")?;
+    let path = rest[..end].trim().to_string();
+    (!path.is_empty()).then_some(path)
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_user_path() -> Option<String> {
+    None
+}
+
 /// Packaged path: spawn the bundled, self-contained Tap.Studio sidecar and drive
 /// the webview from its `studio.ready` stdout handshake.
 fn spawn_sidecar(app: &tauri::App) {
@@ -124,6 +152,10 @@ fn spawn_sidecar(app: &tauri::App) {
         .env("Studio__Host", "localhost");
     if let Some(root) = &web_root {
         cmd = cmd.env("Studio__WebRoot", root);
+    }
+    // Give the sidecar the user's real PATH so `az`, `gh`, etc. resolve.
+    if let Some(path) = resolve_user_path() {
+        cmd = cmd.env("PATH", path);
     }
 
     let (mut rx, _child) = cmd.spawn().expect("failed to spawn Tap.Studio sidecar");

@@ -1,17 +1,17 @@
 ---
 name: mantine
-description: "Mantine v9 React component library cheat sheet for the Tap Studio UI (ui-studio/). USE WHEN: writing or editing React components under ui-studio/, asking about Mantine v9 props, color-scheme, theme tokens, AppShell, forms, modals, notifications, tabs, badges, layout. DO NOT USE FOR: the standalone Tap Inspector UI (ui/) which uses its own CSS, or for non-React code. INVOKES: file edits, build commands. The Studio UI is Mantine-only — drop in raw <div>/CSS only when there's no Mantine equivalent."
+description: "Mantine v9 React component library cheat sheet for the Tap Studio UI (src/ui-studio/). USE WHEN: writing or editing React components under src/ui-studio/, asking about Mantine v9 props, color-scheme, theme tokens, AppShell, forms, modals, notifications, tabs, badges, layout. DO NOT USE FOR: the standalone Tap Inspector UI (src/ui-inspector/) which uses its own CSS, or for non-React code. INVOKES: file edits, build commands. The Studio UI is Mantine-only — drop in raw <div>/CSS only when there's no Mantine equivalent."
 ---
 
 # Mantine v9 skill (Tap Studio)
 
-The Tap Studio UI (`ui-studio/`) is built entirely on **Mantine 9.2.1** + **@tabler/icons-react**. There is no Tailwind, no shadcn, no base-ui — only Mantine. Custom CSS modules are reserved for the variable-input painted overlay and a couple of helper styles. Everything else uses Mantine components and theme tokens.
+The Tap Studio UI (`src/ui-studio/`) is built entirely on **Mantine 9.2.1** + **@tabler/icons-react**. There is no Tailwind, no shadcn, no base-ui — only Mantine. Custom CSS modules are reserved for the variable-input painted overlay and a couple of helper styles. Everything else uses Mantine components and theme tokens.
 
 This skill is the working reference: idiomatic patterns we already use, v9-specific gotchas, and where to look for more.
 
 ## When to invoke
 
-Invoke this skill any time the work touches `ui-studio/src/**` and involves form layouts, dialogs, tab bars, color-scheme behaviour, or new component scaffolding. For pure data/state work (Zustand store, API client, TypeScript types) you don't need it.
+Invoke this skill any time the work touches `src/ui-studio/src/**` and involves form layouts, dialogs, tab bars, color-scheme behaviour, or new component scaffolding. For pure data/state work (Zustand store, API client, TypeScript types) you don't need it.
 
 ## Quick links
 
@@ -20,7 +20,7 @@ Invoke this skill any time the work touches `ui-studio/src/**` and involves form
 - **Tabler icons**: https://tabler.io/icons (search → import `IconXxx` from `@tabler/icons-react`)
 - **v8→v9 changelog**: https://mantine.dev/changelog/9-0-0/
 - **Theme object types**: `node_modules/@mantine/core/lib/core/MantineProvider/theme/...`
-- **Reference app**: `/Users/p7e/code/philbir/dreamr/src/ui` — uses Mantine 8 but most patterns are stable.
+- **Reference app**: `/Users/p7e/code/philbir/dreamr/src/ui-inspector` — uses Mantine 8 but most patterns are stable.
 
 ## Live docs via the Context7 MCP
 
@@ -35,11 +35,11 @@ Context7 is the canonical source for v9 props (when in doubt about `expanded` vs
 
 | File | Role |
 |---|---|
-| `ui-studio/src/main.tsx` | `MantineProvider` + `ColorSchemeScript` + `Notifications` + `ModalsProvider`. |
-| `ui-studio/src/theme.ts` | Custom `tap` color tuple + `defaultRadius` + component defaults. |
-| `ui-studio/postcss.config.cjs` | `postcss-preset-mantine` + breakpoint variables. |
-| `ui-studio/src/styles/index.css` | The *only* hand-rolled global CSS (method colors + mono font stack). |
-| `ui-studio/src/workspace/useTheme.ts` | Thin wrapper over `useMantineColorScheme`. |
+| `src/ui-studio/src/main.tsx` | `MantineProvider` + `ColorSchemeScript` + `Notifications` + `ModalsProvider`. |
+| `src/ui-studio/src/theme.ts` | Custom `tap` color tuple + `defaultRadius` + component defaults. |
+| `src/ui-studio/postcss.config.cjs` | `postcss-preset-mantine` + breakpoint variables. |
+| `src/ui-studio/src/styles/index.css` | The *only* hand-rolled global CSS (method colors + mono font stack). |
+| `src/ui-studio/src/workspace/useTheme.ts` | Thin wrapper over `useMantineColorScheme`. |
 
 ## v9-specific gotchas you will hit
 
@@ -174,6 +174,6 @@ Add component-wide defaults in `theme.ts` rather than passing the same props at 
 
 ## Don't forget
 
-- After editing CSS modules or theme tokens, run `yarn build` from `ui-studio/` to catch type errors fast.
+- After editing CSS modules or theme tokens, run `yarn build` from `src/ui-studio/` to catch type errors fast.
 - The Studio AppHost (`samples/Studio.AppHost`) runs Vite via the JavaScript hosting integration. Hot-reload works without restarting the AppHost as long as `vite.config.ts` is unchanged.
 - When in doubt about a v9-vs-v8 prop name, check `/tmp/mantine-check/node_modules/@mantine/core/lib/components/<Name>/<Name>.d.ts` — copy the package locally with `npm i --no-save @mantine/core@9.2.1` in a scratch dir if needed.

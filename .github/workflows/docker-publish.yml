@@ -50,7 +50,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: src/Tap.Server/Dockerfile
+          file: src/backend/Tap.Server/Dockerfile
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true

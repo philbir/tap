@@ -1,0 +1,21 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Capability set for the main Tap Studio window: launch the sidecar, navigate the webview to its bound URL, receive OAuth deep-link callbacks, and drive the auto-updater. The webview runs on the sidecar's http origin, so it is listed under `remote.urls` — without that, every command below is ACL-denied to it.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:*", "http://localhost:*"]
+  },
+  "permissions": [
+    "core:default",
+    "core:webview:allow-webview-show",
+    "core:window:allow-set-title",
+    "shell:default",
+    "deep-link:default",
+    "updater:default",
+    "updater:allow-check",
+    "updater:allow-download-and-install",
+    "allow-check-for-update",
+    "allow-install-update"
+  ]
+}

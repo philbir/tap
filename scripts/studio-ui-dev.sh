@@ -30,4 +30,4 @@ fi
 
 export VITE_STUDIO_API_URL="$api_url"
 echo "[studio-ui-dev] Proxying /api -> $VITE_STUDIO_API_URL"
-exec yarn --cwd ui-studio dev
+exec yarn --cwd src/ui-studio dev

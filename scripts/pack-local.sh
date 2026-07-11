@@ -33,9 +33,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$FEED"
 
 echo "→ Packing Tap @ $VERSION into $FEED"
-dotnet pack "$REPO_ROOT/src/Tap.Core/Tap.Core.csproj" \
+dotnet pack "$REPO_ROOT/src/backend/Tap.Core/Tap.Core.csproj" \
     -c Release -p:Version="$VERSION" -o "$FEED" --nologo
-dotnet pack "$REPO_ROOT/src/Tap.Hosting/Tap.Hosting.csproj" \
+dotnet pack "$REPO_ROOT/src/backend/Tap.Hosting/Tap.Hosting.csproj" \
     -c Release -p:Version="$VERSION" -o "$FEED" --nologo
 
 echo

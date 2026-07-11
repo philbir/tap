@@ -1,11 +1,11 @@
 <Solution>
   <Folder Name="/src/">
-    <Project Path="src/Tap.Core/Tap.Core.csproj" />
-    <Project Path="src/Tap.Hosting/Tap.Hosting.csproj" />
-    <Project Path="src/Tap.Server/Tap.Server.csproj" />
-    <Project Path="src/Tap.Cli/Tap.Cli.csproj" />
-    <Project Path="src/Tap.Workspace/Tap.Workspace.csproj" />
-    <Project Path="src/Tap.Studio/Tap.Studio.csproj" />
+    <Project Path="src/backend/Tap.Core/Tap.Core.csproj" />
+    <Project Path="src/backend/Tap.Hosting/Tap.Hosting.csproj" />
+    <Project Path="src/backend/Tap.Server/Tap.Server.csproj" />
+    <Project Path="src/backend/Tap.Cli/Tap.Cli.csproj" />
+    <Project Path="src/backend/Tap.Workspace/Tap.Workspace.csproj" />
+    <Project Path="src/backend/Tap.Studio/Tap.Studio.csproj" />
   </Folder>
   <Folder Name="/samples/">
     <Project Path="samples/Demo.Api/Demo.Api.csproj" />

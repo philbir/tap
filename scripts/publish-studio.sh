@@ -8,12 +8,12 @@
 #   scripts/publish-studio.sh --all                # all supported RIDs
 #
 # The build target BuildStudioUi runs first (yarn install + yarn build) and
-# copies ui-studio/dist into wwwroot, so the resulting binary serves the SPA
+# copies src/ui-studio/dist into wwwroot, so the resulting binary serves the SPA
 # from its own filesystem at runtime.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CSPROJ="$REPO_ROOT/src/Tap.Studio/Tap.Studio.csproj"
+CSPROJ="$REPO_ROOT/src/backend/Tap.Studio/Tap.Studio.csproj"
 OUT_BASE="$REPO_ROOT/artifacts/studio"
 
 ALL_RIDS=(osx-arm64 osx-x64 linux-x64 linux-arm64 win-x64)

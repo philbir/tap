@@ -79,7 +79,7 @@ jobs:
       - name: Publish self-contained single-file
         shell: bash
         run: |
-          dotnet publish src/Tap.Cli/Tap.Cli.csproj \
+          dotnet publish src/backend/Tap.Cli/Tap.Cli.csproj \
             -c Release \
             -r ${{ matrix.rid }} \
             --self-contained true \

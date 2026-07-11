@@ -2,20 +2,20 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
-    <AspireVersion>13.4.2</AspireVersion>
-    <AspNetCoreVersion>10.0.7</AspNetCoreVersion>
+    <AspireVersion>13.4.6</AspireVersion>
+    <AspNetCoreVersion>10.0.9</AspNetCoreVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="Aspire.AppHost.Sdk" Version="$(AspireVersion)" />
     <PackageVersion Include="Aspire.Hosting" Version="$(AspireVersion)" />
     <PackageVersion Include="Aspire.Hosting.JavaScript" Version="$(AspireVersion)" />
     <!-- Transitive pin: StreamJsonRpc pulls MessagePack 2.5.192 which has GHSA-hv8m-jj95-wg3x (fixed in 2.5.301). -->
-    <PackageVersion Include="MessagePack" Version="2.5.301" />
+    <PackageVersion Include="MessagePack" Version="3.1.8" />
     <PackageVersion Include="Yarp.ReverseProxy" Version="2.3.0" />
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="$(AspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="$(AspNetCoreVersion)" />
-    <PackageVersion Include="Spectre.Console" Version="0.50.0" />
-    <PackageVersion Include="Spectre.Console.Cli" Version="0.50.0" />
+    <PackageVersion Include="Spectre.Console" Version="0.55.0" />
+    <PackageVersion Include="Spectre.Console.Cli" Version="0.55.0" />
     <PackageVersion Include="Markdig" Version="0.38.0" />
     <PackageVersion Include="YamlDotNet" Version="16.3.0" />
     <PackageVersion Include="Azure.Identity" Version="1.13.1" />
@@ -23,8 +23,8 @@
     <PackageVersion Include="LibGit2Sharp" Version="0.31.0" />
 
     <!-- Demo.Api dependencies — only consumed by samples/Demo.Api. -->
-    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.0.3" />
-    <PackageVersion Include="HotChocolate.Subscriptions.InMemory" Version="16.0.3" />
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.4.0" />
+    <PackageVersion Include="HotChocolate.Subscriptions.InMemory" Version="16.4.0" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(AspNetCoreVersion)" />
     <PackageVersion Include="OpenIddict.AspNetCore" Version="7.5.0" />
     <PackageVersion Include="OpenIddict.EntityFrameworkCore" Version="7.5.0" />

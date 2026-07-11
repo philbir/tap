@@ -57,33 +57,33 @@ jobs:
             libayatana-appindicator3-dev \
             patchelf
 
-      # ui-studio uses yarn 4 (Berry); install at the desktop dir level so the
+      # src/ui-studio uses yarn 4 (Berry); install at the desktop dir level so the
       # @tauri-apps/cli is in scope for tauri-action's bundling step.
       - name: Install desktop deps
-        working-directory: apps/tap-studio-desktop
+        working-directory: src/desktop
         run: yarn install --immutable
 
-      # Defensive sync: rewrite apps/tap-studio-desktop/package.json,
+      # Defensive sync: rewrite src/desktop/package.json,
       # src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock
       # to the tag version so the bundled installers' filenames and Info.plist
       # always match the tag — even when a release PR forgets to bump them.
       - name: Sync desktop version from tag
         if: github.ref_type == 'tag'
         shell: bash
-        run: node apps/tap-studio-desktop/scripts/sync-version.mjs "${GITHUB_REF_NAME}"
+        run: node src/desktop/scripts/sync-version.mjs "${GITHUB_REF_NAME}"
 
       # Build the SPA, then publish the sidecar + stage wwwroot for the target
       # triple. compile-server.mjs is cross-platform (no bash) so the Windows
       # runner can invoke it without WSL.
       - name: Build Studio UI
-        working-directory: ui-studio
+        working-directory: src/ui-studio
         run: |
           corepack enable
           yarn install --immutable
           yarn build
 
       - name: Compile sidecar
-        run: node apps/tap-studio-desktop/scripts/compile-server.mjs ${{ matrix.target }}
+        run: node src/desktop/scripts/compile-server.mjs ${{ matrix.target }}
 
       # Notarization needs the App Store Connect .p8 private key on disk.
       # The secret holds the base64-encoded file; decode and export the path so
@@ -126,7 +126,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          projectPath: apps/tap-studio-desktop
+          projectPath: src/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "Tap Studio ${{ github.ref_name }}"
           # Publish immediately so artifacts are downloadable from Releases.
@@ -153,7 +153,7 @@ jobs:
           VERSION: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          BUNDLE="apps/tap-studio-desktop/src-tauri/target/${TARGET}/release/bundle"
+          BUNDLE="src/desktop/src-tauri/target/${TARGET}/release/bundle"
           case "${TARGET}" in
             aarch64-apple-darwin)
               cp "${BUNDLE}/macos/Tap Studio.app.tar.gz.sig" \

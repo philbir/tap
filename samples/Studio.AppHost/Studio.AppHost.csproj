@@ -14,7 +14,7 @@
   <ItemGroup>
     <!-- ProjectReference (not <Reference>) so the Aspire.AppHost.Sdk source generator
          emits Projects.Tap_Studio for AddProject<T>. -->
-    <ProjectReference Include="..\..\src\Tap.Studio\Tap.Studio.csproj" />
+    <ProjectReference Include="..\..\src\backend\Tap.Studio\Tap.Studio.csproj" />
     <ProjectReference Include="..\Demo.Api\Demo.Api.csproj" />
   </ItemGroup>
 </Project>

@@ -7,7 +7,7 @@
       "runtimeArgs": [
         "run",
         "--project",
-        "src/Tap.Studio/Tap.Studio.csproj",
+        "src/backend/Tap.Studio/Tap.Studio.csproj",
         "-p:SkipTapUiBuild=true",
         "--",
         "--Studio:WorkspaceRoot=samples/Studio.AppHost/sample-workspace",

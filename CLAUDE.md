@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Developer flow
 
-- **Frontend changes (`ui/`, `ui-studio/`)**: always verify in a browser before reporting done. Use the Claude Preview / Chrome MCP to load the dev server, exercise the changed feature, and check the console for errors. Type-check + build passing is not enough — the UI must actually render and behave correctly.
+- **Frontend changes (`src/ui-inspector/`, `src/ui-studio/`)**: always verify in a browser before reporting done. Use the Claude Preview / Chrome MCP to load the dev server, exercise the changed feature, and check the console for errors. Type-check + build passing is not enough — the UI must actually render and behave correctly.
 - **Backend changes (`Tap.Hosting`, `Tap.Server`, `Tap.Studio`, AppHost)**: use the Aspire CLI to rebuild and restart only the affected resource rather than restarting the whole AppHost. Prefer `aspire` over `dotnet run`/manual kill loops — it keeps tunnels, daemons, and sibling resources warm and gives faster turnaround.
 
 ## Build, run, test
@@ -18,20 +18,20 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### UI
 
-- **Two UIs.** `ui/` is the inspector (vanilla CSS modules + base-ui primitives, embedded in Tap.Server). `ui-studio/` is the workbench (Mantine v9.2.1 + Tabler icons + Zustand). They share zero runtime code.
+- **Two UIs.** `src/ui-inspector/` is the inspector (vanilla CSS modules + base-ui primitives, embedded in Tap.Server). `src/ui-studio/` is the workbench (Mantine v9.2.1 + Tabler icons + Zustand). They share zero runtime code.
 - Both are yarn 4.9.1 (Berry) — use `yarn`, not `npm`. Scripts: `yarn dev` / `yarn build` / `yarn preview`. Inspector dev port is 5197; Studio dev port is 5297.
-- `Tap.Server.csproj` has a `BuildTapUi` MSBuild target that runs `yarn install` + `yarn build` and copies `ui/dist/**` into `src/Tap.Server/wwwroot/` on every server build. Set `-p:SkipTapUiBuild=true` to skip when iterating on C# only.
-- For inspector hot-reload against a running AppHost: `cd ui && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`).
-- For Studio hot-reload: `cd ui-studio && yarn dev` against the Studio.AppHost (`VITE_STUDIO_API_URL`, default `http://localhost:5298`).
-- `src/Tap.Server/wwwroot/*` is gitignored (regenerated artifact) — never hand-edit it.
+- `Tap.Server.csproj` has a `BuildTapUi` MSBuild target that runs `yarn install` + `yarn build` and copies `src/ui-inspector/dist/**` into `src/backend/Tap.Server/wwwroot/` on every server build. Set `-p:SkipTapUiBuild=true` to skip when iterating on C# only.
+- For inspector hot-reload against a running AppHost: `cd src/ui-inspector && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`).
+- For Studio hot-reload: `cd src/ui-studio && yarn dev` against the Studio.AppHost (`VITE_STUDIO_API_URL`, default `http://localhost:5298`).
+- `src/backend/Tap.Server/wwwroot/*` is gitignored (regenerated artifact) — never hand-edit it.
 
-### Studio UI conventions (`ui-studio/`)
+### Studio UI conventions (`src/ui-studio/`)
 
 - **Mantine-only**. The component library is `@mantine/core` v9.2.1 plus `@mantine/hooks`, `@mantine/modals`, `@mantine/notifications`, `@mantine/form`. Do not introduce other UI libs. Icons come from `@tabler/icons-react`. The provider stack lives in `src/main.tsx`; theme in `src/theme.ts`.
-- **Skill**: `.claude/skills/mantine/SKILL.md` documents the v9 gotchas, our conventions, color tokens, and the per-kind editor recipe. Load it whenever editing `ui-studio/`.
+- **Skill**: `.claude/skills/mantine/SKILL.md` documents the v9 gotchas, our conventions, color tokens, and the per-kind editor recipe. Load it whenever editing `src/ui-studio/`.
 - **Live docs MCP**: `.mcp.json` registers Context7 (`@upstash/context7-mcp`). Use `mcp__context7__resolve-library-id` + `get-library-docs` for authoritative v9 prop signatures.
 - **State**: Zustand store at `src/store/index.ts`. Global slices (`info / tree / envs / collections / auths / knownWorkspaces / tabs / activeEnvByRoot / generation`) live there; editor-local form state stays in `useState`. UI state (open tabs + per-workspace active env) is persisted to localStorage via `persist` middleware.
-- **Editor pattern**: every editor maintains a typed `spec` + `savedSpec` and PUTs to `/api/{kind}/spec` on save. The server (in `src/Tap.Studio/Specs/`) is the sole producer of canonical YAML — clients never assemble YAML strings. Dirty = `JSON.stringify(spec) !== JSON.stringify(savedSpec)`. Source tab is read-only.
+- **Editor pattern**: every editor maintains a typed `spec` + `savedSpec` and PUTs to `/api/{kind}/spec` on save. The server (in `src/backend/Tap.Studio/Specs/`) is the sole producer of canonical YAML — clients never assemble YAML strings. Dirty = `JSON.stringify(spec) !== JSON.stringify(savedSpec)`. Source tab is read-only.
 - **No CSS modules in editors.** Spacing via Mantine props (`mb="md"`, `gap="xs"`), layout via `<Stack>` / `<Group>` / `<SimpleGrid>`. The one exception is `VariableInput.module.css` (painted-overlay token highlighter).
 
 ## Architecture
@@ -39,7 +39,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Tap is two NuGet-style packages plus a sample, glued together by Aspire:
 
 - **`Tap.Hosting`** (library, namespace `Aspire.Hosting`) — extension methods consumers call from their own AppHost. Primary surface: `AddTap<T>`, `AddTapContainer`, `WithTap`, `tap.WithTunnel(name, configure)`, `tap.WithQuickTunnel`, `tap.WithTailscaleFunnel`, `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon`/`WithEphemeralDaemon`/`WithFunnelPort` (Tailscale). Low-level escape hatches still public: `AddCloudflaredTunnel`, `AddTailscaleFunnel`, `WithCloudflareTunnel`, `WithTailscaleFunnel(target, tunnel)`. No runtime; pure AppHost wiring.
-- **Tunnel abstraction** lives in `src/Tap.Hosting/Tunnels/` (`TapTunnelResource` base, `TapTunnelAnnotation`, `TapTunnelIngress`). `CloudflaredTunnelResource` (multi-host) and `TailscaleFunnelResource` (single endpoint) both inherit `TapTunnelResource`. `TapHandle.AttachedTunnel` is the base type; `WithTap<T>` dispatches to provider-specific attach via `is`-check on the runtime type.
+- **Tunnel abstraction** lives in `src/backend/Tap.Hosting/Tunnels/` (`TapTunnelResource` base, `TapTunnelAnnotation`, `TapTunnelIngress`). `CloudflaredTunnelResource` (multi-host) and `TailscaleFunnelResource` (single endpoint) both inherit `TapTunnelResource`. `TapHandle.AttachedTunnel` is the base type; `WithTap<T>` dispatches to provider-specific attach via `is`-check on the runtime type.
 - **`Tap.Server`** (`Microsoft.NET.Sdk.Web`) — standalone ASP.NET Core app: YARP reverse proxy + capture middleware + SSE feed + bundled React UI in `wwwroot`. Reads its config from `Inspector:*` and `Cloudflare:*` env vars set by the AppHost.
 - **`ui/`** — Vite + React 19 + TypeScript source for the inspector UI. Built into `Tap.Server/wwwroot` at build time; not a separate runtime artifact.
 - **`samples/Sample.AppHost`** — exercises eight scenarios in parallel: standalone, Cloudflare quick / existing-dashboard / API-managed / dynamic-hostname tunnels, and Tailscale Serve in three flavors (system daemon, ephemeral userspace process, ephemeral Docker container). Each scenario is gated on the relevant user-secrets being present (`Cloudflare:*` for CF modes; `Tailscale:UseSystem=true` for system-Tailscale; `Tailscale:AuthKey` for ephemeral; pair with `Tailscale:UseDocker=true` for the container variant). `samples/Sample.Api` is the trivial upstream. Filter providers via `--scenarios cloudflare|tailscale|all` (default all).

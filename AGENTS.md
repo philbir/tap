@@ -14,9 +14,9 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ### UI
 
 - `ui/` is yarn 4.9.1 (Berry) — use `yarn`, not `npm`. Scripts: `yarn dev` (Vite, port 5197), `yarn build` (`tsc -b && vite build`), `yarn preview`.
-- `Tap.Server.csproj` has a `BuildTapUi` MSBuild target that runs `yarn install` + `yarn build` and copies `ui/dist/**` into `src/Tap.Server/wwwroot/` on every server build. Set `-p:SkipTapUiBuild=true` to skip when iterating on C# only.
-- For UI hot-reload against a running AppHost: `cd ui && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`); set that env var to whatever UI port the AppHost allocated.
-- `src/Tap.Server/wwwroot/*` is gitignored (regenerated artifact) — never hand-edit it.
+- `Tap.Server.csproj` has a `BuildTapUi` MSBuild target that runs `yarn install` + `yarn build` and copies `src/ui-inspector/dist/**` into `src/backend/Tap.Server/wwwroot/` on every server build. Set `-p:SkipTapUiBuild=true` to skip when iterating on C# only.
+- For UI hot-reload against a running AppHost: `cd src/ui-inspector && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`); set that env var to whatever UI port the AppHost allocated.
+- `src/backend/Tap.Server/wwwroot/*` is gitignored (regenerated artifact) — never hand-edit it.
 
 ## Architecture
 

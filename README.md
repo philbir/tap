@@ -466,9 +466,9 @@ Both entry points use the same `Tap.Server` host internally. The CLI builds `Tap
 Consumer AppHost projects must reference both `Tap.Hosting` and `Tap.Server`. `Tap.Server` supplies the generated `Projects.Tap_Server` metadata type used by `AddTap<TTapServer>()`; `Tap.Hosting` should be referenced with `IsAspireProjectResource="false"` because it is a library, not a launchable resource.
 
 ```xml
-<ProjectReference Include="..\..\src\Tap.Hosting\Tap.Hosting.csproj"
+<ProjectReference Include="..\..\src\backend\Tap.Hosting\Tap.Hosting.csproj"
                   IsAspireProjectResource="false" />
-<ProjectReference Include="..\..\src\Tap.Server\Tap.Server.csproj" />
+<ProjectReference Include="..\..\src\backend\Tap.Server\Tap.Server.csproj" />
 ```
 
 ## Configuration
@@ -524,10 +524,10 @@ dotnet build Tap.slnx
 dotnet run --project samples/Sample.AppHost
 ```
 
-UI source lives in `ui/` and is built into `src/Tap.Server/wwwroot/` during server builds:
+UI source lives in `src/ui-inspector/` and is built into `src/backend/Tap.Server/wwwroot/` during server builds:
 
 ```bash
-cd ui
+cd src/ui-inspector
 yarn
 yarn dev
 yarn build
@@ -563,14 +563,18 @@ For the deeper technical background, see [docs/ARCHITECTURE.md](docs/ARCHITECTUR
 ## Layout
 
 ```text
-assets/              README logo and hero assets
-docs/                Technical documentation
-src/Tap.Core/        Shared auth and Cloudflare/cloudflared primitives
-src/Tap.Hosting/     Aspire integration and lifecycle hook
-src/Tap.Server/      Capture server, YARP proxy, SSE API, bundled UI host
-src/Tap.Cli/         CLI host for the inspector server
-ui/                  Vite + React inspector source
-samples/             Sample AppHost and upstream API
+assets/                       README logo and hero assets
+docs/                         Technical documentation
+src/backend/Tap.Core/         Shared auth and Cloudflare/cloudflared primitives
+src/backend/Tap.Hosting/      Aspire integration and lifecycle hook
+src/backend/Tap.Server/       Capture server, YARP proxy, SSE API, bundled UI host
+src/backend/Tap.Cli/          CLI host for the inspector server
+src/backend/Tap.Studio/       Studio workbench backend (REST + SSE)
+src/backend/Tap.Workspace/    Workspace + spec model shared by Studio
+src/ui-inspector/             Vite + React inspector source
+src/ui-studio/                Vite + React Studio workbench source
+src/desktop/  Tauri desktop shell for Studio
+samples/                      Sample AppHosts and upstream APIs
 ```
 
 ## License

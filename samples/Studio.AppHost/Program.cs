@@ -1,7 +1,7 @@
 // Studio.AppHost — local dev runner for Tap Studio.
 //
 //   studio-api          REST + SSE backend (Tap.Studio, ASP.NET Core)
-//   studio-ui           Vite dev server hosting the React UI (ui-studio/)
+//   studio-ui           Vite dev server hosting the React UI (src/ui-studio/)
 //
 // Aspire allocates the ports for both resources; the Vite proxy URL is wired up via
 // a reference to studio-api so the UI always points at the right place.
@@ -68,7 +68,7 @@ demoApi.WithEnvironment("STUDIO_CALLBACK_URL",
     ReferenceExpression.Create($"{studio.GetEndpoint("http")}/api/auth/callback"));
 
 // Vite UI — VITE_STUDIO_API_URL is resolved at start time from the studio-api endpoint.
-var uiDir = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "..", "ui-studio"));
+var uiDir = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "..", "src", "ui-studio"));
 builder.AddViteApp("studio-ui", uiDir, "dev")
     .WithYarn()
     .WithEnvironment("VITE_STUDIO_API_URL", studio.GetEndpoint("http"))

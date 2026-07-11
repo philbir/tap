@@ -4,14 +4,14 @@
 
 Reviewed the new Tap Studio feature across:
 
-- Backend: `src/Tap.Studio`, `src/Tap.Workspace`, new AppHost/sample wiring, and changed Tap hosting/server code.
-- UI: `ui-studio/src`, Studio API client/types, editor shell patterns, execution/streaming panels, variable tooling.
+- Backend: `src/backend/Tap.Studio`, `src/backend/Tap.Workspace`, new AppHost/sample wiring, and changed Tap hosting/server code.
+- UI: `src/ui-studio/src`, Studio API client/types, editor shell patterns, execution/streaming panels, variable tooling.
 - Security-sensitive areas: filesystem writes, workspace switching, token storage, OAuth callback, request execution, server binding, external CLI calls, SSRF surfaces.
 
 Verification attempted:
 
 - `dotnet build Tap.slnx -p:SkipTapUiBuild=true` currently fails because Aspire SDK/package versions are inconsistent.
-- `yarn --cwd ui-studio build` currently fails on a CodeMirror `StreamParser` typing mismatch in `ui-studio/src/editors/CodeBlock.tsx`.
+- `yarn --cwd src/ui-studio build` currently fails on a CodeMirror `StreamParser` typing mismatch in `src/ui-studio/src/editors/CodeBlock.tsx`.
 
 ## Highest Priority Findings
 
@@ -36,7 +36,7 @@ Acceptance:
 
 ### P0: Fix Studio UI Typecheck
 
-`yarn --cwd ui-studio build` fails in `ui-studio/src/editors/CodeBlock.tsx` because the custom HTTP `StreamLanguage` parser narrows `StringStream.next()` to `string | undefined`, while CodeMirror's type returns `string | void`.
+`yarn --cwd src/ui-studio build` fails in `src/ui-studio/src/editors/CodeBlock.tsx` because the custom HTTP `StreamLanguage` parser narrows `StringStream.next()` to `string | undefined`, while CodeMirror's type returns `string | void`.
 
 Plan:
 
@@ -45,7 +45,7 @@ Plan:
 
 Acceptance:
 
-- `yarn --cwd ui-studio build` passes.
+- `yarn --cwd src/ui-studio build` passes.
 
 ### P0: Bind Studio Locally by Default
 
@@ -148,7 +148,7 @@ Acceptance:
 
 ### 3. Generate or Validate Client Contracts
 
-`src/Tap.Studio/Contracts/Dtos.cs` and `ui-studio/src/api/types.ts` are manually kept in lockstep.
+`src/backend/Tap.Studio/Contracts/Dtos.cs` and `src/ui-studio/src/api/types.ts` are manually kept in lockstep.
 
 Plan:
 
@@ -275,12 +275,12 @@ Plan:
 5. Extract `useSpecEditor` and variable row helpers.
 6. Add DTO contract generation or snapshot validation.
 7. Harden token storage and callback page output.
-8. Add CI coverage for `dotnet build`, `ui-studio` build, and focused backend/UI tests.
+8. Add CI coverage for `dotnet build`, `src/ui-studio` build, and focused backend/UI tests.
 
 ## Definition of Done
 
 - `dotnet build Tap.slnx -p:SkipTapUiBuild=true` passes with warnings as errors.
-- `yarn --cwd ui-studio build` passes.
+- `yarn --cwd src/ui-studio build` passes.
 - Filesystem traversal tests pass.
 - Studio listens on loopback by default.
 - Execute/render/GraphQL share request construction and body decoding.

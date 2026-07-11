@@ -27,7 +27,7 @@ public sealed class UiCommand : AsyncCommand<UiCommand.Settings>
         public bool NoOpen { get; init; }
     }
 
-    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
     {
         using var cts = new CancellationTokenSource();
         var ct = cts.Token;

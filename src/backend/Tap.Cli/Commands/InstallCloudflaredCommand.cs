@@ -7,7 +7,7 @@ namespace Tap.Cli.Commands;
 
 public sealed class InstallCloudflaredCommand : AsyncCommand
 {
-    public override async Task<int> ExecuteAsync(CommandContext context)
+    protected override async Task<int> ExecuteAsync(CommandContext context, CancellationToken cancellationToken)
     {
         using var loggerFactory = LoggerFactory.Create(b => b.AddSpectreConsoleLogger());
         var installer = new CloudflaredInstaller(loggerFactory.CreateLogger<CloudflaredInstaller>());

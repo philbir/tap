@@ -29,7 +29,7 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         public string? Name { get; init; }
     }
 
-    public override async Task<int> ExecuteAsync(CommandContext context, Settings settings)
+    protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken cancellationToken)
     {
         // Wire Ctrl+C and 'q' to a single cancellation source so background tasks, the
         // request-stream subscription, and the inspector all stop cooperatively.

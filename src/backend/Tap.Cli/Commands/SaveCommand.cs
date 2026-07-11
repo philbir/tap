@@ -20,7 +20,7 @@ public sealed class SaveCommand : Command<SaveCommand.Settings>
         public string? Upstream { get; init; }
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellationToken)
     {
         var store = new TunnelProfileStore();
 

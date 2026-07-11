@@ -14,7 +14,7 @@ public sealed class RmCommand : Command<RmCommand.Settings>
         public string ProfileName { get; init; } = "";
     }
 
-    public override int Execute(CommandContext context, Settings settings)
+    protected override int Execute(CommandContext context, Settings settings, CancellationToken cancellationToken)
     {
         var store = new TunnelProfileStore();
         if (store.Delete(settings.ProfileName))

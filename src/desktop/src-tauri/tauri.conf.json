@@ -46,7 +46,8 @@
     "shortDescription": "API workbench",
     "longDescription": "Tap Studio — an API request workbench backed by a local sidecar.",
     "macOS": {
-      "minimumSystemVersion": "11.0"
+      "minimumSystemVersion": "11.0",
+      "entitlements": "entitlements.plist"
     }
   },
   "plugins": {

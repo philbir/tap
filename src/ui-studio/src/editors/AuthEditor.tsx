@@ -10,6 +10,7 @@ import {
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { AuthDetail, AuthExecuteResponse, AuthSpec, VariableContext } from '../api/types'
+import { openLoginUrl } from '../desktop/desktopUpdater'
 import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { decodeJwt } from '../workspace/jwt'
@@ -1041,7 +1042,7 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
   }
 
   function openAuthWindow(loginUrl: string) {
-    window.open(loginUrl, 'tap-auth', 'width=520,height=720,menubar=no,toolbar=no')
+    openLoginUrl(loginUrl)
     setLaunchMode('open')
   }
   function copyLoginUrl(loginUrl: string) {

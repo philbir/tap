@@ -16,6 +16,7 @@
     "updater:allow-check",
     "updater:allow-download-and-install",
     "allow-check-for-update",
-    "allow-install-update"
+    "allow-install-update",
+    "allow-open-external"
   ]
 }

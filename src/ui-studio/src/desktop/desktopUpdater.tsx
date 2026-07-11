@@ -27,6 +27,22 @@ export function isDesktop(): boolean {
   return typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 }
 
+/**
+ * Open an OAuth login URL. A Tauri webview can't drive an external sign-in via a
+ * `window.open` popup, so in the desktop shell we hand the URL to the system
+ * browser (Rust `open_external` command); a plain browser keeps the popup.
+ * Either way completion is handled by the caller's token polling, not postMessage.
+ */
+export function openLoginUrl(url: string) {
+  if (isDesktop()) {
+    void invoke('open_external', { url }).catch((e) =>
+      console.error('[desktop] open_external failed', e),
+    )
+  } else {
+    window.open(url, 'tap-auth', 'width=520,height=720,menubar=no,toolbar=no')
+  }
+}
+
 const NOTIFICATION_ID = 'desktop-update'
 
 /** Notification body: release notes (if any) + an install-and-restart button. */

@@ -64,6 +64,18 @@ struct StudioReady {
     url: String,
 }
 
+/// Open a URL in the user's default system browser. The Studio UI calls this for
+/// OAuth sign-in: a webview popup can't drive an external login, so the authorize
+/// URL is handed off to the real browser and the flow completes via the callback +
+/// the UI's token polling.
+#[tauri::command]
+fn open_external(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener()
+        .open_url(url, None::<String>)
+        .map_err(|e| e.to_string())
+}
+
 /// Aspire dev path: the studio-api / studio-ui are already running, so point the
 /// webview at the URL Aspire passed via `STUDIO_DESKTOP_URL` and record it for the
 /// deep-link handler. No sidecar is spawned.
@@ -161,7 +173,12 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_deep_link::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .invoke_handler(tauri::generate_handler![check_for_update, install_update])
+        .plugin(tauri_plugin_opener::init())
+        .invoke_handler(tauri::generate_handler![
+            check_for_update,
+            install_update,
+            open_external
+        ])
         .manage(StudioApi::default())
         .setup(|app| {
             // Decide the backend the webview talks to. Under Aspire dev the

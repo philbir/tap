@@ -10,6 +10,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { AuthExecuteResponse, AuthStatus, AuthSummary, ExecutionResult, RenderedRequest, SseEvent, WsFrame } from '../api/types'
+import { openLoginUrl } from '../desktop/desktopUpdater'
 import { useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
 
@@ -1299,7 +1300,7 @@ function AuthRunPanel({ status }: { status: AuthStatus }) {
   }
 
   function openAuthWindow(loginUrl: string) {
-    window.open(loginUrl, 'tap-auth', 'width=520,height=720,menubar=no,toolbar=no')
+    openLoginUrl(loginUrl)
     setLaunchMode('open')
   }
   function copyLoginUrl(loginUrl: string) {

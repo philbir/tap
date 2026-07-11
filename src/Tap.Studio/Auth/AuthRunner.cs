@@ -845,16 +845,14 @@ public sealed class AuthRunner
             authority: "https://github.com", clientId!, clientSecret, redirectUri, scopes, audience: null);
     }
 
-    /// <summary>Add GitHub-flavored header sugar to a token result: REST clients pick up the
-    /// API version pin automatically, so users don't have to remember to set it themselves.</summary>
+    /// <summary>Attach the bearer Authorization header for a GitHub token result so every
+    /// mode (PAT, gh-cli, App, OAuth) produces the same request shape.</summary>
     private static ExecuteAuthResult WithGithubExtras(ExecuteAuthResult result)
     {
         if (result.AccessToken is null) return result;
         var extras = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
         {
             ["Authorization"] = "Bearer " + result.AccessToken,
-            ["X-GitHub-Api-Version"] = GithubApiVersion,
-            ["Accept"] = "application/vnd.github+json",
         };
         return result with { Headers = extras };
     }

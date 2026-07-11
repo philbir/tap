@@ -76,8 +76,8 @@ public static class WorkspaceEndpoints
                 return Results.BadRequest(new { code = "invalid-path", message = err });
             if (!Directory.Exists(full)) return Results.BadRequest(new { code = "not-found", message = "Folder does not exist." });
 
-            // Refuse to nuke the `.tap` root itself.
-            var tapDirFull = Path.GetFullPath(Path.Combine(svc.RootDirectory, WorkspaceLoader.TapDirectoryName))
+            // Refuse to nuke the active workspace content root.
+            var tapDirFull = Path.GetFullPath(svc.Current.TapDirectory)
                 .TrimEnd(Path.DirectorySeparatorChar);
             if (string.Equals(full.TrimEnd(Path.DirectorySeparatorChar), tapDirFull, StringComparison.OrdinalIgnoreCase))
                 return Results.BadRequest(new { code = "protected", message = "Cannot delete the workspace root." });
@@ -143,7 +143,7 @@ public static class WorkspaceEndpoints
                     Label: k.Label,
                     IsActive: string.Equals(k.Path, active, StringComparison.Ordinal),
                     Available: Directory.Exists(k.Path),
-                    Git: BuildGitDto(k.GitRoot)))
+                    Git: BuildGitDto(k.Path, k.GitRoot)))
                 .ToArray();
             return Results.Ok((IReadOnlyList<KnownWorkspaceDto>)dtos);
         });
@@ -155,7 +155,7 @@ public static class WorkspaceEndpoints
                 var added = store.Add(body.Path);
                 return Results.Ok(new KnownWorkspaceDto(
                     added.Path, added.Label, IsActive: false, Available: true,
-                    Git: BuildGitDto(added.GitRoot)));
+                    Git: BuildGitDto(added.Path, added.GitRoot)));
             }
             catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { code = "missing-folder", message = ex.Message }); }
         });
@@ -239,13 +239,13 @@ public static class WorkspaceEndpoints
         out string full, out string error)
         => WorkspacePathResolver.TryResolve(svc, relative, out full, out error);
 
-    /// <summary>Re-runs <see cref="GitInspector.Inspect(string)"/> against the persisted
-    /// git root so branch + remote URLs are fresh on every list call. Returns null when
-    /// no root was discovered or the repo has since been deleted.</summary>
-    private static GitInfoDto? BuildGitDto(string? gitRoot)
+    /// <summary>Re-runs <see cref="GitInspector.Inspect(string)"/> so branch + remote URLs
+    /// are fresh on every list call. Falls back to the workspace path when no persisted git
+    /// root was available yet (e.g. repo initialized after the workspace was first added).</summary>
+    private static GitInfoDto? BuildGitDto(string workspacePath, string? gitRoot)
     {
-        if (string.IsNullOrEmpty(gitRoot)) return null;
-        var info = GitInspector.Inspect(gitRoot);
+        var probe = string.IsNullOrEmpty(gitRoot) ? workspacePath : gitRoot;
+        var info = GitInspector.Inspect(probe);
         if (info is null) return null;
         return new GitInfoDto(
             Root: info.Root,

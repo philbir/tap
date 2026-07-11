@@ -107,6 +107,25 @@ public sealed class SystemSettingsStore
         }
     }
 
+    /// <summary>The persisted AI assistant settings (provider + CLI paths + default model),
+    /// or <c>null</c> when the user hasn't configured AI yet.</summary>
+    public StoredAiSettings? GetAiSettings()
+    {
+        lock (_gate) return _state.Ai;
+    }
+
+    /// <summary>Replace the AI settings block. Pass <c>null</c> to clear it (revert to
+    /// auto-detected defaults).</summary>
+    public void SetAiSettings(StoredAiSettings? ai)
+    {
+        lock (_gate)
+        {
+            _state = _state with { Ai = ai };
+            Persist();
+        }
+        Changed?.Invoke();
+    }
+
     /// <summary>Replace the providers list and the default-provider pointer atomically. The
     /// implicit <c>system</c> provider is filtered out — callers can't (and don't need to)
     /// redeclare it. Pass <c>null</c> for <paramref name="defaultProviderName"/> to clear the
@@ -209,6 +228,7 @@ public sealed class SystemSettingsStore
                 DefaultVariableProvider = string.IsNullOrWhiteSpace(raw.DefaultVariableProvider) ? null : raw.DefaultVariableProvider,
                 VariableProviders = raw.VariableProviders ?? raw.Providers ?? [],
                 Variables = raw.Variables ?? new Dictionary<string, StoredVariable>(StringComparer.Ordinal),
+                Ai = raw.Ai,
             };
         }
         catch
@@ -229,6 +249,10 @@ public sealed record SystemSettingsFile
     public string? DefaultVariableProvider { get; init; }
     public required IReadOnlyList<StoredProvider> VariableProviders { get; init; }
     public required IReadOnlyDictionary<string, StoredVariable> Variables { get; init; }
+
+    /// <summary>AI assistant configuration (provider + CLI overrides + default model).
+    /// <c>null</c> when AI hasn't been configured — providers fall back to auto-detection.</summary>
+    public StoredAiSettings? Ai { get; init; }
 }
 
 /// <summary>Read-only shape used during deserialization to absorb files written by older
@@ -241,6 +265,7 @@ internal sealed record SystemSettingsFileRaw
     /// <summary>Legacy key. Used only when <see cref="VariableProviders"/> is absent.</summary>
     public IReadOnlyList<StoredProvider>? Providers { get; init; }
     public IReadOnlyDictionary<string, StoredVariable>? Variables { get; init; }
+    public StoredAiSettings? Ai { get; init; }
 }
 
 public sealed record StoredProvider
@@ -258,6 +283,20 @@ public sealed record StoredProvider
 }
 
 public sealed record StoredVariable(string Value, bool Secret);
+
+/// <summary>Persisted AI assistant configuration. All fields optional — absence means the
+/// provider auto-detects the CLI on PATH and uses its default model.</summary>
+public sealed record StoredAiSettings
+{
+    /// <summary><c>copilot</c> or <c>claude-code</c>.</summary>
+    public string? Provider { get; init; }
+    /// <summary>Default model id (e.g. <c>claude-sonnet-4.5</c>, <c>sonnet</c>).</summary>
+    public string? Model { get; init; }
+    /// <summary>Explicit path to the <c>copilot</c> binary, overriding auto-detection.</summary>
+    public string? CopilotCliPath { get; init; }
+    /// <summary>Explicit path to the <c>claude</c> binary, overriding auto-detection.</summary>
+    public string? ClaudeCliPath { get; init; }
+}
 
 [JsonSerializable(typeof(SystemSettingsFile))]
 [JsonSerializable(typeof(SystemSettingsFileRaw))]

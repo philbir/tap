@@ -1,5 +1,6 @@
 using Tap.Studio.Auth;
 using Tap.Studio.Contracts;
+using Tap.Studio.Specs;
 using Tap.Studio.Variables;
 using Tap.Workspace;
 using Tap.Workspace.Model;
@@ -11,7 +12,8 @@ namespace Tap.Studio;
 
 /// <summary>
 /// Owns the loaded <see cref="Workspace"/> in-process. Reload happens on any FS change under
-/// <c>.tap/</c>. The watcher is debounced; rapid editor saves coalesce into a single reload.
+/// the selected workspace root. The watcher is debounced; rapid editor saves coalesce into
+/// a single reload.
 ///
 /// <para>The variable provider registry is rebuilt every time it's requested: providers can be
 /// stateful (per-render resolution cache + trace), so callers get a fresh one per request
@@ -98,7 +100,7 @@ public sealed class WorkspaceService : IDisposable
 
     private FileSystemWatcher StartWatcher(string root)
     {
-        var tapDir = Path.Combine(root, WorkspaceLoader.TapDirectoryName);
+        var tapDir = root;
         var w = new FileSystemWatcher(tapDir, "*.md")
         {
             IncludeSubdirectories = true,
@@ -114,11 +116,10 @@ public sealed class WorkspaceService : IDisposable
 
     public async ValueTask<ResolvedRequest> RenderAsync(string requestPath, string? envPath,
         IReadOnlyDictionary<string, string>? overrides, CancellationToken ct,
-        string? stageName = null)
+        string? stageName = null, RequestSpecDto? draftSpec = null)
     {
         var ws = Current;
-        if (ws.FindByPath(requestPath) is not RequestFile req)
-            throw new FileNotFoundException($"Request '{requestPath}' not in workspace.");
+        var req = ResolveRequestFile(ws, requestPath, draftSpec);
 
         EnvFile? env = null;
         if (envPath is not null)
@@ -137,6 +138,31 @@ public sealed class WorkspaceService : IDisposable
         var rendered = await renderer.RenderAsync(req, env, overrides, ct, stageName).ConfigureAwait(false);
         rendered = ResolveBinaryRef(req, rendered);
         return InjectAuthToken(ws, req, rendered);
+    }
+
+    /// <summary>
+    /// Resolve the <see cref="RequestFile"/> to render/execute. When <paramref name="draftSpec"/>
+    /// is supplied (an unsaved editor draft), the request is built in-memory through the same
+    /// emit pipeline as Save — <see cref="RequestSpecEmitter.ToFileSource"/> + <see cref="FileParser"/>
+    /// — but never written to disk. Otherwise the on-disk file at <paramref name="requestPath"/> is used.
+    /// Either way the request keeps its workspace-relative path, so auth/collection/stage resolution
+    /// in the renderer behaves identically to the saved file.
+    /// </summary>
+    private static RequestFile ResolveRequestFile(LoadedWorkspace ws, string requestPath, RequestSpecDto? draftSpec)
+    {
+        if (draftSpec is not null)
+        {
+            var source = RequestSpecEmitter.ToFileSource(draftSpec);
+            if (FileParser.Parse(draftSpec.Path, source) is not RequestFile parsed)
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_KIND_MISMATCH,
+                    $"Draft '{draftSpec.Path}' did not parse as a request.",
+                    draftSpec.Path));
+            return parsed;
+        }
+        if (ws.FindByPath(requestPath) is not RequestFile req)
+            throw new FileNotFoundException($"Request '{requestPath}' not in workspace.");
+        return req;
     }
 
     /// <summary>If the rendered body is a single-line <c>&lt; ./path</c> file reference,
@@ -189,10 +215,10 @@ public sealed class WorkspaceService : IDisposable
     /// cached token for the resolved auth profile. The renderer can't do this itself because
     /// <see cref="Tap.Workspace"/> doesn't depend on the Studio's <see cref="AuthTokenStore"/>.
     ///
-    /// <para>For <c>github</c> we also stamp the API-version pin and the GitHub <c>Accept</c>
-    /// type so PAT, gh-cli, App, and OAuth modes all produce identical request shapes —
-    /// matching the headers <see cref="AuthRunner.WithGithubExtras"/> attaches when the
-    /// profile is executed standalone.</para>
+    /// <para>For <c>github</c> this attaches the bearer header so PAT, gh-cli, App, and OAuth
+    /// modes all produce identical request shapes — matching the header
+    /// <see cref="AuthRunner.WithGithubExtras"/> attaches when the profile is executed
+    /// standalone.</para>
     ///
     /// <para>Without this, profiles whose token comes from a runtime exchange (i.e. anything
     /// past <c>bearer</c>/<c>basic</c>/<c>apiKey</c>/<c>custom</c>) would render without an
@@ -221,14 +247,6 @@ public sealed class WorkspaceService : IDisposable
         {
             ["Authorization"] = "Bearer " + cached.AccessToken,
         };
-        if (auth.Type == "github")
-        {
-            // Mirror AuthRunner.WithGithubExtras: the runner returns these alongside the
-            // bearer header so non-OAuth modes still hit the API with a sane Accept + version pin.
-            headers["X-GitHub-Api-Version"] = "2022-11-28";
-            if (!headers.ContainsKey("Accept"))
-                headers["Accept"] = "application/vnd.github+json";
-        }
         return rendered with { Headers = headers };
     }
 
@@ -238,11 +256,15 @@ public sealed class WorkspaceService : IDisposable
     /// usable runtime token is cached, and whether running the flow would be interactive.
     /// The Flow tab uses this to decide between "already authorized" vs "Run auth" affordances.
     /// </summary>
-    public AuthStatusDto BuildAuthStatus(string requestPath)
+    public AuthStatusDto BuildAuthStatus(string requestPath, RequestSpecDto? draftSpec = null)
     {
         var ws = Current;
-        if (ws.FindByPath(requestPath) is not RequestFile req)
+        RequestFile req;
+        try { req = ResolveRequestFile(ws, requestPath, draftSpec); }
+        catch (Exception ex) when (ex is FileNotFoundException or WorkspaceParseException)
+        {
             return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
+        }
 
         var auth = ResolveAuth(ws, req);
         if (auth is null)

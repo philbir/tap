@@ -1,5 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Tap.Studio.Contracts;
+using Tap.Studio.Specs;
 using Tap.Workspace;
 
 namespace Tap.Studio;
@@ -10,7 +12,8 @@ namespace Tap.Studio;
 /// every Studio process for the same user profile.
 ///
 /// The store is the source of truth for the header's workspace switcher. Adding a workspace
-/// here does not touch the on-disk workspace itself — it only registers a pointer to it.
+/// here bootstraps a <c>tap.md</c> manifest in the selected folder when missing, then
+/// registers a pointer to it.
 /// </summary>
 public sealed class KnownWorkspaceStore
 {
@@ -61,10 +64,9 @@ public sealed class KnownWorkspaceStore
         if (!Directory.Exists(canonical))
             throw new DirectoryNotFoundException($"Folder '{canonical}' does not exist.");
 
-        // `.tap/` is the spec-file home, not a registration requirement — bootstrap it
-        // silently so the loader has something to read on first switch. Any explicit init
-        // step would just be ceremony.
-        EnsureTapDir(canonical);
+        // Bootstrap a manifest so switching into a brand-new folder always has a
+        // workspace definition for the editor/API.
+        EnsureWorkspaceScaffold(canonical);
 
         lock (_gate)
         {
@@ -94,7 +96,7 @@ public sealed class KnownWorkspaceStore
         if (!Directory.Exists(canonical))
             throw new DirectoryNotFoundException($"Folder '{canonical}' does not exist.");
 
-        EnsureTapDir(canonical);
+        EnsureWorkspaceScaffold(canonical);
 
         lock (_gate)
         {
@@ -104,12 +106,18 @@ public sealed class KnownWorkspaceStore
         }
     }
 
-    /// <summary>Bootstrap the <c>.tap/</c> folder if it's missing. Lets the picker accept
-    /// any directory; the loader still wants the subfolder to exist before it can walk it.</summary>
-    private static void EnsureTapDir(string root)
+    /// <summary>Bootstrap a workspace manifest in the selected folder if missing.</summary>
+    private static void EnsureWorkspaceScaffold(string root)
     {
-        var tapDir = Path.Combine(root, WorkspaceLoader.TapDirectoryName);
-        if (!Directory.Exists(tapDir)) Directory.CreateDirectory(tapDir);
+        var manifestPath = Path.Combine(root, WorkspaceLoader.ManifestFileName);
+        if (File.Exists(manifestPath)) return;
+
+        var folderName = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
+        var spec = new WorkspaceSpecDto
+        {
+            Name = string.IsNullOrWhiteSpace(folderName) ? "workspace" : folderName,
+        };
+        File.WriteAllText(manifestPath, WorkspaceSpecEmitter.ToFileSource(spec));
     }
 
     private void EnsureRegistered(string canonical)

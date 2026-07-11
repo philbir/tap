@@ -1,4 +1,5 @@
 using Tap.Studio.Contracts;
+using Tap.Workspace;
 
 namespace Tap.Studio.Endpoints;
 
@@ -49,12 +50,14 @@ public static class FilesystemEndpoints
 
                 // Skip the typical "hidden" dotfiles unless the caller explicitly navigated
                 // into one — they're noise in a picker (.DS_Store-style folders, .Trash).
-                // Keep `.tap` visible so the user can see what's already a workspace.
-                if (name.StartsWith('.') && !string.Equals(name, ".tap", StringComparison.Ordinal))
+                if (name.StartsWith('.'))
                     continue;
 
                 bool hasTap = false;
-                try { hasTap = Directory.Exists(Path.Combine(dirAbs, ".tap")); }
+                try
+                {
+                    hasTap = File.Exists(Path.Combine(dirAbs, WorkspaceLoader.ManifestFileName));
+                }
                 catch { /* unreadable — leave hasTap=false */ }
 
                 entries.Add(new DirectoryEntryDto(name, Path.GetFullPath(dirAbs), hasTap));
@@ -66,7 +69,7 @@ public static class FilesystemEndpoints
             // GetDirectoryName returns "" for a root path on Unix and null on Windows roots.
             var hasParent = !string.IsNullOrEmpty(parent) && !string.Equals(parent, target, StringComparison.Ordinal);
 
-            var isWorkspace = Directory.Exists(Path.Combine(target, ".tap"));
+            var isWorkspace = File.Exists(Path.Combine(target, WorkspaceLoader.ManifestFileName));
             var git = GitInspector.Inspect(target);
 
             return Results.Ok(new BrowseResponseDto(
@@ -79,9 +82,8 @@ public static class FilesystemEndpoints
         });
 
         // Create a new directory under a parent path. The picker calls this to let users
-        // organize while they navigate (e.g. mkdir a project folder before they've added
-        // its `.tap/` next to it). Returns the canonical absolute path of the new folder
-        // so the UI can immediately descend into it.
+        // organize while they navigate before adding a workspace manifest. Returns the
+        // canonical absolute path of the new folder so the UI can immediately descend into it.
         g.MapPost("/folders", (CreateDirectoryDto body) =>
         {
             if (string.IsNullOrWhiteSpace(body.Parent))

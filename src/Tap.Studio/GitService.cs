@@ -263,6 +263,53 @@ public sealed class GitService
         return RunGitAsync(["push", "--set-upstream", "origin", head.FriendlyName], ct);
     }
 
+    /// <summary>Initializes a new git repository at the active workspace root.</summary>
+    public GitInfoDto InitRepository()
+    {
+        var root = Path.GetFullPath(_workspace.RootDirectory);
+        if (Repository.IsValid(root))
+            throw new InvalidOperationException("Workspace is already under git version control.");
+
+        Repository.Init(root);
+        var info = GitInspector.Inspect(root)
+            ?? throw new InvalidOperationException("Repository was initialized but could not be inspected.");
+        return new GitInfoDto(
+            Root: info.Root,
+            Branch: info.Branch,
+            IsDetached: info.IsDetached,
+            OriginUrl: info.OriginUrl,
+            Remotes: info.Remotes.Select(r => new GitRemoteDto(r.Name, r.Url)).ToArray());
+    }
+
+    /// <summary>Adds or updates a git remote on the active workspace repository.</summary>
+    public GitInfoDto SetRemote(string name, string url)
+    {
+        var remoteName = (name ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(remoteName))
+            throw new InvalidOperationException("Remote name is required.");
+
+        var remoteUrl = (url ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(remoteUrl))
+            throw new InvalidOperationException("Remote URL is required.");
+
+        var root = Root ?? throw new InvalidOperationException("Workspace is not in a git repository.");
+        using var repo = new Repository(root);
+        var existing = repo.Network.Remotes[remoteName];
+        if (existing is null)
+            repo.Network.Remotes.Add(remoteName, remoteUrl);
+        else
+            repo.Network.Remotes.Update(remoteName, updater => updater.Url = remoteUrl);
+
+        var info = GitInspector.Inspect(root)
+            ?? throw new InvalidOperationException("Remote was updated but repository could not be inspected.");
+        return new GitInfoDto(
+            Root: info.Root,
+            Branch: info.Branch,
+            IsDetached: info.IsDetached,
+            OriginUrl: info.OriginUrl,
+            Remotes: info.Remotes.Select(r => new GitRemoteDto(r.Name, r.Url)).ToArray());
+    }
+
     private async Task<GitCommandResultDto> RunGitAsync(string[] args, CancellationToken ct)
     {
         var root = Root ?? throw new InvalidOperationException("Workspace is not in a git repository.");

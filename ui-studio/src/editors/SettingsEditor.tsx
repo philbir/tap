@@ -1,18 +1,21 @@
 import {
-  ActionIcon, Alert, Box, Button, Code, Group, Loader, ScrollArea, Select, Stack, Table, Tabs,
+  ActionIcon, Alert, Anchor, Badge, Box, Button, Code, Divider, Group, Loader, ScrollArea, Select, Stack, Table, Tabs,
   Text, TextInput, Tooltip,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 import {
-  IconAlertCircle, IconCode, IconDeviceFloppy, IconEye, IconEyeOff, IconKey, IconPlus,
-  IconRefresh, IconServer, IconTrash, IconVariable, IconX,
+  IconAlertCircle, IconCheck, IconCode, IconDeviceFloppy, IconEye, IconEyeOff, IconKey, IconPlus,
+  IconRefresh, IconSearch, IconServer, IconSparkles, IconTrash, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { SaveSystemSettings, SystemProvider, SystemSettings, SystemVariable } from '../api/types'
+import type {
+  AiConfig, AiModelOption, AiProviderName, SaveAiConfig, SaveSystemSettings, SystemProvider, SystemSettings, SystemVariable,
+} from '../api/types'
 import { ensureThemes, useMonacoTheme } from './monacoSetup'
+import { TabCount } from './EditorShell'
 
 /**
  * Settings editor — opens as a tab. Two sub-tabs:
@@ -163,10 +166,13 @@ export function SettingsEditor() {
       <Tabs defaultValue="providers" keepMounted={false} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
         <Tabs.List px="md">
           <Tabs.Tab value="providers" leftSection={<IconServer size={14} />}>
-            Variable providers <Text component="span" c="dimmed">({providers.length})</Text>
+            Variable providers <TabCount count={providers.length} />
           </Tabs.Tab>
           <Tabs.Tab value="variables" leftSection={<IconVariable size={14} />}>
-            System variables <Text component="span" c="dimmed">({variables.filter((v) => v.name.trim()).length})</Text>
+            System variables <TabCount count={variables.filter((v) => v.name.trim()).length} />
+          </Tabs.Tab>
+          <Tabs.Tab value="ai" leftSection={<IconSparkles size={14} />}>
+            AI assistant
           </Tabs.Tab>
           <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>
             Source
@@ -191,6 +197,14 @@ export function SettingsEditor() {
           <ScrollArea h="100%" type="auto">
             <Box p="md">
               <VariablesTab variables={variables} onChange={setVariables} />
+            </Box>
+          </ScrollArea>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="ai" style={{ flex: 1, minHeight: 0 }}>
+          <ScrollArea h="100%" type="auto">
+            <Box p="md">
+              <AiSettingsTab />
             </Box>
           </ScrollArea>
         </Tabs.Panel>
@@ -743,4 +757,221 @@ function shortenHome(p: string): string {
   // common-case POSIX home (`/Users/<name>` or `/home/<name>`) is easy to spot.
   const m = p.match(/^(\/Users\/[^/]+|\/home\/[^/]+)(\/.*)?$/)
   return m ? '~' + (m[2] ?? '') : p
+}
+
+// ----------- AI assistant tab ---------------------------------------------------------
+
+const AI_PROVIDERS: { value: AiProviderName; label: string; docs: string; install: string }[] = [
+  { value: 'copilot', label: 'GitHub Copilot CLI', docs: 'https://docs.github.com/copilot/github-copilot-cli', install: 'copilot' },
+  { value: 'claude-code', label: 'Claude Code', docs: 'https://claude.com/claude-code', install: 'claude' },
+]
+
+/**
+ * Self-contained AI config panel. Unlike the providers/variables tabs (which share the
+ * page-level Save button), this manages its own load + save against `/api/ai/*` so the AI
+ * settings persist independently of the variable-provider settings.
+ */
+function AiSettingsTab() {
+  const [config, setConfig] = useState<AiConfig | null>(null)
+  const [provider, setProvider] = useState<AiProviderName>('copilot')
+  const [model, setModel] = useState<string | null>(null)
+  const [copilotPath, setCopilotPath] = useState('')
+  const [claudePath, setClaudePath] = useState('')
+  const [models, setModels] = useState<AiModelOption[]>([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [detecting, setDetecting] = useState(false)
+  const [testing, setTesting] = useState(false)
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const load = async () => {
+    setLoading(true); setError(null)
+    try {
+      const c = await api.aiConfig()
+      setConfig(c)
+      setProvider(c.provider ?? 'copilot')
+      setModel(c.model)
+      setCopilotPath(c.copilotCliPath ?? '')
+      setClaudePath(c.claudeCliPath ?? '')
+      try { setModels((await api.aiModels()).models) } catch { /* models are best-effort */ }
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e))
+    } finally { setLoading(false) }
+  }
+  useEffect(() => { void load() }, [])
+
+  const draft = (): SaveAiConfig => ({
+    provider,
+    model: model?.trim() || null,
+    copilotCliPath: copilotPath.trim() || null,
+    claudeCliPath: claudePath.trim() || null,
+  })
+
+  const dirty = useMemo(() => {
+    if (!config) return false
+    return JSON.stringify(draft()) !== JSON.stringify({
+      provider: config.provider ?? 'copilot',
+      model: config.model,
+      copilotCliPath: config.copilotCliPath,
+      claudeCliPath: config.claudeCliPath,
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [config, provider, model, copilotPath, claudePath])
+
+  const pathValue = provider === 'copilot' ? copilotPath : claudePath
+  const setPathValue = provider === 'copilot' ? setCopilotPath : setClaudePath
+  const meta = AI_PROVIDERS.find((p) => p.value === provider)!
+
+  async function detect() {
+    setDetecting(true); setTestMsg(null); setError(null)
+    try {
+      const r = provider === 'copilot'
+        ? await api.detectCopilotCli(pathValue.trim() || null)
+        : await api.detectClaudeCli(pathValue.trim() || null)
+      if (r.ok && r.path) {
+        setPathValue(r.path)
+        setTestMsg({ ok: true, text: `Found ${r.version ?? 'CLI'} at ${r.path}` })
+      } else {
+        setTestMsg({ ok: false, text: r.error ?? 'CLI not found.' })
+      }
+    } catch (e) {
+      setTestMsg({ ok: false, text: e instanceof ApiError ? e.message : String(e) })
+    } finally { setDetecting(false) }
+  }
+
+  async function test() {
+    setTesting(true); setTestMsg(null); setError(null)
+    try {
+      const r = await api.testAiConfig(draft())
+      if (r.ok) {
+        const ver = r.diagnostics?.cliVersion ? ` — ${r.diagnostics.cliVersion}` : ''
+        setTestMsg({ ok: true, text: `Connected${ver}. ${r.modelCount} model(s) available.` })
+      } else {
+        setTestMsg({ ok: false, text: r.error ?? 'Test failed.' })
+      }
+    } catch (e) {
+      setTestMsg({ ok: false, text: e instanceof ApiError ? e.message : String(e) })
+    } finally { setTesting(false) }
+  }
+
+  async function save() {
+    setBusy(true); setError(null)
+    try {
+      const saved = await api.saveAiConfig(draft())
+      setConfig(saved)
+      notifications.show({ color: 'teal', title: 'Saved', message: 'AI settings updated.' })
+      try { setModels((await api.aiModels()).models) } catch { /* best-effort */ }
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e)
+      setError(msg)
+      notifications.show({ color: 'red', title: 'Save failed', message: msg })
+    } finally { setBusy(false) }
+  }
+
+  if (loading) {
+    return (
+      <Stack align="center" justify="center" gap="xs" py="xl">
+        <Loader size="sm" />
+        <Text size="sm" c="dimmed">Loading AI settings…</Text>
+      </Stack>
+    )
+  }
+
+  const modelData = models.map((m) => ({ value: m.id, label: m.name ?? m.id }))
+
+  return (
+    <Stack gap="md" maw={640}>
+      <Box>
+        <Text fw={600} size="sm">Request assistant</Text>
+        <Text c="dimmed" size="xs">
+          Tap drives a local AI CLI you already have installed — no API keys stored. Pick a
+          provider, point Tap at the binary if it isn't auto-detected, then test the connection.
+        </Text>
+      </Box>
+
+      {error && <Alert color="red" icon={<IconAlertCircle size={14} />}>{error}</Alert>}
+
+      <Select
+        label="Provider"
+        data={AI_PROVIDERS.map((p) => ({ value: p.value, label: p.label }))}
+        value={provider}
+        onChange={(v) => { if (v) { setProvider(v as AiProviderName); setTestMsg(null) } }}
+        allowDeselect={false}
+      />
+
+      <Box>
+        <TextInput
+          label={`${meta.label} path`}
+          description={`Leave blank to auto-detect the "${meta.install}" binary on PATH and common install locations.`}
+          placeholder={provider === 'copilot' ? '/opt/homebrew/bin/copilot' : '~/.claude/local/claude'}
+          value={pathValue}
+          onChange={(e) => setPathValue(e.currentTarget.value)}
+          styles={{ input: { fontFamily: 'var(--mono)' } }}
+          rightSectionWidth={96}
+          rightSection={
+            <Button size="compact-xs" variant="light" leftSection={<IconSearch size={12} />} onClick={() => void detect()} loading={detecting}>
+              Detect
+            </Button>
+          }
+        />
+      </Box>
+
+      <Select
+        label="Default model"
+        description="Used when a request doesn't pick a specific model."
+        placeholder={config?.model ? undefined : 'Provider default'}
+        data={modelData}
+        value={model}
+        onChange={setModel}
+        searchable
+        clearable
+        nothingFoundMessage="Type a model id"
+      />
+
+      {testMsg && (
+        <Alert
+          color={testMsg.ok ? 'teal' : 'red'}
+          icon={testMsg.ok ? <IconCheck size={14} /> : <IconAlertCircle size={14} />}
+          variant="light"
+        >
+          {testMsg.text}
+        </Alert>
+      )}
+
+      <Divider />
+
+      <Group justify="space-between">
+        <Anchor href={meta.docs} target="_blank" size="xs" c="dimmed">
+          {meta.label} setup docs ↗
+        </Anchor>
+        <Group gap="xs">
+          <Button variant="default" leftSection={<IconSparkles size={14} />} onClick={() => void test()} loading={testing} disabled={busy}>
+            Test connection
+          </Button>
+          <Button leftSection={<IconDeviceFloppy size={14} />} onClick={() => void save()} loading={busy} disabled={!dirty}>
+            Save
+          </Button>
+        </Group>
+      </Group>
+
+      {config?.persisted && (
+        <Group gap="xs">
+          <Badge variant="light" color="gray" size="sm">Saved</Badge>
+          <Anchor
+            component="button"
+            type="button"
+            size="xs"
+            c="red"
+            onClick={async () => {
+              try { await api.clearAiConfig(); await load(); notifications.show({ color: 'gray', message: 'AI settings cleared.' }) }
+              catch (e) { setError(e instanceof ApiError ? e.message : String(e)) }
+            }}
+          >
+            Reset to defaults
+          </Anchor>
+        </Group>
+      )}
+    </Stack>
+  )
 }

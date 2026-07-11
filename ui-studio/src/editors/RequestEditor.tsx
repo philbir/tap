@@ -1,9 +1,9 @@
 import {
-  Badge, Box, Button, Code, Group, Loader, Menu, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip, UnstyledButton,
+  Badge, ActionIcon, Box, Button, Code, Group, Loader, Menu, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconEye, IconFile, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconSparkles, IconUpload, IconVariable, IconX,
+  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconFile, IconFileText, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -20,7 +20,8 @@ import {
   serializeMultipartBody, tryPrettyJson,
   RAW_SUB_LABELS, type BodyMode, type RawSubType,
 } from './body-mode'
-import { EditorShell } from './EditorShell'
+import { DocsEditor } from './DocsEditor'
+import { EditorShell, TabCount, TabDot } from './EditorShell'
 import { GraphQLEditor } from './GraphQLEditor'
 import { KvTable, type KvRow } from './KvTable'
 import { MultipartTable } from './MultipartTable'
@@ -31,6 +32,7 @@ import { SourceTab } from './SourceTab'
 import { joinUrl, splitUrl } from './url-utils'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
+import { AssistantPane } from '../features/assistant/AssistantPane'
 
 interface Props { path: string }
 
@@ -43,6 +45,8 @@ export function RequestEditor({ path }: Props) {
   const collections = useTapStore((s) => s.collections)
   const auths = useTapStore((s) => s.auths)
   const openTab = useTapStore((s) => s.openTab)
+  const renameTab = useTapStore((s) => s.renameTab)
+  const reload = useTapStore((s) => s.reload)
   const activeEnv = useActiveEnv()
   const tagSuggestions = useTagDictionary()
 
@@ -55,12 +59,13 @@ export function RequestEditor({ path }: Props) {
   const [rendered, setRendered] = useState<RenderedRequest | null>(null)
   const [execution, setExecution] = useState<ExecutionResult | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<'render' | 'send' | null>(null)
+  const [busy, setBusy] = useState<'send' | null>(null)
   // Set when the user aborts an in-flight Send — keeps the partial result on screen but
   // tags it so the panel can show a "cancelled" marker instead of pretending it finished.
   const [stopped, setStopped] = useState(false)
   const [stage, setStage] = useState<string | null>(null)
   const [varsOpened, varsCtl] = useDisclosure(false)
+  const [assistantOpened, assistantCtl] = useDisclosure(false)
   // Holds the in-flight stream controller so we can abort on Send-again / close.
   const streamCtrlRef = useRef<AbortController | null>(null)
   // Wall-clock start of the current Send — lets stop() fill in an approximate duration
@@ -88,9 +93,39 @@ export function RequestEditor({ path }: Props) {
   async function save() {
     if (!spec) return
     setSaving(true); setError(null)
-    try { await api.saveRequestSpec(spec); setSavedSpec(spec) }
+    try {
+      await api.saveRequestSpec(spec)
+      // When the request was renamed, keep the on-disk filename in step with the new
+      // name (the explorer shows the spec name, so a stale filename would only surface
+      // in git / the filesystem view). Falls back to a no-op when the slug is unchanged
+      // or empty.
+      const renamedPath = await syncFilenameToName(spec, savedSpec)
+      if (renamedPath && renamedPath !== spec.path) {
+        const moved = { ...spec, path: renamedPath }
+        renameTab(spec.path, renamedPath, spec.name || basename(renamedPath))
+        setSpec(moved); setSavedSpec(moved)
+        await reload()
+      } else {
+        setSavedSpec(spec)
+      }
+    }
     catch (e) { setError(e instanceof ApiError ? e.message : String(e)) }
     finally { setSaving(false) }
+  }
+
+  /** If the request's name changed this session, rename the underlying `*.req.md` file to
+   *  a slug derived from the new name (kept in the same folder). Returns the new path, or
+   *  null when no rename is needed (slug unchanged / empty). */
+  async function syncFilenameToName(next: RequestSpec, prev: RequestSpec | null): Promise<string | null> {
+    if (!prev || prev.name === next.name) return null
+    const slug = nameToSlug(next.name)
+    if (!slug) return null
+    const dir = next.path.includes('/') ? next.path.slice(0, next.path.lastIndexOf('/')) : ''
+    const currentBase = basename(next.path).replace(/\.req\.md$/i, '')
+    if (slug === currentBase) return null
+    const targetPath = dir ? `${dir}/${slug}.req.md` : `${slug}.req.md`
+    await api.moveItem(next.path, targetPath)
+    return targetPath
   }
 
   // The request's owning collection is purely positional: every request lives under
@@ -110,13 +145,6 @@ export function RequestEditor({ path }: Props) {
     envPath: activeEnv ?? undefined,
     stage: effectiveStage ?? undefined,
   }), [path, activeEnv, effectiveStage])
-
-  async function render() {
-    setBusy('render'); setActionError(null); setRendered(null)
-    try { setRendered(await api.render(path, activeEnv, effectiveStage)) }
-    catch (e) { setActionError(e instanceof Error ? e.message : String(e)) }
-    finally { setBusy(null) }
-  }
 
   function abortStream() {
     streamCtrlRef.current?.abort()
@@ -219,7 +247,7 @@ export function RequestEditor({ path }: Props) {
           streamCtrlRef.current = null
           break
       }
-    })
+    }, undefined, dirty && spec ? spec : undefined)
   }
 
   if (!detail || !spec) {
@@ -255,13 +283,31 @@ export function RequestEditor({ path }: Props) {
       onDiscard={() => setSpec(savedSpec)}
       onTitleChange={(n) => update('name', n)}
       toolbarExtras={
-        <Button variant="default" size="xs" leftSection={<IconEye size={14} />} onClick={render} disabled={busy !== null || dirty}>
-          Preview
-        </Button>
+        <Tooltip label="Open the AI assistant to craft or edit this request">
+          <ActionIcon
+            variant={assistantOpened ? 'light' : 'default'}
+            color="tap"
+            size="lg"
+            onClick={assistantCtl.toggle}
+            aria-label="Open the AI assistant to craft or edit this request"
+          >
+            <IconSparkles size={16} />
+          </ActionIcon>
+        </Tooltip>
+      }
+      rightPane={
+        assistantOpened ? (
+          <AssistantPane
+            requestPath={path}
+            currentSpec={spec}
+            onApply={(proposal) => setSpec(proposal)}
+            onClose={assistantCtl.close}
+          />
+        ) : undefined
       }
       bottomPane={
         // Only mount the response pane when there's actually something to show — keeps
-        // the request editor full-height until the user clicks Send / Preview, and lets
+        // the request editor full-height until the user clicks Send, and lets
         // the × close button collapse it back.
         (execution || rendered || actionError || busy !== null) ? (
           <ResponsePanel
@@ -279,7 +325,7 @@ export function RequestEditor({ path }: Props) {
         ) : undefined
       }
     >
-      <Group gap="xs" mb="md" align="center" wrap="nowrap">
+      <Group gap="xs" mt="xs" mb="md" align="center" wrap="nowrap">
         <Select
           data={[
             { group: 'HTTP', items: METHODS as unknown as string[] },
@@ -343,8 +389,8 @@ export function RequestEditor({ path }: Props) {
           <Button
             leftSection={<IconPlayerPlayFilled size={14} />}
             onClick={send}
-            disabled={busy !== null || dirty}
-            title={dirty ? 'Save first to send the latest version' : 'Send the request'}
+            disabled={busy !== null}
+            title={dirty ? 'Send the request (using unsaved changes)' : 'Send the request'}
           >
             Send
           </Button>
@@ -354,17 +400,22 @@ export function RequestEditor({ path }: Props) {
       <Tabs value={tab} onChange={setTab}>
         <Tabs.List mb="md">
           <Tabs.Tab value="params" leftSection={<IconParentheses size={14} />}>
-            Params {queryRows.length > 0 && <Text component="span" c="dimmed" ml={6}>{queryRows.length}</Text>}
+            Params <TabCount count={queryRows.length} />
           </Tabs.Tab>
           <Tabs.Tab value="headers" leftSection={<IconList size={14} />}>
-            Headers {headersOnly.length > 0 && <Text component="span" c="dimmed" ml={6}>{headersOnly.length}</Text>}
+            Headers <TabCount count={headersOnly.length} />
           </Tabs.Tab>
           <Tabs.Tab value="body" leftSection={<IconBraces size={14} />}>Body</Tabs.Tab>
-          <Tabs.Tab value="auth" leftSection={<IconLock size={14} />}>Auth</Tabs.Tab>
+          <Tabs.Tab value="auth" leftSection={<IconLock size={14} />}>
+            Auth <TabDot active={!!spec.auth && spec.auth !== 'none'} color="orange" />
+          </Tabs.Tab>
           <Tabs.Tab value="vars" leftSection={<IconVariable size={14} />}>
-            Variables {Object.keys(spec.vars ?? {}).length > 0 && <Text component="span" c="dimmed" ml={6}>{Object.keys(spec.vars!).length}</Text>}
+            Variables <TabCount count={Object.keys(spec.vars ?? {}).length} />
           </Tabs.Tab>
           <Tabs.Tab value="meta" leftSection={<IconFlag size={14} />}>Meta</Tabs.Tab>
+          <Tabs.Tab value="docs" leftSection={<IconFileText size={14} />}>
+            Docs <TabDot active={!!spec.body && spec.body.trim().length > 0} />
+          </Tabs.Tab>
           <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
         </Tabs.List>
 
@@ -501,6 +552,14 @@ export function RequestEditor({ path }: Props) {
               </Text>
             )}
           </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="docs">
+          <DocsEditor
+            value={spec.body ?? ''}
+            onChange={(v) => update('body', v.trim().length > 0 ? v : undefined)}
+            emptyHint="No docs yet. Describe what this request does, its parameters, and expected responses."
+          />
         </Tabs.Panel>
 
         <Tabs.Panel value="source">
@@ -896,6 +955,17 @@ function specFromDetail(d: RequestDetail, path: string): RequestSpec {
 }
 
 function basename(p: string): string { return p.split('/').pop() ?? p }
+
+/** Fold a display name into a safe, lowercase filename slug (no extension). Mirrors the
+ *  slug rules used by the create / duplicate dialogs so renamed files match newly-created
+ *  ones. Returns '' when nothing usable survives (caller then skips the rename). */
+function nameToSlug(name: string): string {
+  return name.trim().toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
+    .slice(0, 60)
+}
 
 function relativizeFrom(from: string, to: string): string {
   const fromParts = from.split('/').slice(0, -1)

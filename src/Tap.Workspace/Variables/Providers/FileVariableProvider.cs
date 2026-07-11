@@ -44,7 +44,7 @@ public sealed class FileVariableProvider : IVariableProvider
     public FileVariableProvider(VariableProviderConfig config, string workspaceRoot)
     {
         _config = config;
-        _storePath = Path.Combine(workspaceRoot, ".tap", ".vars", config.Name + ".yml");
+        _storePath = Path.Combine(workspaceRoot, ".vars", config.Name + ".yml");
 
         // Encryption key is optional at construction — it's only required if a write touches
         // a secret. Reads return ciphertext-on-failure so the operator can fix the key.

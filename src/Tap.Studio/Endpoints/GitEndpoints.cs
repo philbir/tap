@@ -94,6 +94,20 @@ public static class GitEndpoints
             try { return Results.Ok(await git.PushAsync(body?.SetUpstream ?? true, ct)); }
             catch (InvalidOperationException ex) { return Results.BadRequest(new { code = "git-error", message = ex.Message }); }
         });
+
+        g.MapPost("/init", (GitService git) =>
+        {
+            try { return Results.Ok(git.InitRepository()); }
+            catch (InvalidOperationException ex) { return Results.BadRequest(new { code = "git-error", message = ex.Message }); }
+            catch (LibGit2SharpException ex) { return Results.BadRequest(new { code = "git-error", message = ex.Message }); }
+        });
+
+        g.MapPost("/remote", (GitSetRemoteDto body, GitService git) =>
+        {
+            try { return Results.Ok(git.SetRemote(body.Name, body.Url)); }
+            catch (InvalidOperationException ex) { return Results.BadRequest(new { code = "git-error", message = ex.Message }); }
+            catch (LibGit2SharpException ex) { return Results.BadRequest(new { code = "git-error", message = ex.Message }); }
+        });
     }
 
     private static IResult Run(Action action)

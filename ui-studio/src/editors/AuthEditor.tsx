@@ -5,7 +5,7 @@ import {
 import { useClipboard, useDebouncedValue, useDisclosure } from '@mantine/hooks'
 import {
   IconAlertCircle, IconCheck, IconChevronDown, IconChevronRight, IconCode, IconCopy,
-  IconExternalLink, IconKey, IconPlayerPlayFilled, IconRefresh, IconShieldCheck, IconTrash,
+  IconExternalLink, IconKey, IconFileText, IconPlayerPlayFilled, IconRefresh, IconShieldCheck, IconTrash,
 } from '@tabler/icons-react'
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
@@ -13,7 +13,8 @@ import type { AuthDetail, AuthExecuteResponse, AuthSpec, VariableContext } from 
 import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { decodeJwt } from '../workspace/jwt'
-import { EditorShell } from './EditorShell'
+import { DocsEditor } from './DocsEditor'
+import { EditorShell, TabDot } from './EditorShell'
 import { KvTable } from './KvTable'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
@@ -117,6 +118,9 @@ export function AuthEditor({ path }: Props) {
       <Tabs value={tab} onChange={setTab}>
         <Tabs.List mb="md">
           <Tabs.Tab value="config" leftSection={<IconShieldCheck size={14} />}>Configuration</Tabs.Tab>
+          <Tabs.Tab value="docs" leftSection={<IconFileText size={14} />}>
+            Docs <TabDot active={!!spec.body && spec.body.trim().length > 0} />
+          </Tabs.Tab>
           <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
         </Tabs.List>
 
@@ -234,6 +238,14 @@ export function AuthEditor({ path }: Props) {
               </Alert>
             )}
           </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="docs">
+          <DocsEditor
+            value={spec.body ?? ''}
+            onChange={(v) => setSpec((cur) => cur ? { ...cur, body: v.trim().length > 0 ? v : undefined } : cur)}
+            emptyHint="No docs yet. Describe how this auth profile works and how to set its variables."
+          />
         </Tabs.Panel>
 
         <Tabs.Panel value="source">
@@ -876,14 +888,6 @@ function GithubPanel({ spec, update, setSpec }: {
   }
   return (
     <Stack gap="md">
-      <Alert color="tap" variant="light" icon={<IconShieldCheck size={14} />}>
-        <Text size="xs">
-          GitHub auth profile. Pick a mode below — the runner does the right thing per mode
-          (token, <Code>gh auth token</Code>, App installation token, or OAuth popup).
-          Tap also adds <Code>X-GitHub-Api-Version: 2022-11-28</Code> automatically.
-        </Text>
-      </Alert>
-
       <Select
         label="Mode"
         value={mode}

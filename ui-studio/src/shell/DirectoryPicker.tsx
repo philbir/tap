@@ -22,8 +22,7 @@ interface Props {
  * Studio works inside a desktop shell where the native browser file picker isn't reliable.
  *
  * Boots at the user's home directory; the breadcrumb lets the user climb back up, and
- * a single click descends into a child. Any folder can be picked — the server creates
- * <c>.tap/</c> if it isn't there yet.
+ * a single click descends into a child. Any folder can be picked.
  */
 export function DirectoryPicker({ opened, onClose, onPick, busyExternal }: Props) {
   const [data, setData] = useState<BrowseResponse | null>(null)
@@ -88,7 +87,7 @@ export function DirectoryPicker({ opened, onClose, onPick, busyExternal }: Props
     >
       <Stack gap="sm">
         <Text size="sm" c="dimmed">
-          Pick any folder. A <code>.tap/</code> subfolder is created if needed.
+          Pick any folder.
         </Text>
 
         <Group gap={6} wrap="nowrap" justify="space-between">

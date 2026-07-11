@@ -5,7 +5,7 @@ import {
 import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
 import {
-  IconAlertCircle, IconBrandGit, IconFolderPlus, IconFolderShare, IconLayoutDashboard, IconLock,
+  IconAlertCircle, IconBrandGit, IconCopy, IconEdit, IconFolderPlus, IconFolderShare, IconLayoutDashboard, IconLock,
   IconPlus, IconSearch, IconSend, IconTag, IconTrash, type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -13,6 +13,7 @@ import { api } from '../api/client'
 import type { TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
+import { DuplicateRequestDialog } from './DuplicateRequestDialog'
 import { buildRequestsView, filterExplorerTree, type ExplorerNode } from './explorerTree'
 import { FilesystemView } from './FilesystemView'
 import { GitView } from './GitView'
@@ -45,6 +46,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   const activePath = useTapStore((s) => s.activeTab)
   const reload = useTapStore((s) => s.reload)
   const closeTab = useTapStore((s) => s.closeTab)
+  const openTab = useTapStore((s) => s.openTab)
   const renameTab = useTapStore((s) => s.renameTab)
   const hasGit = useTapStore((s) =>
     s.knownWorkspaces.some((w) => w.isActive && w.git !== null))
@@ -121,6 +123,12 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   // right-clicked; the dialog only asks for the leaf name.
   const [newFolderState, setNewFolderState] = useState<{ open: boolean; parentDir: string }>({
     open: false, parentDir: '',
+  })
+
+  // Duplicate-request dialog state. The source row is captured when the user clicks
+  // "Duplicate" in the context menu; the dialog only asks for the new name.
+  const [duplicateState, setDuplicateState] = useState<{ open: boolean; source: { realPath: string; name: string } | null }>({
+    open: false, source: null,
   })
 
   // Hand-rolled cursor-anchored context menu state. Pierre's own renderContextMenu
@@ -207,6 +215,10 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
 
   const requestsContextMenu = useMemo(() => makeContextMenuHandler(requestsLookup), [makeContextMenuHandler, requestsLookup])
   const authContextMenu = useMemo(() => makeContextMenuHandler(authLookup), [makeContextMenuHandler, authLookup])
+  const editCollection = useCallback((dir: DirContext) => {
+    if (dir.kind !== 'collection') return
+    openTab({ path: dir.realPath, kind: 'collection', label: dir.name })
+  }, [openTab])
 
   // Drag-and-drop for the requests tree: the pierre tree has already moved the rows
   // visually by the time onDrop fires, so this handler just persists each move and
@@ -342,7 +354,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
               selectedPath={requestsActivePath}
               initialExpansion="open"
               icons={requestsIcons}
-              unsafeCSS={TAP_TREE_UNSAFE_CSS}
+              unsafeCSS={REQUEST_TREE_UNSAFE_CSS}
               fillParent
               onActivateFile={requestsActivate}
               onContextMenuRequest={requestsContextMenu}
@@ -396,6 +408,15 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         onNewFolder={(dir) => { setCtxMenu(null); setNewFolderState({ open: true, parentDir: dir.realPath }) }}
         onDeleteDir={(dir) => { setCtxMenu(null); confirmDeleteDir(dir) }}
         onDeleteFile={(file) => { setCtxMenu(null); confirmDeleteFile(file) }}
+        onDuplicateFile={(file) => { setCtxMenu(null); setDuplicateState({ open: true, source: { realPath: file.realPath, name: file.name } }) }}
+        onEditCollection={(dir) => { setCtxMenu(null); editCollection(dir) }}
+      />
+
+      <DuplicateRequestDialog
+        open={duplicateState.open}
+        onOpenChange={(open) => setDuplicateState((s) => ({ ...s, open }))}
+        source={duplicateState.source}
+        onCreated={(path) => openTab({ path, kind: 'request', label: path.split('/').pop()?.replace(/\.req\.md$/, '') ?? path })}
       />
     </Stack>
   )
@@ -405,13 +426,15 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
  *  and ESC. Rendered in a portal-style `position: fixed` so it overlays the sidebar.
  *  Item set depends on whether the row is a directory or a file. */
 function FloatingCtxMenu({
-  ctx, onClose, onNewFolder, onDeleteDir, onDeleteFile,
+  ctx, onClose, onNewFolder, onDeleteDir, onDeleteFile, onDuplicateFile, onEditCollection,
 }: {
   ctx: { x: number; y: number; row: RowContext } | null
   onClose: () => void
   onNewFolder: (dir: DirContext) => void
   onDeleteDir: (dir: DirContext) => void
   onDeleteFile: (file: FileContext) => void
+  onDuplicateFile: (file: FileContext) => void
+  onEditCollection: (dir: DirContext) => void
 }) {
   useEffect(() => {
     if (!ctx) return
@@ -448,6 +471,18 @@ function FloatingCtxMenu({
     >
       <Stack gap={2}>
         {isDir && (
+          (ctx.row as DirContext).kind === 'collection' && (
+            <UnstyledButton
+              px={10} py={6}
+              className="tap-tree-row"
+              style={{ fontSize: 13, borderRadius: 4 }}
+              onClick={() => onEditCollection(ctx.row as DirContext)}
+            >
+              <Group gap={8} wrap="nowrap"><IconEdit size={14} />Edit collection…</Group>
+            </UnstyledButton>
+          )
+        )}
+        {isDir && (
           <UnstyledButton
             px={10} py={6}
             className="tap-tree-row"
@@ -455,6 +490,16 @@ function FloatingCtxMenu({
             onClick={() => onNewFolder(ctx.row as DirContext)}
           >
             <Group gap={8} wrap="nowrap"><IconFolderPlus size={14} />New folder…</Group>
+          </UnstyledButton>
+        )}
+        {!isDir && (ctx.row as FileContext).kind === 'request' && (
+          <UnstyledButton
+            px={10} py={6}
+            className="tap-tree-row"
+            style={{ fontSize: 13, borderRadius: 4 }}
+            onClick={() => onDuplicateFile(ctx.row as FileContext)}
+          >
+            <Group gap={8} wrap="nowrap"><IconCopy size={14} />Duplicate…</Group>
           </UnstyledButton>
         )}
         <UnstyledButton
@@ -519,93 +564,130 @@ interface TreeLookup {
 }
 
 /** Walk the requests explorer view into the display-path list the pierre tree wants,
- *  plus activate callbacks keyed on display path. We drop the leading `collections/`
- *  segment (everyone knows the requests live in collections) and strip the
- *  `.req.md` suffix so rows render as "whoami-pkce" instead of "whoami-pkce.req.md".
+ *  plus activate callbacks keyed on display path. The pierre tree derives each row's
+ *  label from its display-path basename, so we build the display path hierarchically
+ *  from each node's *spec name* (collection / request name) rather than its filename —
+ *  rows render as "Budgets - List" instead of "bugets-lists". Pure grouping folders
+ *  (no spec) fall back to their directory name. Sibling display-name collisions are
+ *  disambiguated with a numeric suffix so every display path stays unique.
  *
- *  Collection metadata rows aren't emitted as separate leaves any more — the collection
- *  IS its enclosing folder. */
+ *  Collection metadata rows aren't emitted as separate leaves — the collection IS its
+ *  enclosing folder. */
 function collectRequestRows(nodes: ExplorerNode[], onOpenFile: (n: TreeNode) => void): TreeLookup {
-  const paths: string[] = []
-  const realToDisplay = new Map<string, string>()
-  const activators = new Map<string, () => void>()
-  const iconByBasename: TreeLookup['iconByBasename'] = {}
-  const kindByDisplayPath = new Map<string, RowKind>()
-  const dirsByDisplayPath = new Map<string, DirContext>()
-  const filesByDisplayPath = new Map<string, FileContext>()
+  const lookup = newTreeLookup()
+  const used = new Set<string>()
 
-  const visit = (node: ExplorerNode) => {
+  const visit = (node: ExplorerNode, parentDisplay: string) => {
+    const fallback = leafBasename(node.path, REQUEST_TREE_PREFIX)
+    const display = uniqueDisplayPath(parentDisplay, displaySegment(node.name, fallback), used)
     if (node.kind === 'collection') {
-      const display = displayPathFor(node.path, REQUEST_TREE_PREFIX)
-      kindByDisplayPath.set(display, 'collection')
-      dirsByDisplayPath.set(display, {
+      lookup.paths.push(dirPath(display))
+      lookup.realToDisplay.set(node.path, dirPath(display))
+      lookup.kindByDisplayPath.set(display, 'collection')
+      lookup.dirsByDisplayPath.set(display, {
         kind: 'collection', realPath: node.path, name: node.name, slug: node.slug,
       })
     } else if (node.kind === 'folder') {
-      const display = displayPathFor(node.path, REQUEST_TREE_PREFIX)
-      kindByDisplayPath.set(display, 'folder')
-      dirsByDisplayPath.set(display, { kind: 'folder', realPath: node.path, name: node.name })
+      lookup.paths.push(dirPath(display))
+      lookup.realToDisplay.set(node.path, dirPath(display))
+      lookup.kindByDisplayPath.set(display, 'folder')
+      lookup.dirsByDisplayPath.set(display, { kind: 'folder', realPath: node.path, name: node.name })
     } else if (node.kind === 'request' && node.source) {
-      const display = displayPathFor(node.path, REQUEST_TREE_PREFIX)
-      paths.push(display)
-      realToDisplay.set(node.path, display)
-      kindByDisplayPath.set(display, 'request')
+      lookup.paths.push(display)
+      lookup.realToDisplay.set(node.path, display)
+      lookup.kindByDisplayPath.set(display, 'request')
       const src = node.source
-      activators.set(display, () => onOpenFile(src))
-      filesByDisplayPath.set(display, { kind: 'request', realPath: node.path, name: node.name })
-      const basename = display.split('/').pop()!
-      iconByBasename[basename] = TAP_ICONS.send
+      lookup.activators.set(display, () => onOpenFile(src))
+      lookup.filesByDisplayPath.set(display, { kind: 'request', realPath: node.path, name: node.name })
+      lookup.iconByBasename[display.split('/').pop()!] = TAP_ICONS.send
+      return // requests are leaves
     }
-    for (const c of node.children) visit(c)
+    for (const c of node.children) visit(c, display)
   }
 
-  for (const root of nodes) visit(root)
-  return { paths, realToDisplay, activators, iconByBasename, kindByDisplayPath, dirsByDisplayPath, filesByDisplayPath }
+  for (const root of nodes) visit(root, '')
+  return lookup
 }
 
 /** Same shape as collectRequestRows but for auth profiles — these don't sit under a
- *  collections/ root so we just strip the `.auth.md` suffix. */
+ *  collections/ root. Auth rows render under their spec name; grouping folders keep
+ *  their directory name. */
 function collectAuthRows(nodes: TreeNode[], onOpenFile: (n: TreeNode) => void): TreeLookup {
-  const paths: string[] = []
-  const realToDisplay = new Map<string, string>()
-  const activators = new Map<string, () => void>()
-  const iconByBasename: TreeLookup['iconByBasename'] = {}
-  const kindByDisplayPath = new Map<string, RowKind>()
-  const dirsByDisplayPath = new Map<string, DirContext>()
-  const filesByDisplayPath = new Map<string, FileContext>()
+  const lookup = newTreeLookup()
+  const used = new Set<string>()
 
-  const visit = (n: TreeNode) => {
+  const visit = (n: TreeNode, parentDisplay: string) => {
     if (n.kind === 'directory') {
-      const display = displayPathFor(n.path, null)
-      kindByDisplayPath.set(display, 'folder')
-      dirsByDisplayPath.set(display, { kind: 'folder', realPath: n.path, name: n.name })
-      for (const c of n.children) visit(c)
+      const display = uniqueDisplayPath(parentDisplay, displaySegment(n.name, leafBasename(n.path, null)), used)
+      lookup.kindByDisplayPath.set(display, 'folder')
+      lookup.dirsByDisplayPath.set(display, { kind: 'folder', realPath: n.path, name: n.name })
+      for (const c of n.children) visit(c, display)
       return
     }
     if (n.kind !== 'auth') return
-    const display = displayPathFor(n.path, null)
-    paths.push(display)
-    realToDisplay.set(n.path, display)
-    kindByDisplayPath.set(display, 'auth')
-    activators.set(display, () => onOpenFile(n))
-    filesByDisplayPath.set(display, { kind: 'auth', realPath: n.path, name: n.name })
-    const basename = display.split('/').pop()!
-    iconByBasename[basename] = TAP_ICONS.lock
+    const display = uniqueDisplayPath(parentDisplay, displaySegment(n.name, leafBasename(n.path, null)), used)
+    lookup.paths.push(display)
+    lookup.realToDisplay.set(n.path, display)
+    lookup.kindByDisplayPath.set(display, 'auth')
+    lookup.activators.set(display, () => onOpenFile(n))
+    lookup.filesByDisplayPath.set(display, { kind: 'auth', realPath: n.path, name: n.name })
+    lookup.iconByBasename[display.split('/').pop()!] = TAP_ICONS.lock
   }
 
-  for (const root of nodes) visit(root)
-  return { paths, realToDisplay, activators, iconByBasename, kindByDisplayPath, dirsByDisplayPath, filesByDisplayPath }
+  for (const root of nodes) visit(root, '')
+  return lookup
+}
+
+function newTreeLookup(): TreeLookup {
+  return {
+    paths: [],
+    realToDisplay: new Map<string, string>(),
+    activators: new Map<string, () => void>(),
+    iconByBasename: {},
+    kindByDisplayPath: new Map<string, RowKind>(),
+    dirsByDisplayPath: new Map<string, DirContext>(),
+    filesByDisplayPath: new Map<string, FileContext>(),
+  }
+}
+
+/** A node's spec name as a single path segment: '/' is illegal inside a segment so we
+ *  fold it to '-', and we fall back to the on-disk basename when the spec name is blank. */
+function displaySegment(name: string, fallback: string): string {
+  const seg = (name ?? '').replace(/[/\\]+/g, '-').trim()
+  return seg.length > 0 ? seg : fallback
+}
+
+/** Join `segment` under `parentDisplay`, suffixing " (n)" until the full path is unique
+ *  (case-insensitively) so the pierre tree never collapses two rows into one. */
+function uniqueDisplayPath(parentDisplay: string, segment: string, used: Set<string>): string {
+  const base = parentDisplay ? `${parentDisplay}/${segment}` : segment
+  let candidate = base
+  let i = 2
+  while (used.has(candidate.toLowerCase())) candidate = `${base} (${i++})`
+  used.add(candidate.toLowerCase())
+  return candidate
 }
 
 const REQUEST_TREE_PREFIX = 'collections/'
-/** Strip the leading prefix (if present) and the trailing Tap kind extension so the
- *  tree row reads as a plain filename. */
-function displayPathFor(realPath: string, stripPrefix: string | null): string {
+const REQUEST_TREE_UNSAFE_CSS = `${TAP_TREE_UNSAFE_CSS}
+  [data-item-type="folder"][aria-level="1"] [data-item-section="icon"]::after,
+  [data-item-type="folder"][data-item-path]:not([data-item-path*="/"]) [data-item-section="icon"]::after {
+    background-color: var(--mantine-color-grape-6);
+  }
+`
+/** The on-disk basename for a node, used as the fallback display segment when a node has
+ *  no spec name. Strips the leading prefix (if present) and the trailing Tap kind
+ *  extension so the row reads as a plain filename. */
+function leafBasename(realPath: string, stripPrefix: string | null): string {
   let p = realPath
   if (stripPrefix && p.startsWith(stripPrefix)) p = p.slice(stripPrefix.length)
   // Strip `.req.md` / `.auth.md` / `.env.md` / a bare `.md` — keep other extensions intact
   // so non-tap files (e.g. uploads under `.files/`) still read naturally.
-  return p.replace(/\.(req|auth|env)\.md$/i, '')
+  return p.replace(/\.(req|auth|env)\.md$/i, '').split('/').pop() ?? p
+}
+
+function dirPath(path: string): string {
+  return path.endsWith('/') ? path : `${path}/`
 }
 
 function EmptyState({ kind }: { kind: 'requests' | 'auth' }) {

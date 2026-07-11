@@ -51,6 +51,11 @@ interface Props {
    *  When false (default), the host's height is sized to fit all currently-visible rows so
    *  the tree behaves like a static block embedded in document flow. */
   fillParent?: boolean
+  /** Pierre's "compact folders" behaviour: a directory that holds no files but exactly one
+   *  subdirectory gets merged into a single `parent / child` row. Defaults to `false` here
+   *  because it merges a collection with its sole subfolder, which hides the collection row's
+   *  own context menu (e.g. "Edit collection…"). Set `true` to opt back in. */
+  flattenSingleChildDirectories?: boolean
   className?: string
   style?: React.CSSProperties
 }
@@ -66,7 +71,7 @@ export function PierreFileTree(props: Props) {
   const {
     paths, gitStatus, selectedPath, onSelectionChange, onActivateFile,
     initialExpansion = 'closed', icons, unsafeCSS, onContextMenuRequest,
-    dragAndDrop, fillParent = false, className, style,
+    dragAndDrop, fillParent = false, flattenSingleChildDirectories = false, className, style,
   } = props
 
   // useFileTree creates the model ONCE per component lifetime; we feed updates via
@@ -92,6 +97,7 @@ export function PierreFileTree(props: Props) {
     paths: initialPaths,
     gitStatus: initialGitStatus,
     initialExpansion,
+    flattenEmptyDirectories: flattenSingleChildDirectories,
     icons,
     unsafeCSS,
     // Enable pierre's context-menu composition so it renders the per-row ⋯ trigger

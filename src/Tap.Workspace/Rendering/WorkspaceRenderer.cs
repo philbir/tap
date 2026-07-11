@@ -155,7 +155,6 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
                     if (mode is "pat" or "" && auth.Fields.TryGetValue("token", out var ghToken) && !string.IsNullOrEmpty(ghToken))
                     {
                         headers["Authorization"] = "Bearer " + ghToken;
-                        headers["X-GitHub-Api-Version"] = "2022-11-28";
                     }
                     break;
                 }

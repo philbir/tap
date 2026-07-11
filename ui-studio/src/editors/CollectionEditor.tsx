@@ -3,7 +3,7 @@ import {
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
-  IconCode, IconLayoutDashboard, IconList, IconPlus, IconRocket, IconTrash, IconVariable,
+  IconCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRocket, IconTrash, IconVariable,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
@@ -12,7 +12,8 @@ import type {
 } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
-import { EditorShell } from './EditorShell'
+import { DocsEditor } from './DocsEditor'
+import { EditorShell, TabCount, TabDot } from './EditorShell'
 import { KvTable, type KvRow } from './KvTable'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
@@ -109,13 +110,16 @@ export function CollectionEditor({ path }: Props) {
         <Tabs.List mb="md">
           <Tabs.Tab value="general" leftSection={<IconLayoutDashboard size={14} />}>General</Tabs.Tab>
           <Tabs.Tab value="headers" leftSection={<IconList size={14} />}>
-            Headers {headerRows.length > 0 && <Text component="span" c="dimmed" ml={6}>{headerRows.length}</Text>}
+            Headers <TabCount count={headerRows.length} />
           </Tabs.Tab>
           <Tabs.Tab value="variables" leftSection={<IconVariable size={14} />}>
-            Variables {varRows.length > 0 && <Text component="span" c="dimmed" ml={6}>{varRows.length}</Text>}
+            Variables <TabCount count={varRows.length} />
           </Tabs.Tab>
           <Tabs.Tab value="stages" leftSection={<IconRocket size={14} />}>
-            Stages {stages.length > 0 && <Text component="span" c="dimmed" ml={6}>{stages.length}</Text>}
+            Stages <TabCount count={stages.length} />
+          </Tabs.Tab>
+          <Tabs.Tab value="docs" leftSection={<IconFileText size={14} />}>
+            Docs <TabDot active={!!spec.body && spec.body.trim().length > 0} />
           </Tabs.Tab>
           <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
         </Tabs.List>
@@ -236,6 +240,14 @@ export function CollectionEditor({ path }: Props) {
             onChangeStages={(next) => update('stages', next.length > 0 ? next : undefined)}
             onChangeDefault={(name) => update('defaultStage', name ?? undefined)}
             onOpenVariables={varsCtl.open}
+          />
+        </Tabs.Panel>
+
+        <Tabs.Panel value="docs">
+          <DocsEditor
+            value={spec.body ?? ''}
+            onChange={(v) => update('body', v.trim().length > 0 ? v : undefined)}
+            emptyHint="No docs yet. Describe this collection's API and how its requests are organized."
           />
         </Tabs.Panel>
 

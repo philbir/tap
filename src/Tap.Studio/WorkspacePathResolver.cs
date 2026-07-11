@@ -11,7 +11,7 @@ namespace Tap.Studio;
 ///   <item>Path must be non-empty after trimming and slash normalization.</item>
 ///   <item>No segment may be empty, <c>.</c>, or <c>..</c>.</item>
 ///   <item>The input must not be rooted (absolute, drive-rooted, or UNC).</item>
-///   <item>The canonical full path must stay strictly under the workspace's <c>.tap/</c>.</item>
+///   <item>The canonical full path must stay strictly under the selected workspace root.</item>
 /// </list>
 /// <para>The encoded-traversal case (e.g. <c>a/%2e%2e/x.req.md</c>) is not handled here —
 /// callers must hand in already URL-decoded paths. ASP.NET Core decodes route + query values
@@ -55,7 +55,7 @@ internal static class WorkspacePathResolver
             }
         }
 
-        var tapDir = Path.Combine(rootDirectory, WorkspaceLoader.TapDirectoryName);
+        var tapDir = rootDirectory;
         var combined = Path.GetFullPath(Path.Combine(tapDir, normalized));
         var tapDirFull = Path.GetFullPath(tapDir).TrimEnd(Path.DirectorySeparatorChar)
             + Path.DirectorySeparatorChar;
@@ -76,7 +76,7 @@ internal static class WorkspacePathResolver
         out string fullPath, out string error)
         => TryResolve(svc.RootDirectory, relative, out fullPath, out error);
 
-    /// <summary>Returns the <c>.tap/</c> directory for a workspace root.</summary>
+    /// <summary>Returns the workspace content directory for a selected root.</summary>
     public static string TapDirectory(string rootDirectory)
-        => Path.Combine(rootDirectory, WorkspaceLoader.TapDirectoryName);
+        => rootDirectory;
 }

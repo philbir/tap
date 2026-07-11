@@ -13,6 +13,7 @@ import type {
   EnvSummary,
   ExecutionResult,
   FileUploadResponse,
+  GitInfo,
   GitBranch,
   GitCommandResult,
   GitCommitResult,
@@ -42,6 +43,14 @@ import type {
   WorkspaceErrorDto,
   WorkspaceInfo,
   WorkspaceSpec,
+  AiStatus,
+  AiConfig,
+  SaveAiConfig,
+  AiCliDetect,
+  AiTestResult,
+  AiModels,
+  AiAssistRequest,
+  AiAssistResponse,
 } from './types'
 
 async function get<T>(path: string): Promise<T> {
@@ -79,6 +88,19 @@ async function put(path: string, body: unknown): Promise<void> {
   const text = await r.text()
   const json = text ? JSON.parse(text) : null
   throw new ApiError(r.status, json?.message ?? r.statusText, json)
+}
+
+/** PUT that returns a JSON body (used by endpoints that echo the saved resource). */
+async function putJson<T>(path: string, body: unknown): Promise<T> {
+  const r = await fetch(path, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  const text = await r.text()
+  const json = text ? JSON.parse(text) : null
+  if (!r.ok) throw new ApiError(r.status, json?.message ?? r.statusText, json)
+  return json as T
 }
 
 async function del(path: string): Promise<void> {
@@ -216,6 +238,10 @@ export const api = {
    * Returns an `AbortController` so the caller can cancel an in-flight stream — useful
    * when the user clicks Send again, navigates away, or hits the × close button on a
    * long-running SSE producer.
+   *
+   * Pass `spec` to send an unsaved (dirty) draft: the server builds the request from the
+   * spec in-memory — same emit pipeline as Save — without writing it to disk, then renders
+   * and executes that transient request instead of the on-disk file.
    */
   executeStream(
     path: string,
@@ -223,9 +249,10 @@ export const api = {
     stage: string | null,
     handler: (event: StreamEvent) => void,
     overrides?: Record<string, string>,
+    spec?: RequestSpec,
   ): AbortController {
     const ctrl = new AbortController()
-    void runExecuteStream(path, env, stage, overrides, handler, ctrl.signal)
+    void runExecuteStream(path, env, stage, overrides, handler, ctrl.signal, spec)
     return ctrl
   },
 
@@ -301,6 +328,8 @@ export const api = {
   gitFetch: () => post<GitCommandResult>('/api/git/fetch', {}),
   gitPull: () => post<GitCommandResult>('/api/git/pull', {}),
   gitPush: (setUpstream = true) => post<GitCommandResult>('/api/git/push', { setUpstream }),
+  gitInit: () => post<GitInfo>('/api/git/init', {}),
+  gitSetRemote: (name: string, url: string) => post<GitInfo>('/api/git/remote', { name, url }),
 
   // --- System settings -------------------------------------------------------------
 
@@ -311,6 +340,27 @@ export const api = {
 
   /** Save the providers + variables list atomically. */
   saveSystemSettings: (body: SaveSystemSettings) => put('/api/system/settings', body),
+
+  // --- AI assistant ----------------------------------------------------------------
+
+  /** Resolved status of the active AI provider — drives the assistant's gating + setup hint. */
+  aiStatus: () => get<AiStatus>('/api/ai/status'),
+  /** Read persisted AI config (provider + CLI paths + default model). */
+  aiConfig: () => get<AiConfig>('/api/ai/config'),
+  /** Persist AI config; returns the saved config. */
+  saveAiConfig: (body: SaveAiConfig) => putJson<AiConfig>('/api/ai/config', body),
+  /** Clear AI config, reverting to auto-detected defaults. */
+  clearAiConfig: () => del('/api/ai/config'),
+  /** Probe for the Copilot CLI (optionally at an explicit path). */
+  detectCopilotCli: (path: string | null) => post<AiCliDetect>('/api/ai/copilot-cli/detect', { path }),
+  /** Probe for the Claude Code CLI (optionally at an explicit path). */
+  detectClaudeCli: (path: string | null) => post<AiCliDetect>('/api/ai/claude-cli/detect', { path }),
+  /** Validate draft AI settings without persisting them. */
+  testAiConfig: (body: SaveAiConfig) => post<AiTestResult>('/api/ai/test', body),
+  /** List models exposed by the active provider. */
+  aiModels: () => get<AiModels>('/api/ai/models'),
+  /** Ask the assistant to craft/edit a request. Returns a reply + optional applyable spec. */
+  aiAssist: (body: AiAssistRequest) => post<AiAssistResponse>('/api/ai/assist', body),
 }
 
 // SSE — fires whenever the workspace files change on disk.
@@ -369,12 +419,13 @@ async function runExecuteStream(
   overrides: Record<string, string> | undefined,
   handler: (event: StreamEvent) => void,
   signal: AbortSignal,
+  spec?: RequestSpec,
 ): Promise<void> {
   try {
     const resp = await fetch('/api/execute/stream', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-      body: JSON.stringify({ path, env, stage, overrides }),
+      body: JSON.stringify({ path, env, stage, overrides, spec }),
       signal,
     })
     if (!resp.ok || !resp.body) {

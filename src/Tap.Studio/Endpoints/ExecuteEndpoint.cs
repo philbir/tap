@@ -32,7 +32,7 @@ public static class ExecuteEndpoint
         {
             try
             {
-                var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage).ConfigureAwait(false);
+                var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
 
                 // WebSocket path: open the connection, optionally send the body as the first

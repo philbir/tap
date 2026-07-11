@@ -1,4 +1,4 @@
-import { ActionIcon, Alert, Box, Button, Group, ScrollArea, TextInput, Title, Tooltip } from '@mantine/core'
+import { ActionIcon, Alert, Badge, Box, Button, Group, ScrollArea, TextInput, Title, Tooltip } from '@mantine/core'
 import { useHotkeys } from '@mantine/hooks'
 import {
   IconAlertCircle, IconDeviceFloppy, IconFolders, IconLayoutDashboard, IconLock, IconPencil,
@@ -12,11 +12,13 @@ import styles from './EditorShell.module.css'
 /**
  * Shared chrome for every per-kind editor. Layout slots:
  *   - `children`: primary editor pane (always present)
- *   - `rightPane`: optional secondary pane to the RIGHT (e.g. AuthEditor Execute panel)
+ *   - `rightPane`: optional secondary pane to the RIGHT (e.g. the request Assistant)
  *   - `bottomPane`: optional secondary pane BELOW (e.g. RequestEditor Response panel)
  * Both secondary panes use react-resizable-panels so the user can drag the divider. The
- * right pane defaults to ~30% width; the bottom pane to ~45% height. Persisting the
- * split sizes is wired through localStorage keyed by editor kind.
+ * right pane defaults to ~32% width; the bottom pane to ~45% height. When both are present
+ * the bottom pane nests inside the left column, so the editor + response stay usable while
+ * the right pane is open. Persisting the split sizes is wired through localStorage keyed by
+ * editor kind.
  *
  * Ctrl/Cmd+S triggers save when dirty.
  */
@@ -113,41 +115,51 @@ export function EditorShell(props: EditorShellProps) {
 
       <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {/*
-          Two split modes:
-            1. bottomPane → vertical split: editor on top, secondary below.
-            2. rightPane  → horizontal split: editor on left, secondary on right.
-            3. neither    → editor fills the whole area.
-          We never use both simultaneously.
+          Layout composes two independent splits:
+            - bottomPane → vertical split inside the editor column (editor on top, secondary below).
+            - rightPane  → horizontal split wrapping that column (column on left, secondary on right).
+          They can be active at the same time: e.g. the request editor keeps its Response viewer
+          below while the Assistant occupies the right pane.
         */}
-        {bottomPane ? (
-          <PanelGroup direction="vertical" autoSaveId={autoSaveId} style={{ height: '100%' }}>
-            <Panel defaultSize={55} minSize={20}>
-              <PrimaryPane>{children}</PrimaryPane>
-            </Panel>
-            <PanelResizeHandle className={styles.handleHorizontal} />
-            <Panel defaultSize={45} minSize={15}>
-              <Box style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                {bottomPane}
-              </Box>
-            </Panel>
-          </PanelGroup>
-        ) : rightPane ? (
-          <PanelGroup direction="horizontal" autoSaveId={autoSaveId} style={{ height: '100%' }}>
-            <Panel defaultSize={70} minSize={30}>
-              <PrimaryPane>{children}</PrimaryPane>
+        {rightPane ? (
+          <PanelGroup direction="horizontal" autoSaveId={`${autoSaveId}:right`} style={{ height: '100%' }}>
+            <Panel defaultSize={68} minSize={30}>
+              <EditorColumn autoSaveId={autoSaveId} bottomPane={bottomPane}>{children}</EditorColumn>
             </Panel>
             <PanelResizeHandle className={styles.handleVertical} />
-            <Panel defaultSize={30} minSize={20}>
+            <Panel defaultSize={32} minSize={20}>
               <Box style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-body)' }}>
                 {rightPane}
               </Box>
             </Panel>
           </PanelGroup>
         ) : (
-          <PrimaryPane>{children}</PrimaryPane>
+          <EditorColumn autoSaveId={autoSaveId} bottomPane={bottomPane}>{children}</EditorColumn>
         )}
       </Box>
     </Box>
+  )
+}
+
+/**
+ * The editor column: the primary pane, optionally split vertically with a bottom pane
+ * (the request Response viewer). Shared by the bare layout and the right-pane layout so the
+ * editor + response keep working when a right pane (Assistant) is open.
+ */
+function EditorColumn({ autoSaveId, bottomPane, children }: { autoSaveId: string; bottomPane?: ReactNode; children: ReactNode }) {
+  if (!bottomPane) return <PrimaryPane>{children}</PrimaryPane>
+  return (
+    <PanelGroup direction="vertical" autoSaveId={`${autoSaveId}:bottom`} style={{ height: '100%' }}>
+      <Panel defaultSize={55} minSize={20}>
+        <PrimaryPane>{children}</PrimaryPane>
+      </Panel>
+      <PanelResizeHandle className={styles.handleHorizontal} />
+      <Panel defaultSize={45} minSize={15}>
+        <Box style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+          {bottomPane}
+        </Box>
+      </Panel>
+    </PanelGroup>
   )
 }
 
@@ -234,12 +246,39 @@ function EditableTitle({ title, onChange }: { title: string; onChange?: (next: s
 }
 
 /** The scroll-wrapped main editor pane. Extracted so all three layout branches use the
- *  same chrome and overflow rules. */
+ *  same chrome and overflow rules. The `primaryPane` class full-bleeds a direct-child
+ *  Tabs list so its underline meets the editor edges (see EditorShell.module.css). */
 function PrimaryPane({ children }: { children: ReactNode }) {
   return (
     <ScrollArea h="100%" type="hover" scrollbarSize={8}>
-      <Box px="lg" py="md">{children}</Box>
+      <Box className={styles.primaryPane} px="lg" pt={4} pb="md">{children}</Box>
     </ScrollArea>
+  )
+}
+
+/** Small count badge shown on a Tabs.Tab (params, headers, variables, …). Renders nothing
+ *  when the count is zero so empty sections stay uncluttered. */
+export function TabCount({ count }: { count: number }) {
+  if (count <= 0) return null
+  return (
+    <Badge size="xs" variant="light" color="gray" radius="sm" ml={6} px={6} style={{ fontVariantNumeric: 'tabular-nums' }}>
+      {count}
+    </Badge>
+  )
+}
+
+/** Tiny presence dot shown on a Tabs.Tab when a section has content but no meaningful count
+ *  (e.g. an auth profile is selected, or docs have been written). */
+export function TabDot({ active, color = 'tap' }: { active: boolean; color?: string }) {
+  if (!active) return null
+  return (
+    <Box
+      component="span"
+      ml={6}
+      w={6}
+      h={6}
+      style={{ display: 'inline-block', borderRadius: '50%', background: `var(--mantine-color-${color}-6)`, flexShrink: 0 }}
+    />
   )
 }
 

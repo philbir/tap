@@ -4,22 +4,24 @@ using Tap.Workspace.Parsing;
 namespace Tap.Workspace;
 
 /// <summary>
-/// Loads a workspace from disk: walks <c>.tap/</c>, parses every file matching the known
-/// suffixes (§2), builds an in-memory index keyed by relative path and by id.
+/// Loads a workspace from disk: walks the selected workspace root folder, parses every file
+/// matching the known suffixes (§2), and builds an in-memory index keyed by relative path
+/// and by id.
 ///
 /// I/O lives here; <see cref="FileParser"/> stays pure so it can be unit-tested without disk.
 /// </summary>
 public sealed class WorkspaceLoader
 {
-    /// <summary>The conventional subfolder that holds every workspace artifact.</summary>
+    /// <summary>Legacy folder name used by older workspace layouts.</summary>
     public const string TapDirectoryName = ".tap";
+    public const string ManifestFileName = "tap.md";
 
-    /// <summary>Loads the workspace rooted at <paramref name="rootDirectory"/> (which must contain a <c>.tap/</c> child).</summary>
+    /// <summary>Loads the workspace rooted at <paramref name="rootDirectory"/>.</summary>
     public LoadedWorkspace Load(string rootDirectory)
     {
-        var tapDir = Path.Combine(rootDirectory, TapDirectoryName);
+        var tapDir = rootDirectory;
         if (!Directory.Exists(tapDir))
-            throw new DirectoryNotFoundException($"No '.tap' folder found at '{rootDirectory}'. Run 'tap init' to create a workspace.");
+            throw new DirectoryNotFoundException($"Workspace directory '{tapDir}' does not exist.");
 
         var files = new List<WorkspaceFile>();
         var errors = new List<WorkspaceError>();

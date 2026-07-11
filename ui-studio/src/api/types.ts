@@ -326,6 +326,88 @@ export interface SaveSystemSettings {
   variables: SystemVariable[]
 }
 
+// --- AI assistant types --------------------------------------------------------------
+
+export type AiProviderName = 'copilot' | 'claude-code'
+
+export interface AiStatus {
+  provider: AiProviderName
+  configured: boolean
+  model: string
+  setupHint: string
+}
+
+export interface AiConfig {
+  provider: AiProviderName | null
+  model: string | null
+  copilotCliPath: string | null
+  claudeCliPath: string | null
+  persisted: boolean
+}
+
+export interface SaveAiConfig {
+  provider: AiProviderName
+  model: string | null
+  copilotCliPath: string | null
+  claudeCliPath: string | null
+}
+
+export interface AiCliDetect {
+  ok: boolean
+  path: string | null
+  source: string
+  version: string | null
+  error: string | null
+}
+
+export interface AiTestResult {
+  ok: boolean
+  provider: AiProviderName
+  modelCount: number
+  sample: string[]
+  diagnostics: Record<string, string | null> | null
+  error: string | null
+}
+
+export interface AiModelOption {
+  id: string
+  name: string | null
+}
+
+export interface AiModels {
+  provider: AiProviderName
+  default: string
+  models: AiModelOption[]
+  error: string | null
+}
+
+export interface AiAssistMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface AiAssistRequest {
+  prompt: string
+  requestPath?: string
+  currentSpec?: RequestSpec
+  conversation?: AiAssistMessage[]
+  model?: string
+}
+
+export interface AiToolCall {
+  name: string
+  summary: string | null
+  success: boolean | null
+}
+
+export interface AiAssistResponse {
+  reply: string
+  proposal: RequestSpec | null
+  model: string
+  provider: AiProviderName
+  toolCalls: AiToolCall[]
+}
+
 // --- Auth flow types -----------------------------------------------------------------
 
 export interface OidcDiscovery {

@@ -64,6 +64,7 @@ public sealed record GitCommitResultDto(string Sha, string ShortSha, string Mess
 public sealed record GitCreateBranchDto(string Name, bool Checkout);
 public sealed record GitCheckoutDto(string Name);
 public sealed record GitPushRequestDto(bool SetUpstream);
+public sealed record GitSetRemoteDto(string Name, string Url);
 public sealed record GitCommandResultDto(int ExitCode, string Stdout, string Stderr);
 
 /// <summary>One subdirectory in the picker. <c>HasTap</c> is set when the entry already
@@ -465,6 +466,57 @@ public sealed record RequestSpecDto
 public sealed record HttpHeaderSpecDto(string Name, string Value);
 
 // -----------------------------------------------------------------------------------------
+// AI assistant — CLI detection/config + the request-crafting assist call.
+// -----------------------------------------------------------------------------------------
+
+/// <summary>Current resolved AI provider status for the status pill / gating.</summary>
+public sealed record AiStatusDto(string Provider, bool Configured, string Model, string SetupHint);
+
+/// <summary>Persisted AI config as shown in Settings. <c>Persisted</c> is false when nothing
+/// has been saved yet (the provider is running on auto-detected defaults).</summary>
+public sealed record AiConfigDto(string? Provider, string? Model, string? CopilotCliPath, string? ClaudeCliPath, bool Persisted);
+
+/// <summary>Body for saving AI config.</summary>
+public sealed record SaveAiConfigDto(string Provider, string? Model, string? CopilotCliPath, string? ClaudeCliPath);
+
+/// <summary>Body for the CLI-detect probes — an optional path override to test.</summary>
+public sealed record AiCliDetectRequestDto(string? Path);
+
+/// <summary>Result of probing a CLI binary.</summary>
+public sealed record AiCliDetectResponseDto(bool Ok, string? Path, string Source, string? Version, string? Error);
+
+/// <summary>Result of validating draft AI settings without persisting them.</summary>
+public sealed record AiTestResponseDto(
+    bool Ok, string Provider, int ModelCount, IReadOnlyList<string> Sample,
+    IReadOnlyDictionary<string, string?>? Diagnostics, string? Error);
+
+/// <summary>One model option for the model picker.</summary>
+public sealed record AiModelDto(string Id, string? Name);
+
+/// <summary>Models exposed by the active provider plus its default.</summary>
+public sealed record AiModelsResponseDto(string Provider, string Default, IReadOnlyList<AiModelDto> Models, string? Error);
+
+/// <summary>One prior turn in the assistant conversation.</summary>
+public sealed record AiAssistMessageDto(string Role, string Content);
+
+/// <summary>Request to the assistant. <c>CurrentSpec</c> is the live editor spec so edits are
+/// incremental; <c>Conversation</c> carries prior turns for multi-message threads.</summary>
+public sealed record AiAssistRequestDto(
+    string Prompt,
+    string? RequestPath,
+    RequestSpecDto? CurrentSpec,
+    IReadOnlyList<AiAssistMessageDto>? Conversation,
+    string? Model);
+
+/// <summary>Assistant reply. <c>Proposal</c> is non-null when the model emitted a
+/// <c>tap-request</c> block the UI can apply into the editor.</summary>
+public sealed record AiAssistResponseDto(
+    string Reply, RequestSpecDto? Proposal, string Model, string Provider, IReadOnlyList<AiToolCallDto> ToolCalls);
+
+/// <summary>A tool call the assistant ran, surfaced for display in the conversation.</summary>
+public sealed record AiToolCallDto(string Name, string? Summary, bool? Success);
+
+// -----------------------------------------------------------------------------------------
 // Variables — the cascade view + template compilation for the Studio's variable picker UI.
 // -----------------------------------------------------------------------------------------
 
@@ -571,7 +623,8 @@ public sealed record ExecuteRequestDto(
     string Path,
     string? Env,
     IReadOnlyDictionary<string, string>? Overrides,
-    string? Stage);
+    string? Stage,
+    RequestSpecDto? Spec = null);
 
 public sealed record ExecutionResultDto(
     int Status,
@@ -692,6 +745,7 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(GitCreateBranchDto))]
 [JsonSerializable(typeof(GitCheckoutDto))]
 [JsonSerializable(typeof(GitPushRequestDto))]
+[JsonSerializable(typeof(GitSetRemoteDto))]
 [JsonSerializable(typeof(GitCommandResultDto))]
 [JsonSerializable(typeof(DirectoryEntryDto))]
 [JsonSerializable(typeof(IReadOnlyList<DirectoryEntryDto>))]
@@ -724,6 +778,16 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(IReadOnlyList<TaggedItemDto>))]
 [JsonSerializable(typeof(WorkspaceSpecDto))]
 [JsonSerializable(typeof(RequestSpecDto))]
+[JsonSerializable(typeof(AiStatusDto))]
+[JsonSerializable(typeof(AiConfigDto))]
+[JsonSerializable(typeof(SaveAiConfigDto))]
+[JsonSerializable(typeof(AiCliDetectRequestDto))]
+[JsonSerializable(typeof(AiCliDetectResponseDto))]
+[JsonSerializable(typeof(AiTestResponseDto))]
+[JsonSerializable(typeof(AiModelsResponseDto))]
+[JsonSerializable(typeof(AiAssistRequestDto))]
+[JsonSerializable(typeof(AiAssistResponseDto))]
+[JsonSerializable(typeof(AiToolCallDto))]
 [JsonSerializable(typeof(RenderRequestDto))]
 [JsonSerializable(typeof(RenderedRequestDto))]
 [JsonSerializable(typeof(ExecuteRequestDto))]

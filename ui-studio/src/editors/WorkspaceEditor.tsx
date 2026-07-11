@@ -1,5 +1,5 @@
 import {
-  ActionIcon, Anchor, Badge, Box, Code, Group, Select, Stack, Tabs, Text, TextInput, Tooltip,
+  ActionIcon, Anchor, Badge, Box, Button, Code, Group, Select, Stack, Tabs, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import {
   IconBrandGit, IconCode, IconFolder, IconLayoutDashboard, IconPlug, IconPlus, IconX,
@@ -9,7 +9,7 @@ import { api, ApiError } from '../api/client'
 import type { KnownWorkspace, ProviderConfig, WorkspaceDetail, WorkspaceSpec } from '../api/types'
 import { modeForProviderType } from '../api/types'
 import { useTapStore } from '../store'
-import { EditorShell } from './EditorShell'
+import { EditorShell, TabCount } from './EditorShell'
 import { SourceTab } from './SourceTab'
 
 /** Variable-provider types the UI offers as quick-add. Custom types are still allowed
@@ -25,6 +25,7 @@ export function WorkspaceEditor() {
   const generation = useTapStore((s) => s.generation)
   const envs = useTapStore((s) => s.envs)
   const activeWs = useTapStore((s) => s.knownWorkspaces.find((w) => w.isActive) ?? null)
+  const reload = useTapStore((s) => s.reload)
 
   const [detail, setDetail] = useState<WorkspaceDetail | null>(null)
   const [spec, setSpec] = useState<WorkspaceSpec | null>(null)
@@ -101,14 +102,14 @@ export function WorkspaceEditor() {
         <Tabs.List mb="md">
           <Tabs.Tab value="general" leftSection={<IconLayoutDashboard size={14} />}>General</Tabs.Tab>
           <Tabs.Tab value="providers" leftSection={<IconPlug size={14} />}>
-            Variable Providers {workspaceProviders.length > 0 && <Text component="span" c="dimmed" ml={6}>{workspaceProviders.length}</Text>}
+            Variable Providers <TabCount count={workspaceProviders.length} />
           </Tabs.Tab>
           <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
         </Tabs.List>
 
         <Tabs.Panel value="general">
           <Stack gap="md" maw={760}>
-            {activeWs && <LocationCard workspace={activeWs} />}
+            {activeWs && <LocationCard workspace={activeWs} onWorkspaceChanged={() => void reload()} />}
             <TextInput
               label="Name"
               value={spec.name}
@@ -188,8 +189,57 @@ export function WorkspaceEditor() {
  *  if any. The path comes from the active <see cref="KnownWorkspace"/>; git info was
  *  resolved server-side via LibGit2Sharp and refreshed on every <c>/api/workspaces</c>
  *  list call, so branch + remote URL stay current as the user works. */
-function LocationCard({ workspace }: { workspace: KnownWorkspace }) {
+function LocationCard({ workspace, onWorkspaceChanged }: { workspace: KnownWorkspace; onWorkspaceChanged: () => Promise<void> | void }) {
   const git = workspace.git
+  const [gitError, setGitError] = useState<string | null>(null)
+  const [initBusy, setInitBusy] = useState(false)
+  const [remoteBusy, setRemoteBusy] = useState(false)
+  const [remoteName, setRemoteName] = useState('origin')
+  const [remoteUrl, setRemoteUrl] = useState('')
+  const [remoteNameTouched, setRemoteNameTouched] = useState(false)
+  const [remoteUrlTouched, setRemoteUrlTouched] = useState(false)
+
+  useEffect(() => {
+    const origin = git?.remotes.find((r) => r.name === 'origin') ?? git?.remotes[0] ?? null
+    setRemoteName(origin?.name ?? 'origin')
+    setRemoteUrl(origin?.url ?? '')
+    setRemoteNameTouched(false)
+    setRemoteUrlTouched(false)
+  }, [workspace.path, git?.root, git?.branch, git?.remotes])
+
+  async function initRepository() {
+    setInitBusy(true); setGitError(null)
+    try {
+      await api.gitInit()
+      await onWorkspaceChanged()
+    } catch (e) {
+      setGitError(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setInitBusy(false)
+    }
+  }
+
+  async function saveRemote() {
+    const name = remoteName.trim()
+    const url = remoteUrl.trim()
+    if (!name || !url) return
+    setRemoteBusy(true); setGitError(null)
+    try {
+      await api.gitSetRemote(name, url)
+      await onWorkspaceChanged()
+      setRemoteUrlTouched(false)
+      setRemoteNameTouched(false)
+    } catch (e) {
+      setGitError(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setRemoteBusy(false)
+    }
+  }
+
+  const hasRemoteWithName = git?.remotes.some((r) => r.name === remoteName.trim()) ?? false
+  const remoteDirty = remoteNameTouched || remoteUrlTouched
+  const canSaveRemote = remoteName.trim().length > 0 && remoteUrl.trim().length > 0 && remoteDirty
+
   return (
     <Box
       p="sm"
@@ -243,12 +293,46 @@ function LocationCard({ workspace }: { workspace: KnownWorkspace }) {
             ) : (
               <Text size="xs" c="dimmed">No remotes configured.</Text>
             )}
+            <Stack gap={6} mt={8}>
+              <Group gap="xs" wrap="nowrap">
+                <TextInput
+                  label="Remote name"
+                  size="xs"
+                  value={remoteName}
+                  onChange={(e) => { setRemoteName(e.currentTarget.value); setRemoteNameTouched(true) }}
+                  w={120}
+                />
+                <TextInput
+                  label="Remote URL"
+                  size="xs"
+                  placeholder="https://github.com/org/repo.git"
+                  value={remoteUrl}
+                  onChange={(e) => { setRemoteUrl(e.currentTarget.value); setRemoteUrlTouched(true) }}
+                  style={{ flex: 1 }}
+                />
+              </Group>
+              <Group justify="flex-end">
+                <Button size="xs" variant="light" onClick={() => void saveRemote()} loading={remoteBusy} disabled={!canSaveRemote}>
+                  {hasRemoteWithName ? 'Update remote' : 'Add remote'}
+                </Button>
+              </Group>
+            </Stack>
           </>
         ) : (
-          <Group gap="xs" mt={6} wrap="nowrap">
-            <IconBrandGit size={14} stroke={1.7} style={{ opacity: 0.4 }} />
-            <Text size="xs" c="dimmed">Not under git version control.</Text>
-          </Group>
+          <Stack gap={6} mt={6}>
+            <Group gap="xs" wrap="nowrap">
+              <IconBrandGit size={14} stroke={1.7} style={{ opacity: 0.4 }} />
+              <Text size="xs" c="dimmed">Not under git version control.</Text>
+            </Group>
+            <Group justify="flex-end">
+              <Button size="xs" variant="light" onClick={() => void initRepository()} loading={initBusy}>
+                Init git repository
+              </Button>
+            </Group>
+          </Stack>
+        )}
+        {gitError && (
+          <Text size="xs" c="red">{gitError}</Text>
         )}
       </Stack>
     </Box>

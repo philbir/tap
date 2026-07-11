@@ -3,7 +3,7 @@ import { IconCode, IconVariable } from '@tabler/icons-react'
 import { useState } from 'react'
 import { api } from '../api/client'
 import type { EnvDetail, EnvSpec } from '../api/types'
-import { EditorShell } from './EditorShell'
+import { EditorShell, TabCount } from './EditorShell'
 import { KvTable } from './KvTable'
 import { SourceTab } from './SourceTab'
 import { useSpecEditor } from './useSpecEditor'
@@ -51,7 +51,7 @@ export function EnvEditor({ path }: Props) {
       <Tabs value={tab} onChange={setTab}>
         <Tabs.List mb="md">
           <Tabs.Tab value="variables" leftSection={<IconVariable size={14} />}>
-            Variables {rows.length > 0 && <Text component="span" c="dimmed" ml={6}>{rows.length}</Text>}
+            Variables <TabCount count={rows.length} />
           </Tabs.Tab>
           <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
         </Tabs.List>

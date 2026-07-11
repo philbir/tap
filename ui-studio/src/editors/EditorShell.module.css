@@ -37,3 +37,12 @@
   width: 2px;
   cursor: col-resize;
 }
+
+/* Full-bleed the editor's primary Tabs list so its underline runs edge-to-edge instead of
+   stopping at the pane's horizontal padding. The negative inline margin pulls the list out
+   to the pane edges; the matching inline padding keeps the tabs aligned with the content
+   below. Only the direct-child (top-level) Tabs is targeted so nested tab bars are untouched. */
+.primaryPane > :global(.mantine-Tabs-root) > :global(.mantine-Tabs-list) {
+  margin-inline: calc(var(--mantine-spacing-lg) * -1);
+  padding-inline: var(--mantine-spacing-lg);
+}

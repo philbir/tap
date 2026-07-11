@@ -73,6 +73,7 @@ public static class StudioHost
 
         builder.Services.AddSingleton(options);
         builder.Services.AddSingleton<SystemSettingsStore>();
+        builder.Services.AddSingleton<Tap.Studio.Ai.AiProviderFactory>();
         builder.Services.AddSingleton<KnownWorkspaceStore>();
         builder.Services.AddSingleton<WorkspaceService>();
         builder.Services.AddSingleton<GitService>();
@@ -134,6 +135,7 @@ public static class StudioHost
         VariableEndpoints.Map(app);
         ProviderEndpoints.Map(app);
         SystemEndpoints.Map(app);
+        AiEndpoints.Map(app);
 
         // Serve the bundled SPA. Tap.Studio.csproj's BuildStudioUi target copies
         // ui-studio/dist/** into wwwroot at build time. In Aspire dev where Vite

@@ -87,6 +87,15 @@ if (bool.TryParse(builder.Configuration["RunDesktop"], out var runDesktop) && ru
     var desktopDir = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "..", "src", "desktop"));
     builder.AddExecutable("studio-desktop", "yarn", desktopDir, "dev")
         .WithEnvironment("STUDIO_DESKTOP_URL", studioUi.GetEndpoint("http"))
+        // DCP spawns executables with a sanitized environment; forward the real
+        // HOME so corepack (~/.cache), cargo (~/.cargo) and rustup (~/.rustup)
+        // resolve for `tauri dev`. (src/desktop also uses the node-modules linker
+        // so Yarn doesn't depend on a HOME-derived global PnP cache.)
+        .WithEnvironment(ctx =>
+        {
+            if (Environment.GetEnvironmentVariable("HOME") is { Length: > 0 } home)
+                ctx.EnvironmentVariables["HOME"] = home;
+        })
         .WaitFor(studioUi);
 }
 

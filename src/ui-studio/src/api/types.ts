@@ -618,6 +618,22 @@ export interface ExecutionResult {
 
 export type AuthStatusSource = 'cached' | 'expired' | 'static' | 'missing' | 'none'
 
+/** A launchable profile within a browser (Chrome/Edge dir, Firefox profile name). */
+export interface BrowserProfile {
+  key: string
+  label: string
+  isDefault: boolean
+}
+
+/** A browser installed on the host, with its discoverable profiles. Mirrors BrowserOptionDto. */
+export interface BrowserOption {
+  id: string
+  label: string
+  available: boolean
+  supportsProfiles: boolean
+  profiles: BrowserProfile[]
+}
+
 export interface AuthStatus {
   /** Resolved auth profile path, or null when no auth is attached. */
   path: string | null

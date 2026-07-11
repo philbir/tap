@@ -10,7 +10,7 @@ import {
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { AuthDetail, AuthExecuteResponse, AuthSpec, VariableContext } from '../api/types'
-import { openLoginUrl } from '../desktop/desktopUpdater'
+import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { decodeJwt } from '../workspace/jwt'
@@ -988,6 +988,7 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
   const [launchMode, setLaunchMode] = useState<'open' | 'copy' | null>(null)
   const pollRef = useRef<number | null>(null)
   const clipboard = useClipboard({ timeout: 2000 })
+  const { browsers, pref, setPref, openLogin } = useBrowserLaunch()
 
   useEffect(() => {
     const onMessage = (ev: MessageEvent) => {
@@ -1042,7 +1043,7 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
   }
 
   function openAuthWindow(loginUrl: string) {
-    openLoginUrl(loginUrl)
+    void openLogin(loginUrl).catch((e) => setError(e instanceof Error ? e.message : String(e)))
     setLaunchMode('open')
   }
   function copyLoginUrl(loginUrl: string) {
@@ -1139,13 +1140,14 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
                 Open the auth window here, or copy the URL and paste it into another browser.
                 We'll keep listening for the callback either way.
               </Text>
+              <BrowserPicker browsers={browsers} pref={pref} onChange={setPref} />
               <Group gap="xs" mt={4}>
                 <Button
                   size="xs"
                   leftSection={<IconExternalLink size={12} />}
                   onClick={() => openAuthWindow(result.loginUrl!)}
                 >
-                  Open auth window
+                  {pref.browser ? 'Open in browser' : 'Open auth window'}
                 </Button>
                 <Button
                   size="xs"

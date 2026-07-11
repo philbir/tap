@@ -4,6 +4,7 @@ import type {
   AuthSpec,
   AuthSummary,
   BrowseResponse,
+  BrowserOption,
   CollectionDetail,
   CollectionSpec,
   CollectionSummary,
@@ -273,6 +274,13 @@ export const api = {
   /** Remove the cached runtime token for an auth profile in the active workspace. The
    *  next request Send will fire without an Authorization header until the flow runs again. */
   clearAuthToken: (path: string) => post<void>('/api/auth/clear', { path }),
+
+  /** Browsers + profiles installed on the host (for the OAuth "open sign-in" picker). */
+  browsers: () => get<BrowserOption[]>('/api/browsers'),
+
+  /** Open a URL in a specific browser + profile on the host (null browser = system default). */
+  openInBrowser: (url: string, browser: string | null, profile: string | null) =>
+    post<null>('/api/browsers/open', { url, browser, profile }),
 
   /** Studio-owned OAuth redirect URI. The server derives it from its own base URL so
    *  the value follows whichever port Aspire allocates. The UI displays it read-only and

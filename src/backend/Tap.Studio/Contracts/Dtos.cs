@@ -826,7 +826,25 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(SystemVariableDto))]
 [JsonSerializable(typeof(IReadOnlyList<SystemProviderDto>))]
 [JsonSerializable(typeof(IReadOnlyList<SystemVariableDto>))]
+[JsonSerializable(typeof(IReadOnlyList<BrowserOptionDto>))]
+[JsonSerializable(typeof(OpenBrowserRequestDto))]
 [JsonSourceGenerationOptions(WriteIndented = false, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 public partial class StudioJson : JsonSerializerContext
 {
 }
+
+// ----- Browser discovery (OAuth "open sign-in" browser + profile picker) -----
+
+/// <summary>A launchable profile within a browser (e.g. a Chrome "Default"/"Profile 1" dir).</summary>
+public sealed record BrowserProfileDto(string Key, string Label, bool IsDefault);
+
+/// <summary>A browser installed on the host, with its discoverable profiles.</summary>
+public sealed record BrowserOptionDto(
+    string Id,
+    string Label,
+    bool Available,
+    bool SupportsProfiles,
+    IReadOnlyList<BrowserProfileDto> Profiles);
+
+/// <summary>Request to open a URL in a specific browser + profile (both null = system default).</summary>
+public sealed record OpenBrowserRequestDto(string Url, string? Browser, string? Profile);

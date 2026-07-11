@@ -10,7 +10,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { AuthExecuteResponse, AuthStatus, AuthSummary, ExecutionResult, RenderedRequest, SseEvent, WsFrame } from '../api/types'
-import { openLoginUrl } from '../desktop/desktopUpdater'
+import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
 
@@ -1236,6 +1236,7 @@ function AuthRunPanel({ status }: { status: AuthStatus }) {
   const [cleared, setCleared] = useState(false)
   const pollRef = useRef<number | null>(null)
   const clipboard = useClipboard({ timeout: 2000 })
+  const { browsers, pref, setPref, openLogin } = useBrowserLaunch()
 
   const stopPolling = useCallback(() => {
     if (pollRef.current !== null) { window.clearInterval(pollRef.current); pollRef.current = null }
@@ -1300,7 +1301,7 @@ function AuthRunPanel({ status }: { status: AuthStatus }) {
   }
 
   function openAuthWindow(loginUrl: string) {
-    openLoginUrl(loginUrl)
+    void openLogin(loginUrl).catch((e) => setError(e instanceof Error ? e.message : String(e)))
     setLaunchMode('open')
   }
   function copyLoginUrl(loginUrl: string) {
@@ -1385,9 +1386,10 @@ function AuthRunPanel({ status }: { status: AuthStatus }) {
             <Text size="xs" c="dimmed">
               Open the auth window here, or copy the URL and paste it into another browser. We'll keep listening for the callback.
             </Text>
+            <BrowserPicker browsers={browsers} pref={pref} onChange={setPref} />
             <Group gap="xs" mt={4}>
               <Button size="xs" leftSection={<IconExternalLink size={12} />} onClick={() => openAuthWindow(result.loginUrl!)}>
-                Open auth window
+                {pref.browser ? 'Open in browser' : 'Open auth window'}
               </Button>
               <Button
                 size="xs"

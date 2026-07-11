@@ -135,6 +135,7 @@ public static class StudioHost
         VariableEndpoints.Map(app);
         ProviderEndpoints.Map(app);
         SystemEndpoints.Map(app);
+        BrowserEndpoints.Map(app);
         AiEndpoints.Map(app);
 
         // Serve the bundled SPA. Tap.Studio.csproj's BuildStudioUi target copies

@@ -27,6 +27,29 @@ src/desktop/
         └── lib.rs          # sidecar spawn + handshake + deep-link forwarder
 ```
 
+## Dev modes
+
+The shell talks to a backend chosen at launch via the `STUDIO_DESKTOP_URL` env var:
+
+- **Packaged / standalone** (`STUDIO_DESKTOP_URL` unset) — spawns the bundled
+  self-contained Tap.Studio sidecar and points the webview at its
+  `studio.ready` URL. This is what a shipped `.app`/`.msi` does.
+- **Aspire dev** (`STUDIO_DESKTOP_URL` set) — skips the sidecar and points the
+  webview straight at the URL, reusing an already-running backend.
+
+The `Studio.AppHost` can launch the shell for you so `aspire run` brings up the
+whole desktop loop (demo-api + studio-api + studio-ui + the native window). It's
+off by default; enable with `RunDesktop=true`:
+
+```bash
+cd samples && RunDesktop=true aspire run
+```
+
+That adds a `studio-desktop` resource which runs `yarn --cwd src/desktop dev`
+with `STUDIO_DESKTOP_URL` set to the studio-ui endpoint — so you get Vite hot
+reload and the same Aspire-managed backend the browser dev loop uses. No
+`compile-server` needed in this mode.
+
 ## Build
 
 Prereqs: Rust toolchain (`rustup default stable`), Node 22 + yarn 4 (`corepack enable`),

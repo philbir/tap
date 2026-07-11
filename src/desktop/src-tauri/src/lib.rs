@@ -64,6 +64,97 @@ struct StudioReady {
     url: String,
 }
 
+/// Aspire dev path: the studio-api / studio-ui are already running, so point the
+/// webview at the URL Aspire passed via `STUDIO_DESKTOP_URL` and record it for the
+/// deep-link handler. No sidecar is spawned.
+fn attach_external(app: &tauri::App, url: String) {
+    *app.state::<StudioApi>().0.lock().unwrap() = Some(url.clone());
+    if let Some(window) = app.get_webview_window("main") {
+        let escaped = url.replace('\'', "\\'");
+        let _ = window.eval(&format!("window.location.replace('{escaped}')"));
+        let _ = window.set_title("Tap Studio");
+        let _ = window.emit("studio:ready", &url);
+    }
+    eprintln!("[studio] attached to external backend at {url}");
+}
+
+/// Packaged path: spawn the bundled, self-contained Tap.Studio sidecar and drive
+/// the webview from its `studio.ready` stdout handshake.
+fn spawn_sidecar(app: &tauri::App) {
+    // The sidecar is configured with Studio:Port=0 so Kestrel asks the OS for a
+    // free port — avoids collisions with any running dev instance — and
+    // TAP_STUDIO_EMIT_READY=1 so the host echoes a single JSON line on stdout once
+    // Kestrel finishes binding.
+    let sidecar = app
+        .shell()
+        .sidecar("tap-studio")
+        .expect("sidecar binary missing — run scripts/build-desktop.sh first");
+
+    // The Studio binary is published with PublishSingleFile, so its
+    // AppContext.BaseDirectory points at a temp extraction dir, not at wwwroot.
+    // The build script ships wwwroot as a bundle resource — resolve its absolute
+    // path now and forward it to Kestrel via Studio__WebRoot. In dev
+    // (BaseDirectory::Resource) maps to src-tauri/, so the path becomes
+    // src-tauri/binaries/wwwroot.
+    let web_root = app
+        .path()
+        .resolve("binaries/wwwroot", tauri::path::BaseDirectory::Resource)
+        .ok()
+        .map(|p| p.to_string_lossy().to_string());
+    if web_root.is_none() {
+        eprintln!("[studio] could not resolve wwwroot resource — UI will be blank");
+    }
+
+    let mut cmd = sidecar
+        .env("TAP_STUDIO_EMIT_READY", "1")
+        .env("TAP_STUDIO_DESKTOP", "1")
+        .env("Studio__Port", "0")
+        .env("Studio__Host", "localhost");
+    if let Some(root) = &web_root {
+        cmd = cmd.env("Studio__WebRoot", root);
+    }
+
+    let (mut rx, _child) = cmd.spawn().expect("failed to spawn Tap.Studio sidecar");
+
+    // Drain stdout. The first line that parses as StudioReady gives us the URL to
+    // load. After that, lines are logged for triage.
+    let handle = app.handle().clone();
+    tauri::async_runtime::spawn(async move {
+        let mut navigated = false;
+        while let Some(event) = rx.recv().await {
+            match event {
+                CommandEvent::Stdout(bytes) => {
+                    let line = String::from_utf8_lossy(&bytes);
+                    let trimmed = line.trim();
+                    if !navigated {
+                        if let Ok(ready) = serde_json::from_str::<StudioReady>(trimmed) {
+                            *handle.state::<StudioApi>().0.lock().unwrap() =
+                                Some(ready.url.clone());
+                            if let Some(window) = handle.get_webview_window("main") {
+                                let escaped = ready.url.replace('\'', "\\'");
+                                let _ =
+                                    window.eval(&format!("window.location.replace('{escaped}')"));
+                                let _ = window.set_title("Tap Studio");
+                                let _ = window.emit("studio:ready", &ready.url);
+                                navigated = true;
+                            }
+                            continue;
+                        }
+                    }
+                    eprintln!("[studio] {trimmed}");
+                }
+                CommandEvent::Stderr(bytes) => {
+                    eprintln!("[studio:err] {}", String::from_utf8_lossy(&bytes).trim());
+                }
+                CommandEvent::Terminated(payload) => {
+                    eprintln!("[studio] sidecar exited: code={:?}", payload.code);
+                }
+                _ => {}
+            }
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -73,85 +164,19 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![check_for_update, install_update])
         .manage(StudioApi::default())
         .setup(|app| {
-            // 1. Spawn the bundled Tap.Studio sidecar.
-            //
-            // The sidecar is configured with Studio:Port=0 so Kestrel asks the
-            // OS for a free port — avoids collisions with any running dev
-            // instance — and TAP_STUDIO_EMIT_READY=1 so the host echoes a
-            // single JSON line on stdout once Kestrel finishes binding.
-            let sidecar = app
-                .shell()
-                .sidecar("tap-studio")
-                .expect("sidecar binary missing — run scripts/build-desktop.sh first");
-
-            // The Studio binary is published with PublishSingleFile, so its
-            // AppContext.BaseDirectory points at a temp extraction dir, not at
-            // wwwroot. The build script ships wwwroot as a bundle resource —
-            // resolve its absolute path now and forward it to Kestrel via
-            // Studio__WebRoot. In dev (BaseDirectory::Resource) maps to
-            // src-tauri/, so the path becomes src-tauri/binaries/wwwroot.
-            let web_root = app
-                .path()
-                .resolve("binaries/wwwroot", tauri::path::BaseDirectory::Resource)
+            // Decide the backend the webview talks to. Under Aspire dev the
+            // studio-api / studio-ui are already running, so STUDIO_DESKTOP_URL
+            // points the webview straight at them and we skip the bundled
+            // sidecar. Packaged builds leave it unset and self-host the sidecar.
+            match std::env::var("STUDIO_DESKTOP_URL")
                 .ok()
-                .map(|p| p.to_string_lossy().to_string());
-            if web_root.is_none() {
-                eprintln!("[studio] could not resolve wwwroot resource — UI will be blank");
+                .filter(|u| !u.trim().is_empty())
+            {
+                Some(url) => attach_external(app, url),
+                None => spawn_sidecar(app),
             }
 
-            let mut cmd = sidecar
-                .env("TAP_STUDIO_EMIT_READY", "1")
-                .env("TAP_STUDIO_DESKTOP", "1")
-                .env("Studio__Port", "0")
-                .env("Studio__Host", "localhost");
-            if let Some(root) = &web_root {
-                cmd = cmd.env("Studio__WebRoot", root);
-            }
-
-            let (mut rx, _child) = cmd
-                .spawn()
-                .expect("failed to spawn Tap.Studio sidecar");
-
-            // 2. Drain stdout. The first line that parses as StudioReady gives
-            //    us the URL to load. After that, lines are logged for triage.
-            let handle = app.handle().clone();
-            tauri::async_runtime::spawn(async move {
-                let mut navigated = false;
-                while let Some(event) = rx.recv().await {
-                    match event {
-                        CommandEvent::Stdout(bytes) => {
-                            let line = String::from_utf8_lossy(&bytes);
-                            let trimmed = line.trim();
-                            if !navigated {
-                                if let Ok(ready) = serde_json::from_str::<StudioReady>(trimmed) {
-                                    *handle.state::<StudioApi>().0.lock().unwrap() =
-                                        Some(ready.url.clone());
-                                    if let Some(window) = handle.get_webview_window("main") {
-                                        let escaped = ready.url.replace('\'', "\\'");
-                                        let _ = window.eval(&format!(
-                                            "window.location.replace('{escaped}')"
-                                        ));
-                                        let _ = window.set_title("Tap Studio");
-                                        let _ = window.emit("studio:ready", &ready.url);
-                                        navigated = true;
-                                    }
-                                    continue;
-                                }
-                            }
-                            eprintln!("[studio] {trimmed}");
-                        }
-                        CommandEvent::Stderr(bytes) => {
-                            eprintln!("[studio:err] {}", String::from_utf8_lossy(&bytes).trim());
-                        }
-                        CommandEvent::Terminated(payload) => {
-                            eprintln!("[studio] sidecar exited: code={:?}", payload.code);
-                        }
-                        _ => {}
-                    }
-                }
-            });
-
-            // 3. Wire the OAuth deep-link callback. When the browser-side
+            // Wire the OAuth deep-link callback. When the browser-side
             //    authorize redirect lands on tap-studio://callback?... we
             //    forward the query string to the in-process Studio's
             //    /api/auth/callback. The webview's same-origin SPA then sees

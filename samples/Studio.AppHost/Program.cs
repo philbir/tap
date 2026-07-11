@@ -69,10 +69,25 @@ demoApi.WithEnvironment("STUDIO_CALLBACK_URL",
 
 // Vite UI — VITE_STUDIO_API_URL is resolved at start time from the studio-api endpoint.
 var uiDir = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "..", "src", "ui-studio"));
-builder.AddViteApp("studio-ui", uiDir, "dev")
+var studioUi = builder.AddViteApp("studio-ui", uiDir, "dev")
     .WithYarn()
     .WithEnvironment("VITE_STUDIO_API_URL", studio.GetEndpoint("http"))
     .WaitFor(studio)
     .WithExternalHttpEndpoints();
+
+// Optionally launch the Tauri desktop shell as a native window over the running
+// studio-ui, so `aspire run` can bring up the whole desktop dev loop. Off by
+// default — enable with RunDesktop=true (env var, user-secrets, or appsettings):
+//   RunDesktop=true aspire run
+// The shell reads STUDIO_DESKTOP_URL, skips its bundled sidecar, and points the
+// webview straight at studio-ui — so you get Vite hot reload and the same
+// Aspire-managed studio-api/demo-api the browser dev loop uses.
+if (bool.TryParse(builder.Configuration["RunDesktop"], out var runDesktop) && runDesktop)
+{
+    var desktopDir = Path.GetFullPath(Path.Combine(builder.AppHostDirectory, "..", "..", "src", "desktop"));
+    builder.AddExecutable("studio-desktop", "yarn", desktopDir, "dev")
+        .WithEnvironment("STUDIO_DESKTOP_URL", studioUi.GetEndpoint("http"))
+        .WaitFor(studioUi);
+}
 
 builder.Build().Run();

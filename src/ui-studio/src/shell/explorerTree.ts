@@ -22,11 +22,27 @@ export interface ExplorerNode {
   slug?: string
 }
 
+/** Locate the `collections` directory in the tree. The workspace loader roots the
+ *  tree at the workspace dir, so `collections` sits under a `.tap` wrapper node
+ *  (path `.tap/collections`); older trees exposed it at the top level. Handle both. */
+function findCollectionsDir(nodes: TreeNode[]): TreeNode | undefined {
+  for (const n of nodes) {
+    if (n.kind !== 'directory') continue
+    const p = n.path.toLowerCase()
+    if (p === 'collections' || p === '.tap/collections') return n
+    if (p === '.tap') {
+      const inner = findCollectionsDir(n.children)
+      if (inner) return inner
+    }
+  }
+  return undefined
+}
+
 /** Build the Requests view: one row per `collections/<slug>/` directory, with nested
  *  folders and requests below. The metadata file `_collection.md` is hidden — its
  *  display name surfaces on the collection node. */
 export function buildRequestsView(tree: TreeNode[]): ExplorerNode[] {
-  const collectionsRoot = tree.find((n) => n.kind === 'directory' && n.path.toLowerCase() === 'collections')
+  const collectionsRoot = findCollectionsDir(tree)
   if (!collectionsRoot) return []
 
   const collections: ExplorerNode[] = []

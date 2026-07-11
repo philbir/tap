@@ -18,6 +18,15 @@ public static class CollectionEndpoints
 {
     private const string CollectionsRoot = "collections";
 
+    // WorkspaceLoader scans from the workspace root, so every workspace-relative path
+    // carries the ".tap/" segment and is resolved against the root (WorkspacePathResolver
+    // does NOT add it). Collections live at ".tap/collections/<slug>/". Build paths through
+    // these helpers so FindByPath / ReadSource / Save / TryResolve all resolve correctly.
+    private static string CollectionDirRel(string slug) =>
+        $"{WorkspaceLoader.TapDirectoryName}/{CollectionsRoot}/{slug}";
+    private static string CollectionFileRel(string slug) =>
+        $"{CollectionDirRel(slug)}/_collection.md";
+
     public static void Map(IEndpointRouteBuilder app)
     {
         var g = app.MapGroup("/api/collections");
@@ -43,7 +52,7 @@ public static class CollectionEndpoints
                 seenSlugs.Add(slug);
             }
 
-            var collectionsRoot = Path.Combine(ws.TapDirectory, CollectionsRoot);
+            var collectionsRoot = Path.Combine(ws.TapDirectory, WorkspaceLoader.TapDirectoryName, CollectionsRoot);
             if (Directory.Exists(collectionsRoot))
             {
                 foreach (var dir in Directory.EnumerateDirectories(collectionsRoot))
@@ -62,7 +71,7 @@ public static class CollectionEndpoints
         {
             if (!IsValidSlug(slug)) return Results.NotFound();
             var ws = svc.Current;
-            var path = $"{CollectionsRoot}/{slug}/_collection.md";
+            var path = CollectionFileRel(slug);
             if (ws.FindByPath(path) is CollectionFile c)
             {
                 return Results.Ok(new CollectionDetailDto(
@@ -85,7 +94,7 @@ public static class CollectionEndpoints
                     DefaultStage: c.DefaultStage));
             }
 
-            var dirAbs = Path.Combine(ws.TapDirectory, CollectionsRoot, slug);
+            var dirAbs = Path.Combine(ws.TapDirectory, WorkspaceLoader.TapDirectoryName, CollectionsRoot, slug);
             if (!Directory.Exists(dirAbs)) return Results.NotFound();
             return Results.Ok(new CollectionDetailDto(
                 Slug: slug,
@@ -109,13 +118,13 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
                     "Collection slug must be alphanumeric, dashes, or underscores.", null, null));
 
-            if (!WorkspacePathResolver.TryResolve(svc, $"{CollectionsRoot}/{spec.Slug}",
+            if (!WorkspacePathResolver.TryResolve(svc, CollectionDirRel(spec.Slug),
                     out var dirAbs, out var dirErr))
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
             Directory.CreateDirectory(dirAbs);
 
             var content = CollectionSpecEmitter.ToFileSource(spec);
-            var relPath = $"{CollectionsRoot}/{spec.Slug}/_collection.md";
+            var relPath = CollectionFileRel(spec.Slug);
             try { svc.Save(relPath, content); return Results.NoContent(); }
             catch (WorkspaceParseException ex)
             {
@@ -144,7 +153,7 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
                     $"Derived slug '{plan.Slug}' is not valid. Pass an explicit slug.", null, null));
 
-            if (!WorkspacePathResolver.TryResolve(svc, $"{CollectionsRoot}/{plan.Slug}",
+            if (!WorkspacePathResolver.TryResolve(svc, CollectionDirRel(plan.Slug),
                     out var collectionDirAbs, out var dirErr))
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
 
@@ -156,7 +165,7 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto(
                     "collection-exists",
                     $"Collection '{plan.Slug}' already exists. Pass overwrite=true to replace it.",
-                    $"{CollectionsRoot}/{plan.Slug}",
+                    CollectionDirRel(plan.Slug),
                     null));
             }
 
@@ -198,7 +207,7 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
                     "Collection slug must be alphanumeric, dashes, or underscores.", null, null));
 
-            if (!WorkspacePathResolver.TryResolve(svc, $"{CollectionsRoot}/{slug}",
+            if (!WorkspacePathResolver.TryResolve(svc, CollectionDirRel(slug),
                     out var dirAbs, out var dirErr))
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
             if (!Directory.Exists(dirAbs))
@@ -212,11 +221,13 @@ public static class CollectionEndpoints
 
     private static string? SlugFromCollectionFile(string relativePath)
     {
+        // ".tap/collections/<slug>/_collection.md"
         var parts = relativePath.Replace('\\', '/').Split('/');
-        if (parts.Length != 3) return null;
-        if (!string.Equals(parts[0], CollectionsRoot, StringComparison.OrdinalIgnoreCase)) return null;
-        if (!string.Equals(parts[2], "_collection.md", StringComparison.OrdinalIgnoreCase)) return null;
-        return parts[1];
+        if (parts.Length != 4) return null;
+        if (!string.Equals(parts[0], WorkspaceLoader.TapDirectoryName, StringComparison.OrdinalIgnoreCase)) return null;
+        if (!string.Equals(parts[1], CollectionsRoot, StringComparison.OrdinalIgnoreCase)) return null;
+        if (!string.Equals(parts[3], "_collection.md", StringComparison.OrdinalIgnoreCase)) return null;
+        return parts[2];
     }
 
     private static bool IsValidSlug(string slug)

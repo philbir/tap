@@ -9,6 +9,11 @@ on:
 permissions:
   contents: write
 
+env:
+  # Windows runners default `run:` blocks to PowerShell, where corepack's
+  # download prompt hangs waiting on stdin. Force non-interactive corepack.
+  COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+
 jobs:
   build:
     permissions:
@@ -28,6 +33,9 @@ jobs:
 
     runs-on: ${{ matrix.runner }}
     name: ${{ matrix.target }}
+    # Fail fast if a step hangs (Windows UI build stalled ~70m under PowerShell)
+    # instead of eating the full 6h default.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
@@ -77,6 +85,7 @@ jobs:
       # runner can invoke it without WSL.
       - name: Build Studio UI
         working-directory: src/ui-studio
+        shell: bash
         run: |
           corepack enable
           yarn install --immutable

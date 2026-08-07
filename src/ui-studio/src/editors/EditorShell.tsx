@@ -7,6 +7,7 @@ import {
 } from '@tabler/icons-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { ErrorBoundary } from '../shell/ErrorBoundary'
 import styles from './EditorShell.module.css'
 
 /**
@@ -124,17 +125,17 @@ export function EditorShell(props: EditorShellProps) {
         {rightPane ? (
           <PanelGroup direction="horizontal" autoSaveId={`${autoSaveId}:right`} style={{ height: '100%' }}>
             <Panel defaultSize={68} minSize={30}>
-              <EditorColumn autoSaveId={autoSaveId} bottomPane={bottomPane}>{children}</EditorColumn>
+              <EditorColumn autoSaveId={autoSaveId} bottomPane={bottomPane} resetKey={title}>{children}</EditorColumn>
             </Panel>
             <PanelResizeHandle className={styles.handleVertical} />
             <Panel defaultSize={32} minSize={20}>
               <Box style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-body)' }}>
-                {rightPane}
+                <ErrorBoundary label={`${kindLabel} side panel`} resetKeys={[title]}>{rightPane}</ErrorBoundary>
               </Box>
             </Panel>
           </PanelGroup>
         ) : (
-          <EditorColumn autoSaveId={autoSaveId} bottomPane={bottomPane}>{children}</EditorColumn>
+          <EditorColumn autoSaveId={autoSaveId} bottomPane={bottomPane} resetKey={title}>{children}</EditorColumn>
         )}
       </Box>
     </Box>
@@ -146,17 +147,24 @@ export function EditorShell(props: EditorShellProps) {
  * (the request Response viewer). Shared by the bare layout and the right-pane layout so the
  * editor + response keep working when a right pane (Assistant) is open.
  */
-function EditorColumn({ autoSaveId, bottomPane, children }: { autoSaveId: string; bottomPane?: ReactNode; children: ReactNode }) {
-  if (!bottomPane) return <PrimaryPane>{children}</PrimaryPane>
+function EditorColumn({ autoSaveId, bottomPane, children, resetKey }: { autoSaveId: string; bottomPane?: ReactNode; children: ReactNode; resetKey: string }) {
+  // Each pane gets its own boundary rather than one around the pair: a crash while rendering
+  // a response body should still leave the request editor above it editable.
+  const editor = (
+    <PrimaryPane>
+      <ErrorBoundary label="Editor" resetKeys={[resetKey]}>{children}</ErrorBoundary>
+    </PrimaryPane>
+  )
+  if (!bottomPane) return editor
   return (
     <PanelGroup direction="vertical" autoSaveId={`${autoSaveId}:bottom`} style={{ height: '100%' }}>
       <Panel defaultSize={55} minSize={20}>
-        <PrimaryPane>{children}</PrimaryPane>
+        {editor}
       </Panel>
       <PanelResizeHandle className={styles.handleHorizontal} />
       <Panel defaultSize={45} minSize={15}>
         <Box style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-          {bottomPane}
+          <ErrorBoundary label="Response panel" resetKeys={[resetKey]}>{bottomPane}</ErrorBoundary>
         </Box>
       </Panel>
     </PanelGroup>

@@ -4,6 +4,7 @@ import { Notifications } from '@mantine/notifications'
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App'
+import { ErrorBoundary } from './shell/ErrorBoundary'
 import { theme } from './theme'
 
 // Mantine v9 ships its core CSS as a single stylesheet that consumers import directly.
@@ -26,7 +27,13 @@ createRoot(document.getElementById('root')!).render(
     <MantineProvider theme={theme} defaultColorScheme="auto">
       <ModalsProvider>
         <Notifications position="bottom-right" zIndex={2000} />
-        <App />
+        {/*
+          Last line of defence: anything that escapes the per-pane boundaries lands here and
+          renders a recoverable error screen instead of blanking the document.
+         */}
+        <ErrorBoundary variant="page">
+          <App />
+        </ErrorBoundary>
       </ModalsProvider>
     </MantineProvider>
   </StrictMode>,

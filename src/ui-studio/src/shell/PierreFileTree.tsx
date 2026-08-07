@@ -150,6 +150,10 @@ export function PierreFileTree(props: Props) {
   // Push prop updates into the imperative model.
   useEffect(() => { model.resetPaths(Array.from(paths)) }, [model, paths])
   useEffect(() => { model.setGitStatus(gitStatus ? Array.from(gitStatus) : undefined) }, [model, gitStatus])
+  // `icons` is only read at model creation, and the requests/auth views key their icon
+  // overrides on display basenames — so a row added after mount (e.g. "New request" from
+  // the sidebar context menu) would render with the generic file icon until a remount.
+  useEffect(() => { model.setIcons(icons) }, [model, icons])
   useEffect(() => {
     // Keep selection in sync with the controlled prop. If the host clears it
     // (selectedPath === null), deselect the currently-selected item.

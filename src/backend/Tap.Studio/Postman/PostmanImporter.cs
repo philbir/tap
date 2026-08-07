@@ -26,16 +26,17 @@ namespace Tap.Studio.Postman;
 ///         <c>Content-Type</c> header is set when missing.</item>
 ///   <item>Headers with <c>disabled: true</c> are dropped. Postman's <c>{{var}}</c>
 ///         template syntax matches Tap's, so values are kept verbatim.</item>
-///   <item>Collection-level <c>auth</c> becomes a single auth file referenced by
-///         <c>defaultAuth</c>. Per-item auth (rare in real collections) currently
-///         lands in the request body markdown as a TODO marker so the user sees it
-///         and can wire it up by hand.</item>
+///   <item>Collection-level <c>auth</c> becomes a single auth file written inside the
+///         collection and referenced by <c>defaultAuth</c> — Postman's collection auth
+///         usually interpolates collection variables, which only resolve for a profile the
+///         collection owns. Per-item auth (rare in real collections) currently lands in the
+///         request body markdown as a TODO marker so the user sees it and can wire it up by
+///         hand.</item>
 /// </list>
 /// </summary>
 public static class PostmanImporter
 {
     private const string CollectionsRoot = "collections";
-    private const string AuthRoot = "auth";
 
     public sealed record ImportFile(string RelativePath, string Content);
 
@@ -80,22 +81,23 @@ public static class PostmanImporter
 
         var (baseUrl, vars) = ExtractVariables(root);
 
-        // Collection-level auth → write to auth/<slug>-postman.auth.md and reference from defaultAuth.
+        // Collection-level auth → write it *inside* the collection, next to _collection.md,
+        // and reference it as a sibling from defaultAuth. Postman's collection auth routinely
+        // interpolates collection variables ({{baseUrl}}, {{clientId}}, …), which only resolve
+        // for a profile owned by the collection — and it keeps the import self-contained, so
+        // deleting the collection doesn't strand an orphan under auth/.
         string? defaultAuth = null;
         string? authPath = null;
         ImportFile? authFile = null;
         if (root.TryGetProperty("auth", out var authEl) && authEl.ValueKind == JsonValueKind.Object)
         {
-            var authSpec = TryMapAuth(authEl, $"{collectionName} (Postman)", warnings);
-            if (authSpec is not null)
+            var authSlug = $"{slug}-postman";
+            var authFileName = $"{authSlug}.auth.md";
+            if (TryMapAuth(authEl, $"{collectionName} (Postman)", warnings) is { } authSpec)
             {
-                var authSlug = $"{slug}-postman";
-                authPath = $"{AuthRoot}/{authSlug}.auth.md";
+                authPath = $"{CollectionsRoot}/{slug}/{authFileName}";
                 authFile = new ImportFile(authPath, AuthSpecEmitter.ToFileSource(authSpec with { Path = authPath }));
-                // Auth file lives at auth/X; request files live at collections/<slug>/<sub>/Y.
-                // For the collection's defaultAuth we encode the relative path from the
-                // collection file to the auth file.
-                defaultAuth = $"../../{authPath}";
+                defaultAuth = authFileName;
             }
         }
 

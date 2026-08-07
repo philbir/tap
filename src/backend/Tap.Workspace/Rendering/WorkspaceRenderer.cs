@@ -23,7 +23,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         string? stageName = null)
     {
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
-        var collection = CollectionLocator.ForRequest(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
         var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
 
         var auth = workspace.Resolve(request.Auth, requestDir) as AuthFile;

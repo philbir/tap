@@ -1003,7 +1003,12 @@ function FlowView({ rendered, execution, busy, requestPath, requestAuth }: {
             stretching the Request card. */}
         <Group align="flex-start" gap={0} wrap="nowrap" justify="center">
           {serverStatus
-            ? <AuthFlowCardFromStatus status={serverStatus} summary={summaryForStatus} />
+            ? <AuthFlowCardFromStatus
+                status={serverStatus}
+                summary={summaryForStatus}
+                requestPath={requestPath}
+                stage={execution?.stage ?? rendered?.stage ?? undefined}
+              />
             : <AuthFlowCard resolved={fallback} />}
           <FlowConnector active={!!execution || busy} />
           <RequestFlowCard
@@ -1144,8 +1149,15 @@ function AuthFlowCard({ resolved }: { resolved: EffectiveAuth }) {
 }
 
 /** Auth card rendered from the server's authoritative <code>AuthStatus</code> snapshot.
- *  Distinguishes cached / expired / missing / static / none + flags interactive flows. */
-function AuthFlowCardFromStatus({ status, summary }: { status: AuthStatus; summary: AuthSummary | null }) {
+ *  Distinguishes cached / expired / missing / static / none + flags interactive flows.
+ *  `requestPath` + `stage` are handed to the runner so a collection-scoped profile
+ *  authenticates against the stage this request resolved to. */
+function AuthFlowCardFromStatus({ status, summary, requestPath, stage }: {
+  status: AuthStatus
+  summary: AuthSummary | null
+  requestPath?: string
+  stage?: string
+}) {
   // No auth attached to the request at all.
   if (status.source === 'none' || !status.type) {
     return (
@@ -1196,7 +1208,12 @@ function AuthFlowCardFromStatus({ status, summary }: { status: AuthStatus; summa
       )}
       {status.source !== 'static' && (
         <Box mt="sm">
-          <AuthRunPanel key={status.path ?? 'no-path'} status={status} />
+          <AuthRunPanel
+            key={`${status.path ?? 'no-path'}#${stage ?? ''}`}
+            status={status}
+            requestPath={requestPath}
+            stage={stage}
+          />
         </Box>
       )}
     </FlowCard>
@@ -1228,7 +1245,11 @@ function formatRelativeExpiry(iso: string): string {
  * Mirrors the auth-editor's "Try it" panel but scoped to the Run-auth-then-resend loop:
  * the success state nudges the user to re-send rather than showing token internals.
  */
-function AuthRunPanel({ status }: { status: AuthStatus }) {
+function AuthRunPanel({ status, requestPath, stage }: {
+  status: AuthStatus
+  requestPath?: string
+  stage?: string
+}) {
   const [result, setResult] = useState<AuthExecuteResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1274,7 +1295,7 @@ function AuthRunPanel({ status }: { status: AuthStatus }) {
     setBusy(true); setError(null); setResult(null); setLaunchMode(null); setCleared(false)
     stopPolling()
     try {
-      const r = await api.executeAuth(status.path, force)
+      const r = await api.executeAuth(status.path, force, { requestPath, stage })
       setResult(r)
       if (r.status === 'pending' && r.flowId) {
         pollRef.current = window.setInterval(() => { void pollOnce(r.flowId!) }, 800)

@@ -20,6 +20,7 @@ import {
   serializeMultipartBody, tryPrettyJson,
   RAW_SUB_LABELS, type BodyMode, type RawSubType,
 } from './body-mode'
+import { authSelectGroups, relativizeFrom } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
 import { GraphQLEditor } from './GraphQLEditor'
@@ -475,7 +476,7 @@ export function RequestEditor({ path }: Props) {
                 data={[
                   { value: '', label: '(inherit from collection)' },
                   { value: 'none', label: 'None (opt out)' },
-                  ...auths.map((a) => ({ value: relativizeFrom(path, a.path), label: a.name })),
+                  ...authSelectGroups({ auths, collections, fromPath: path }),
                 ]}
                 value={spec.auth ?? ''}
                 onChange={(v) => update('auth', v && v !== '' ? v : undefined)}
@@ -967,10 +968,3 @@ function nameToSlug(name: string): string {
     .slice(0, 60)
 }
 
-function relativizeFrom(from: string, to: string): string {
-  const fromParts = from.split('/').slice(0, -1)
-  const toParts = to.split('/')
-  let i = 0
-  while (i < fromParts.length && i < toParts.length - 1 && fromParts[i] === toParts[i]) i++
-  return '../'.repeat(fromParts.length - i) + toParts.slice(i).join('/')
-}

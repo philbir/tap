@@ -140,6 +140,11 @@ public sealed record AuthDetailDto(
     string Name,
     string? Id,
     string Type,
+    /// <summary>Slug of the collection that owns this profile (it lives under
+    /// <c>collections/&lt;slug&gt;/</c>), or null for a workspace-scoped profile under
+    /// <c>auth/</c>. A collection-scoped profile resolves its fields against that
+    /// collection's variables and stages.</summary>
+    string? Collection,
     IReadOnlyDictionary<string, string?> Fields,
     IReadOnlyDictionary<string, string> Headers,
     IReadOnlyDictionary<string, string> Query,
@@ -301,8 +306,15 @@ public sealed record OidcDiscoveryDto(
     IReadOnlyList<string> GrantTypesSupported,
     IReadOnlyList<string> CodeChallengeMethodsSupported);
 
-/// <summary>Body for <c>POST /api/auth/execute</c>.</summary>
-public sealed record AuthExecuteRequestDto(string Path, bool ForceReauthenticate);
+/// <summary>Body for <c>POST /api/auth/execute</c>. <see cref="RequestPath"/> +
+/// <see cref="Stage"/> carry the caller's editing context so a collection-scoped profile
+/// expands against the right stage's variables (and caches its token there); both are
+/// ignored for a workspace-scoped profile.</summary>
+public sealed record AuthExecuteRequestDto(string Path, bool ForceReauthenticate)
+{
+    public string? RequestPath { get; init; }
+    public string? Stage { get; init; }
+}
 
 /// <summary>Body for <c>POST /api/auth/clear</c> — removes any cached runtime token for the
 /// given auth profile (scoped to the currently active workspace).</summary>
@@ -328,7 +340,10 @@ public sealed record AuthExecuteResponseDto(
     public int? DeviceCodeExpiresIn { get; init; }
 }
 
-public sealed record AuthSummaryDto(string Path, string Name, string? Id, string Type);
+/// <summary>Listing-row representation of an auth profile. <see cref="Collection"/> is the
+/// slug of the owning collection for a profile stored under <c>collections/&lt;slug&gt;/</c>,
+/// or null for a workspace-scoped one under <c>auth/</c>.</summary>
+public sealed record AuthSummaryDto(string Path, string Name, string? Id, string Type, string? Collection);
 
 public sealed record EnvSummaryDto(string Path, string Name, string? Id);
 

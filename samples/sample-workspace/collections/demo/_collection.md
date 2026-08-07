@@ -5,6 +5,9 @@ baseUrl: '{{DEMO_API_URL}}'
 defaultHeaders:
   Accept: application/json
   User-Agent: tap-studio-demo/0.1
+vars:
+  OAUTH_TOKEN_PATH: /connect/token
+  OAUTH_CLIENT_ID: tap-demo
 tags: [demo, local]
 stages:
 - name: Dev
@@ -18,6 +21,12 @@ stages:
 Sample requests against `Demo.Api` (the local upstream registered by
 `samples/Studio.AppHost`). The collection owns the baseUrl and shared headers —
 every request inside inherits them automatically.
+
+`whoami-collection-auth.auth.md` sits inside this collection rather than in the shared
+`auth/` folder, so it resolves `{{OAUTH_TOKEN_PATH}}` and `{{OAUTH_CLIENT_ID}}` from the
+collection vars above (and from whichever stage is selected). Compare it with
+`auth/demo-oauth-cc.auth.md`, which is workspace-scoped: those two names mean nothing to
+it, so it has to spell the endpoint and client out itself.
 
 Sub-folders mirror the demo surface:
 

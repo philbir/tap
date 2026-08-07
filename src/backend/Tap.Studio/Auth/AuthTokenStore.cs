@@ -5,7 +5,10 @@ namespace Tap.Studio.Auth;
 
 /// <summary>
 /// Persisted store of OAuth tokens obtained for auth profiles. Keyed by
-/// <c>{workspaceRoot}::{authRelativePath}</c> so multiple workspaces don't collide.
+/// <c>{workspaceRoot}::{authRelativePath}</c> so multiple workspaces don't collide, with a
+/// <c>#{stage}</c> suffix for profiles owned by a collection that defines stages — the same
+/// profile resolved under <c>dev</c> and <c>prod</c> points at different token endpoints and
+/// must not share an entry. Workspace-scoped profiles key exactly as they always have.
 ///
 /// Tokens are sensitive — this file lives under the user's state folder
 /// (<c>~/.tap/auth-tokens.json</c>), not in the workspace itself (which is checked into Git).
@@ -24,28 +27,37 @@ public sealed class AuthTokenStore
         _entries = Load();
     }
 
-    public AuthTokenEntry? Get(string workspaceRoot, string authPath)
+    public AuthTokenEntry? Get(string workspaceRoot, AuthProfileScope scope)
     {
         lock (_gate)
         {
-            return _entries.GetValueOrDefault(Key(workspaceRoot, authPath));
+            return _entries.GetValueOrDefault(Key(workspaceRoot, scope));
         }
     }
 
-    public void Save(string workspaceRoot, string authPath, AuthTokenEntry entry)
+    public void Save(string workspaceRoot, AuthProfileScope scope, AuthTokenEntry entry)
     {
         lock (_gate)
         {
-            _entries[Key(workspaceRoot, authPath)] = entry;
+            _entries[Key(workspaceRoot, scope)] = entry;
             Persist();
         }
     }
 
-    public void Remove(string workspaceRoot, string authPath)
+    /// <summary>Drop every cached token for <paramref name="authPath"/> — the un-staged entry
+    /// plus one per stage. "Clear token" in the UI means the profile is signed out, not just
+    /// signed out of whichever stage happens to be selected.</summary>
+    public void RemoveAll(string workspaceRoot, string authPath)
     {
         lock (_gate)
         {
-            _entries.Remove(Key(workspaceRoot, authPath));
+            var baseKey = Key(workspaceRoot, new AuthProfileScope(authPath, null));
+            var stagePrefix = baseKey + StageSeparator;
+            var doomed = _entries.Keys
+                .Where(k => k == baseKey || k.StartsWith(stagePrefix, StringComparison.Ordinal))
+                .ToArray();
+            if (doomed.Length == 0) return;
+            foreach (var k in doomed) _entries.Remove(k);
             Persist();
         }
     }
@@ -95,8 +107,12 @@ public sealed class AuthTokenStore
         }
     }
 
-    private static string Key(string workspaceRoot, string authPath)
-        => $"{workspaceRoot}::{authPath}";
+    private const string StageSeparator = "#";
+
+    private static string Key(string workspaceRoot, AuthProfileScope scope)
+        => scope.Stage is { Length: > 0 } stage
+            ? $"{workspaceRoot}::{scope.Path}{StageSeparator}{stage}"
+            : $"{workspaceRoot}::{scope.Path}";
 }
 
 public sealed record AuthTokenEntry

@@ -63,16 +63,27 @@ public sealed class AuthRunner
     /// Start the auth flow for the given profile. Returns either a completed result (sync
     /// flows + cache hits) or a <see cref="ExecuteAuthResult.LoginUrl"/> /
     /// <see cref="ExecuteAuthResult.UserCode"/> for the UI to drive an interactive step.
+    ///
+    /// <para><paramref name="requestPath"/> + <paramref name="stageName"/> are the caller's
+    /// current editing context. They matter for a profile that lives inside a collection:
+    /// its fields expand against that collection's (and the selected stage's) variables, and
+    /// the resulting token is cached per stage. See <see cref="AuthScopeResolver"/> — a
+    /// workspace-scoped profile ignores both.</para>
     /// </summary>
-    public async Task<ExecuteAuthResult> ExecuteAsync(string authPath, bool forceReauthenticate, CancellationToken ct)
+    public async Task<ExecuteAuthResult> ExecuteAsync(
+        string authPath, bool forceReauthenticate, CancellationToken ct,
+        string? requestPath = null, string? stageName = null)
     {
         var workspace = _ws.Current;
         if (workspace.FindByPath(authPath) is not AuthFile auth)
             return ExecuteAuthResult.Failed($"Auth profile '{authPath}' not in workspace.");
 
+        var context = AuthScopeResolver.ContextFor(workspace, authPath, requestPath, stageName);
+        var profile = context.ScopeFor(authPath);
+
         if (!forceReauthenticate)
         {
-            var cached = _tokens.Get(_ws.RootDirectory, authPath);
+            var cached = _tokens.Get(_ws.RootDirectory, profile);
             if (cached is not null && (cached.ExpiresAt is null || cached.ExpiresAt > DateTimeOffset.UtcNow + TimeSpan.FromSeconds(30)))
             {
                 return ExecuteAuthResult.FromTokens(cached, fromCache: true);
@@ -81,20 +92,20 @@ public sealed class AuthRunner
             // Token cached but stale — try to refresh silently before re-prompting.
             if (cached is { RefreshToken: not null } && auth.Type == "oauth2")
             {
-                var refreshed = await RefreshIfPossibleAsync(auth, authPath, cached, ct).ConfigureAwait(false);
+                var refreshed = await RefreshIfPossibleAsync(auth, profile, context, cached, ct).ConfigureAwait(false);
                 if (refreshed is not null) return ExecuteAuthResult.FromTokens(refreshed, fromCache: false);
             }
         }
 
-        var resolver = CreateResolver();
+        var resolver = CreateResolver(context);
         try
         {
             return auth.Type switch
             {
-                "oauth2" => await ExecuteOAuth2Async(auth, authPath, resolver, ct).ConfigureAwait(false),
-                "azure-cli" => await ExecuteAzureAsync(auth, authPath, resolver, ct).ConfigureAwait(false),
-                "jwt" => await ExecuteJwtAsync(auth, authPath, resolver, ct).ConfigureAwait(false),
-                "github" => await ExecuteGithubAsync(auth, authPath, resolver, ct).ConfigureAwait(false),
+                "oauth2" => await ExecuteOAuth2Async(auth, profile, resolver, ct).ConfigureAwait(false),
+                "azure-cli" => await ExecuteAzureAsync(auth, profile, resolver, ct).ConfigureAwait(false),
+                "jwt" => await ExecuteJwtAsync(auth, profile, resolver, ct).ConfigureAwait(false),
+                "github" => await ExecuteGithubAsync(auth, profile, resolver, ct).ConfigureAwait(false),
                 "basic" or "bearer" or "apiKey" or "custom" or "none" =>
                     ExecuteAuthResult.SyntheticHeaders(await BuildHeadersForAsync(auth, resolver, ct).ConfigureAwait(false)),
                 _ => ExecuteAuthResult.Failed($"Auth type '{auth.Type}' is not supported by the runner yet."),
@@ -134,7 +145,7 @@ public sealed class AuthRunner
                 ClientId = flow.ClientId,
                 Scopes = flow.Scopes,
             };
-            _tokens.Save(_ws.RootDirectory, flow.AuthPath, entry);
+            _tokens.Save(_ws.RootDirectory, new AuthProfileScope(flow.AuthPath, flow.Stage), entry);
             return ExecuteAuthResult.FromTokens(entry, fromCache: false);
         }
         catch (Exception ex)
@@ -145,18 +156,18 @@ public sealed class AuthRunner
         }
     }
 
-    private AuthFieldResolver CreateResolver()
+    private AuthFieldResolver CreateResolver(AuthContext context)
     {
         var ws = _ws.Current;
         EnvFile? env = null;
         if (ws.Manifest?.DefaultEnv is { } defaultRef)
             env = ws.Resolve(defaultRef) as EnvFile;
-        return new AuthFieldResolver(ws, _ws.CreateRegistry(), env);
+        return new AuthFieldResolver(ws, _ws.CreateRegistry(), env, context);
     }
 
     // ---- OAuth2 ----------------------------------------------------------------------
 
-    private async Task<ExecuteAuthResult> ExecuteOAuth2Async(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteOAuth2Async(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         var grantType = (auth.Fields.GetValueOrDefault("flow")
                          ?? auth.Fields.GetValueOrDefault("grantType")
@@ -210,19 +221,19 @@ public sealed class AuthRunner
         return grantType switch
         {
             "client_credentials" =>
-                await ClientCredentialsAsync(authPath, tokenEndpoint, clientId!, clientSecret, scopes, audience, ct).ConfigureAwait(false),
+                await ClientCredentialsAsync(profile, tokenEndpoint, clientId!, clientSecret, scopes, audience, ct).ConfigureAwait(false),
             "password" or "resource_owner" or "ropc" =>
-                await PasswordAsync(authPath, tokenEndpoint, clientId!, clientSecret, username, password, scopes, audience, ct).ConfigureAwait(false),
+                await PasswordAsync(profile, tokenEndpoint, clientId!, clientSecret, username, password, scopes, audience, ct).ConfigureAwait(false),
             "device_code" or "device" =>
-                await DeviceCodeAsync(authPath, deviceEndpoint, tokenEndpoint, clientId!, clientSecret, scopes, audience, ct).ConfigureAwait(false),
+                await DeviceCodeAsync(profile, deviceEndpoint, tokenEndpoint, clientId!, clientSecret, scopes, audience, ct).ConfigureAwait(false),
             "authorization_code" or "authorization_code_pkce" =>
-                StartAuthCodeFlow(authPath, authorizeEndpoint, tokenEndpoint, authority, clientId!, clientSecret, redirectUri!, scopes, audience),
+                StartAuthCodeFlow(profile, authorizeEndpoint, tokenEndpoint, authority, clientId!, clientSecret, redirectUri!, scopes, audience),
             _ => ExecuteAuthResult.Failed($"OAuth2 grant '{grantType}' is not supported yet."),
         };
     }
 
     private async Task<ExecuteAuthResult> ClientCredentialsAsync(
-        string authPath, string tokenEndpoint, string clientId, string? clientSecret,
+        AuthProfileScope profile, string tokenEndpoint, string clientId, string? clientSecret,
         IReadOnlyList<string> scopes, string? audience, CancellationToken ct)
     {
         var form = new Dictionary<string, string>
@@ -235,11 +246,11 @@ public sealed class AuthRunner
         if (!string.IsNullOrEmpty(audience)) form["audience"] = audience!;
 
         var token = await PostTokenAsync(tokenEndpoint, form, ct).ConfigureAwait(false);
-        return SaveAndReturn(authPath, tokenEndpoint, clientId, scopes, token);
+        return SaveAndReturn(profile, tokenEndpoint, clientId, scopes, token);
     }
 
     private async Task<ExecuteAuthResult> PasswordAsync(
-        string authPath, string tokenEndpoint, string clientId, string? clientSecret,
+        AuthProfileScope profile, string tokenEndpoint, string clientId, string? clientSecret,
         string? username, string? password, IReadOnlyList<string> scopes, string? audience, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
@@ -257,11 +268,11 @@ public sealed class AuthRunner
         if (!string.IsNullOrEmpty(audience)) form["audience"] = audience!;
 
         var token = await PostTokenAsync(tokenEndpoint, form, ct).ConfigureAwait(false);
-        return SaveAndReturn(authPath, tokenEndpoint, clientId, scopes, token);
+        return SaveAndReturn(profile, tokenEndpoint, clientId, scopes, token);
     }
 
     private async Task<ExecuteAuthResult> DeviceCodeAsync(
-        string authPath, string deviceEndpoint, string tokenEndpoint, string clientId, string? clientSecret,
+        AuthProfileScope profile, string deviceEndpoint, string tokenEndpoint, string clientId, string? clientSecret,
         IReadOnlyList<string> scopes, string? audience, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(deviceEndpoint))
@@ -286,7 +297,8 @@ public sealed class AuthRunner
         var flow = _flows.Create(new AuthFlow
         {
             Id = flowId,
-            AuthPath = authPath,
+            AuthPath = profile.Path,
+            Stage = profile.Stage,
             CreatedAt = DateTimeOffset.UtcNow,
             CodeVerifier = string.Empty,
             Nonce = string.Empty,
@@ -333,7 +345,7 @@ public sealed class AuthRunner
                             flow.TokenType = tok.TokenType;
                             flow.ExpiresAt = tok.ExpiresIn is { } s ? DateTimeOffset.UtcNow.AddSeconds(s) : null;
                             flow.Status = AuthFlowStatus.Completed;
-                            _tokens.Save(_ws.RootDirectory, authPath, new AuthTokenEntry
+                            _tokens.Save(_ws.RootDirectory, profile, new AuthTokenEntry
                             {
                                 AccessToken = tok.AccessToken,
                                 IdToken = tok.IdToken,
@@ -387,7 +399,7 @@ public sealed class AuthRunner
     }
 
     private ExecuteAuthResult StartAuthCodeFlow(
-        string authPath, string authorizeEndpoint, string tokenEndpoint, string? authority,
+        AuthProfileScope profile, string authorizeEndpoint, string tokenEndpoint, string? authority,
         string clientId, string? clientSecret, string redirectUri, IReadOnlyList<string> scopes, string? audience)
     {
         if (string.IsNullOrWhiteSpace(authorizeEndpoint))
@@ -401,7 +413,8 @@ public sealed class AuthRunner
         var flow = _flows.Create(new AuthFlow
         {
             Id = flowId,
-            AuthPath = authPath,
+            AuthPath = profile.Path,
+            Stage = profile.Stage,
             CreatedAt = DateTimeOffset.UtcNow,
             CodeVerifier = codeVerifier,
             Nonce = nonce,
@@ -449,10 +462,11 @@ public sealed class AuthRunner
         return await PostTokenAsync(flow.TokenEndpoint, form, ct).ConfigureAwait(false);
     }
 
-    private async Task<AuthTokenEntry?> RefreshIfPossibleAsync(AuthFile auth, string authPath, AuthTokenEntry stale, CancellationToken ct)
+    private async Task<AuthTokenEntry?> RefreshIfPossibleAsync(
+        AuthFile auth, AuthProfileScope profile, AuthContext context, AuthTokenEntry stale, CancellationToken ct)
     {
         if (stale.RefreshToken is null || stale.TokenEndpoint is null) return null;
-        var resolver = CreateResolver();
+        var resolver = CreateResolver(context);
         var clientId = await resolver.AllAsync(auth.Fields.GetValueOrDefault("clientId"), ct).ConfigureAwait(false);
         var clientSecret = await resolver.AllAsync(auth.Fields.GetValueOrDefault("clientSecret"), ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(clientId)) return null;
@@ -481,12 +495,12 @@ public sealed class AuthRunner
                 ClientId = stale.ClientId,
                 Scopes = stale.Scopes,
             };
-            _tokens.Save(_ws.RootDirectory, authPath, entry);
+            _tokens.Save(_ws.RootDirectory, profile, entry);
             return entry;
         }
         catch (Exception ex)
         {
-            _logger.LogDebug(ex, "Silent refresh failed for {Path}; falling through to interactive.", authPath);
+            _logger.LogDebug(ex, "Silent refresh failed for {Path}; falling through to interactive.", profile.Path);
             return null;
         }
     }
@@ -499,18 +513,18 @@ public sealed class AuthRunner
     /// flow is <c>direct</c> (plain az-cli token); <c>on_behalf_of</c> chains the az-cli
     /// step with a JWT-bearer exchange against AAD.
     /// </summary>
-    private Task<ExecuteAuthResult> ExecuteAzureAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private Task<ExecuteAuthResult> ExecuteAzureAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         var flow = (auth.Fields.GetValueOrDefault("flow") ?? "direct").Trim();
         return flow switch
         {
-            "on_behalf_of" or "obo" => ExecuteAzureCliOboAsync(auth, authPath, resolver, ct),
-            "direct" or "" => ExecuteAzureCliAsync(auth, authPath, resolver, ct),
+            "on_behalf_of" or "obo" => ExecuteAzureCliOboAsync(auth, profile, resolver, ct),
+            "direct" or "" => ExecuteAzureCliAsync(auth, profile, resolver, ct),
             _ => Task.FromResult(ExecuteAuthResult.Failed($"Azure CLI flow '{flow}' is not supported (use 'direct' or 'on_behalf_of').")),
         };
     }
 
-    private async Task<ExecuteAuthResult> ExecuteAzureCliAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteAzureCliAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         // Either `resource` (v1 audience) or `scope` (v2). Pass through whichever the
         // user provided — `az` accepts both.
@@ -529,11 +543,11 @@ public sealed class AuthRunner
             ExpiresAt = result.ExpiresAt,
             ObtainedAt = DateTimeOffset.UtcNow,
         };
-        _tokens.Save(_ws.RootDirectory, authPath, entry);
+        _tokens.Save(_ws.RootDirectory, profile, entry);
         return ExecuteAuthResult.FromTokens(entry, fromCache: false);
     }
 
-    private async Task<ExecuteAuthResult> ExecuteAzureCliOboAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteAzureCliOboAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         // OBO = Azure-CLI user token → downstream API token via the JWT-bearer grant.
         // The middle-tier client (clientId/clientSecret) presents the user assertion to the
@@ -573,7 +587,7 @@ public sealed class AuthRunner
         if (scopes.Count > 0) form["scope"] = string.Join(' ', scopes);
 
         var token = await PostTokenAsync(tokenEndpoint!, form, ct).ConfigureAwait(false);
-        return SaveAndReturn(authPath, tokenEndpoint!, clientId!, scopes, token);
+        return SaveAndReturn(profile, tokenEndpoint!, clientId!, scopes, token);
     }
 
     private async Task<AzCliResult> RunAzCliAsync(string? resource, string? scope, string? tenant, string? subscription, CancellationToken ct)
@@ -650,7 +664,7 @@ public sealed class AuthRunner
     /// encoded private key). The standard <c>iss/exp/iat/jti/sub/aud</c> claims are auto-filled;
     /// anything in <c>payload</c> overrides them.
     /// </summary>
-    private async Task<ExecuteAuthResult> ExecuteJwtAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteJwtAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         var algorithm = ((await resolver.AllAsync(auth.Fields.GetValueOrDefault("algorithm"), ct).ConfigureAwait(false)) ?? "HS256").Trim().ToUpperInvariant();
         var issuer = await resolver.AllAsync(auth.Fields.GetValueOrDefault("issuer"), ct).ConfigureAwait(false);
@@ -686,7 +700,7 @@ public sealed class AuthRunner
                 ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(expiresIn),
                 ObtainedAt = DateTimeOffset.UtcNow,
             };
-            _tokens.Save(_ws.RootDirectory, authPath, entry);
+            _tokens.Save(_ws.RootDirectory, profile, entry);
             return ExecuteAuthResult.FromTokens(entry, fromCache: false);
         }
         catch (Exception ex)
@@ -706,21 +720,21 @@ public sealed class AuthRunner
     /// the Azure CLI entry point picks between direct + OBO — the front door is one auth
     /// type with several sub-flows, so users don't drown in a dozen near-identical types.
     /// </summary>
-    private async Task<ExecuteAuthResult> ExecuteGithubAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteGithubAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         var mode = (auth.Fields.GetValueOrDefault("mode") ?? "pat").Trim();
         return mode switch
         {
-            "pat"   => await ExecuteGithubPatAsync(auth, authPath, resolver, ct).ConfigureAwait(false),
+            "pat"   => await ExecuteGithubPatAsync(auth, profile, resolver, ct).ConfigureAwait(false),
             "gh-cli" or "ghcli" or "cli"
-                    => await ExecuteGithubCliAsync(authPath, ct).ConfigureAwait(false),
-            "app"   => await ExecuteGithubAppAsync(auth, authPath, resolver, ct).ConfigureAwait(false),
-            "oauth" => await ExecuteGithubOAuthAsync(auth, authPath, resolver, ct).ConfigureAwait(false),
+                    => await ExecuteGithubCliAsync(profile, ct).ConfigureAwait(false),
+            "app"   => await ExecuteGithubAppAsync(auth, profile, resolver, ct).ConfigureAwait(false),
+            "oauth" => await ExecuteGithubOAuthAsync(auth, profile, resolver, ct).ConfigureAwait(false),
             _ => ExecuteAuthResult.Failed($"GitHub mode '{mode}' is not supported (use pat, gh-cli, app, or oauth)."),
         };
     }
 
-    private async Task<ExecuteAuthResult> ExecuteGithubPatAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteGithubPatAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         var token = await resolver.AllAsync(auth.Fields.GetValueOrDefault("token"), ct).ConfigureAwait(false);
         if (string.IsNullOrEmpty(token))
@@ -732,11 +746,11 @@ public sealed class AuthRunner
             TokenType = "Bearer",
             ObtainedAt = DateTimeOffset.UtcNow,
         };
-        _tokens.Save(_ws.RootDirectory, authPath, entry);
+        _tokens.Save(_ws.RootDirectory, profile, entry);
         return WithGithubExtras(ExecuteAuthResult.FromTokens(entry, fromCache: false));
     }
 
-    private async Task<ExecuteAuthResult> ExecuteGithubCliAsync(string authPath, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteGithubCliAsync(AuthProfileScope profile, CancellationToken ct)
     {
         var (token, error) = await RunGhCliAsync(ct).ConfigureAwait(false);
         if (error is not null) return ExecuteAuthResult.Failed(error);
@@ -747,7 +761,7 @@ public sealed class AuthRunner
             TokenType = "Bearer",
             ObtainedAt = DateTimeOffset.UtcNow,
         };
-        _tokens.Save(_ws.RootDirectory, authPath, entry);
+        _tokens.Save(_ws.RootDirectory, profile, entry);
         return WithGithubExtras(ExecuteAuthResult.FromTokens(entry, fromCache: false));
     }
 
@@ -757,7 +771,7 @@ public sealed class AuthRunner
     /// cache the returned <c>ghs_*</c> installation token. The token typically expires after
     /// an hour — we honor whatever <c>expires_at</c> GitHub returns.
     /// </summary>
-    private async Task<ExecuteAuthResult> ExecuteGithubAppAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteGithubAppAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         var appId = await resolver.AllAsync(auth.Fields.GetValueOrDefault("appId"), ct).ConfigureAwait(false);
         var installationId = await resolver.AllAsync(auth.Fields.GetValueOrDefault("installationId"), ct).ConfigureAwait(false);
@@ -818,7 +832,7 @@ public sealed class AuthRunner
                 ExpiresAt = expiresAt,
                 ObtainedAt = DateTimeOffset.UtcNow,
             };
-            _tokens.Save(_ws.RootDirectory, authPath, entry);
+            _tokens.Save(_ws.RootDirectory, profile, entry);
             return WithGithubExtras(ExecuteAuthResult.FromTokens(entry, fromCache: false));
         }
         catch (JsonException ex)
@@ -832,7 +846,7 @@ public sealed class AuthRunner
     /// preset. PKCE is enabled by default — GitHub supports it for confidential and public
     /// clients alike.
     /// </summary>
-    private async Task<ExecuteAuthResult> ExecuteGithubOAuthAsync(AuthFile auth, string authPath, AuthFieldResolver resolver, CancellationToken ct)
+    private async Task<ExecuteAuthResult> ExecuteGithubOAuthAsync(AuthFile auth, AuthProfileScope profile, AuthFieldResolver resolver, CancellationToken ct)
     {
         var clientId = await resolver.AllAsync(auth.Fields.GetValueOrDefault("clientId"), ct).ConfigureAwait(false);
         var clientSecret = await resolver.AllAsync(auth.Fields.GetValueOrDefault("clientSecret"), ct).ConfigureAwait(false);
@@ -841,7 +855,7 @@ public sealed class AuthRunner
 
         var scopes = await ResolveScopesAsync(auth, resolver, ct).ConfigureAwait(false);
         var redirectUri = ResolveCallbackUri();
-        return StartAuthCodeFlow(authPath, GithubAuthorize, GithubToken,
+        return StartAuthCodeFlow(profile, GithubAuthorize, GithubToken,
             authority: "https://github.com", clientId!, clientSecret, redirectUri, scopes, audience: null);
     }
 
@@ -922,7 +936,7 @@ public sealed class AuthRunner
         }
     }
 
-    private ExecuteAuthResult SaveAndReturn(string authPath, string tokenEndpoint, string clientId,
+    private ExecuteAuthResult SaveAndReturn(AuthProfileScope profile, string tokenEndpoint, string clientId,
         IReadOnlyList<string> scopes, TokenResponse token)
     {
         var entry = new AuthTokenEntry
@@ -937,7 +951,7 @@ public sealed class AuthRunner
             ClientId = clientId,
             Scopes = scopes,
         };
-        _tokens.Save(_ws.RootDirectory, authPath, entry);
+        _tokens.Save(_ws.RootDirectory, profile, entry);
         return ExecuteAuthResult.FromTokens(entry, fromCache: false);
     }
 

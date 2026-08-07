@@ -12,7 +12,7 @@ GET /user/repos?per_page=20&sort=updated
 
 `GET /user/repos` lists repositories the authenticated user has explicit access
 to (owned, collaborator, or via org membership). Inherits the `github-cli` auth
-from `apis/github.api.md`.
+from this collection's `_collection.md`.
 
 Useful query params:
 

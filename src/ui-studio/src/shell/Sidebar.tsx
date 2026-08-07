@@ -5,8 +5,9 @@ import {
 import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
 import {
-  IconAlertCircle, IconBrandGit, IconCopy, IconEdit, IconFolderPlus, IconFolderShare, IconLayoutDashboard, IconLock,
-  IconPlus, IconSearch, IconSend, IconTag, IconTrash, type Icon as TablerIcon,
+  IconAlertCircle, IconBrandGit, IconCopy, IconEdit, IconFilePlus, IconFolderPlus, IconFolderShare,
+  IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
+  type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
@@ -14,7 +15,7 @@ import type { TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { DuplicateRequestDialog } from './DuplicateRequestDialog'
-import { buildRequestsView, filterExplorerTree, type ExplorerNode } from './explorerTree'
+import { buildAuthView, buildRequestsView, filterExplorerTree, type ExplorerNode } from './explorerTree'
 import { FilesystemView } from './FilesystemView'
 import { GitView } from './GitView'
 import { NewFolderDialog } from './NewFolderDialog'
@@ -102,12 +103,11 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   )
   const requestsIcons = useMemo(() => makeTapTreeIcons(requestsLookup.iconByBasename), [requestsLookup.iconByBasename])
 
-  const authNodes = useMemo(() => filterByKind(tree, 'auth'), [tree])
-  const filteredAuth = useMemo(
-    () => (search ? filterTreeByQuery(authNodes, search.toLowerCase()) : authNodes),
-    [authNodes, search],
+  const authView = useMemo(
+    () => filterExplorerTree(buildAuthView(tree), search),
+    [tree, search],
   )
-  const authLookup = useMemo(() => collectAuthRows(filteredAuth, onOpenFile), [filteredAuth, onOpenFile])
+  const authLookup = useMemo(() => collectAuthRows(authView, onOpenFile), [authView, onOpenFile])
   const authPaths = authLookup.paths
   const authActivePath = useMemo(
     () => activePath ? authLookup.realToDisplay.get(activePath) ?? null : null,
@@ -134,7 +134,9 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   // Hand-rolled cursor-anchored context menu state. Pierre's own renderContextMenu
   // surface doesn't deliver clicks back to React reliably, so we suppress pierre's
   // menu and render our own from this state, positioned at the cursor.
-  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; row: RowContext } | null>(null)
+  const [ctxMenu, setCtxMenu] = useState<
+    { x: number; y: number; row: RowContext; canCreateRequest: boolean } | null
+  >(null)
 
   const confirmDeleteDir = useCallback((dir: DirContext) => {
     modals.openConfirmModal({
@@ -199,26 +201,45 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   /** Build an `onContextMenuRequest` handler for one tree. Resolves the row's
    *  display path back to either a directory or file context and opens our own
    *  cursor-anchored menu. */
-  const makeContextMenuHandler = useCallback((lookup: TreeLookup) => {
+  const makeContextMenuHandler = useCallback((lookup: TreeLookup, canCreateRequest: boolean) => {
     return (path: string, kind: 'directory' | 'file', event: { clientX: number; clientY: number }) => {
       if (kind === 'directory') {
         const dir = lookup.dirsByDisplayPath.get(path)
         if (!dir) return
-        setCtxMenu({ x: event.clientX, y: event.clientY, row: { row: 'dir', ...dir } })
+        setCtxMenu({ x: event.clientX, y: event.clientY, row: { row: 'dir', ...dir }, canCreateRequest })
       } else {
         const file = lookup.filesByDisplayPath.get(path)
         if (!file) return
-        setCtxMenu({ x: event.clientX, y: event.clientY, row: { row: 'file', ...file } })
+        setCtxMenu({ x: event.clientX, y: event.clientY, row: { row: 'file', ...file }, canCreateRequest })
       }
     }
   }, [])
 
-  const requestsContextMenu = useMemo(() => makeContextMenuHandler(requestsLookup), [makeContextMenuHandler, requestsLookup])
-  const authContextMenu = useMemo(() => makeContextMenuHandler(authLookup), [makeContextMenuHandler, authLookup])
+  const requestsContextMenu = useMemo(() => makeContextMenuHandler(requestsLookup, true), [makeContextMenuHandler, requestsLookup])
+  const authContextMenu = useMemo(() => makeContextMenuHandler(authLookup, false), [makeContextMenuHandler, authLookup])
   const editCollection = useCallback((dir: DirContext) => {
     if (dir.kind !== 'collection') return
     openTab({ path: dir.realPath, kind: 'collection', label: dir.name })
   }, [openTab])
+
+  /** Create an empty `GET /` request straight into the right-clicked collection/folder and
+   *  open it. No dialog — the name is the first free "New Request {n}" in that directory,
+   *  and the editor is where the user renames it. */
+  const newRequest = useCallback(async (dir: DirContext) => {
+    const name = nextRequestName(tree, dir.realPath)
+    const target = `${dir.realPath}/${nameToSlug(name)}.req.md`
+    try {
+      await api.saveRequestSpec({ path: target, id: null, name, method: 'GET', url: '/' })
+      await reload()
+      openTab({ path: target, kind: 'request', label: name })
+    } catch (e) {
+      notifications.show({
+        color: 'red',
+        title: 'Create failed',
+        message: e instanceof Error ? e.message : String(e),
+      })
+    }
+  }, [tree, reload, openTab])
 
   // Drag-and-drop for the requests tree: the pierre tree has already moved the rows
   // visually by the time onDrop fires, so this handler just persists each move and
@@ -248,8 +269,11 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   }, [requestsLookup, reload, renameTab])
 
   const requestsDragAndDrop = useMemo(() => ({
-    // Only request leaves are draggable — collections/folders stay put for now.
-    canDrag: (paths: readonly string[]) => paths.every((p) => requestsLookup.filesByDisplayPath.has(p)),
+    // Only request leaves are draggable — collections/folders stay put for now, and moving
+    // an auth profile out of its collection would silently break the relative `auth:` refs
+    // pointing at it (and change which variables it resolves against).
+    canDrag: (paths: readonly string[]) =>
+      paths.every((p) => requestsLookup.filesByDisplayPath.get(p)?.kind === 'request'),
     // Requests must land inside a collection or folder, never at the tree root
     // (that would put the file directly under `collections/`).
     canDrop: (_paths: readonly string[], targetDir: string | null) =>
@@ -405,6 +429,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
       <FloatingCtxMenu
         ctx={ctxMenu}
         onClose={() => setCtxMenu(null)}
+        onNewRequest={(dir) => { setCtxMenu(null); void newRequest(dir) }}
         onNewFolder={(dir) => { setCtxMenu(null); setNewFolderState({ open: true, parentDir: dir.realPath }) }}
         onDeleteDir={(dir) => { setCtxMenu(null); confirmDeleteDir(dir) }}
         onDeleteFile={(file) => { setCtxMenu(null); confirmDeleteFile(file) }}
@@ -426,10 +451,11 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
  *  and ESC. Rendered in a portal-style `position: fixed` so it overlays the sidebar.
  *  Item set depends on whether the row is a directory or a file. */
 function FloatingCtxMenu({
-  ctx, onClose, onNewFolder, onDeleteDir, onDeleteFile, onDuplicateFile, onEditCollection,
+  ctx, onClose, onNewRequest, onNewFolder, onDeleteDir, onDeleteFile, onDuplicateFile, onEditCollection,
 }: {
-  ctx: { x: number; y: number; row: RowContext } | null
+  ctx: { x: number; y: number; row: RowContext; canCreateRequest: boolean } | null
   onClose: () => void
+  onNewRequest: (dir: DirContext) => void
   onNewFolder: (dir: DirContext) => void
   onDeleteDir: (dir: DirContext) => void
   onDeleteFile: (file: FileContext) => void
@@ -481,6 +507,16 @@ function FloatingCtxMenu({
               <Group gap={8} wrap="nowrap"><IconEdit size={14} />Edit collection…</Group>
             </UnstyledButton>
           )
+        )}
+        {isDir && ctx.canCreateRequest && (
+          <UnstyledButton
+            px={10} py={6}
+            className="tap-tree-row"
+            style={{ fontSize: 13, borderRadius: 4 }}
+            onClick={() => onNewRequest(ctx.row as DirContext)}
+          >
+            <Group gap={8} wrap="nowrap"><IconFilePlus size={14} />New request</Group>
+          </UnstyledButton>
         )}
         {isDir && (
           <UnstyledButton
@@ -574,11 +610,27 @@ interface TreeLookup {
  *  Collection metadata rows aren't emitted as separate leaves — the collection IS its
  *  enclosing folder. */
 function collectRequestRows(nodes: ExplorerNode[], onOpenFile: (n: TreeNode) => void): TreeLookup {
+  return collectExplorerRows(nodes, onOpenFile, REQUEST_TREE_PREFIX)
+}
+
+/** Same shape as collectRequestRows but for the Auth tab — workspace-scoped profiles keep
+ *  their `auth/` folder, collection-owned ones are grouped under their collection. */
+function collectAuthRows(nodes: ExplorerNode[], onOpenFile: (n: TreeNode) => void): TreeLookup {
+  return collectExplorerRows(nodes, onOpenFile, null)
+}
+
+/** Shared walk behind both sidebar trees. `stripPrefix` is the structural path prefix to
+ *  drop when falling back to a node's on-disk basename. */
+function collectExplorerRows(
+  nodes: ExplorerNode[],
+  onOpenFile: (n: TreeNode) => void,
+  stripPrefix: string | null,
+): TreeLookup {
   const lookup = newTreeLookup()
   const used = new Set<string>()
 
   const visit = (node: ExplorerNode, parentDisplay: string) => {
-    const fallback = leafBasename(node.path, REQUEST_TREE_PREFIX)
+    const fallback = leafBasename(node.path, stripPrefix)
     const display = uniqueDisplayPath(parentDisplay, displaySegment(node.name, fallback), used)
     if (node.kind === 'collection') {
       lookup.paths.push(dirPath(display))
@@ -592,46 +644,19 @@ function collectRequestRows(nodes: ExplorerNode[], onOpenFile: (n: TreeNode) => 
       lookup.realToDisplay.set(node.path, dirPath(display))
       lookup.kindByDisplayPath.set(display, 'folder')
       lookup.dirsByDisplayPath.set(display, { kind: 'folder', realPath: node.path, name: node.name })
-    } else if (node.kind === 'request' && node.source) {
+    } else if (node.source) {
+      // Leaf: request or auth profile.
+      const src = node.source
       lookup.paths.push(display)
       lookup.realToDisplay.set(node.path, display)
-      lookup.kindByDisplayPath.set(display, 'request')
-      const src = node.source
+      lookup.kindByDisplayPath.set(display, node.kind)
       lookup.activators.set(display, () => onOpenFile(src))
-      lookup.filesByDisplayPath.set(display, { kind: 'request', realPath: node.path, name: node.name })
-      lookup.iconByBasename[display.split('/').pop()!] = TAP_ICONS.send
-      return // requests are leaves
+      lookup.filesByDisplayPath.set(display, { kind: node.kind, realPath: node.path, name: node.name })
+      lookup.iconByBasename[display.split('/').pop()!] =
+        node.kind === 'auth' ? TAP_ICONS.lock : TAP_ICONS.send
+      return // leaves have no children
     }
     for (const c of node.children) visit(c, display)
-  }
-
-  for (const root of nodes) visit(root, '')
-  return lookup
-}
-
-/** Same shape as collectRequestRows but for auth profiles — these don't sit under a
- *  collections/ root. Auth rows render under their spec name; grouping folders keep
- *  their directory name. */
-function collectAuthRows(nodes: TreeNode[], onOpenFile: (n: TreeNode) => void): TreeLookup {
-  const lookup = newTreeLookup()
-  const used = new Set<string>()
-
-  const visit = (n: TreeNode, parentDisplay: string) => {
-    if (n.kind === 'directory') {
-      const display = uniqueDisplayPath(parentDisplay, displaySegment(n.name, leafBasename(n.path, null)), used)
-      lookup.kindByDisplayPath.set(display, 'folder')
-      lookup.dirsByDisplayPath.set(display, { kind: 'folder', realPath: n.path, name: n.name })
-      for (const c of n.children) visit(c, display)
-      return
-    }
-    if (n.kind !== 'auth') return
-    const display = uniqueDisplayPath(parentDisplay, displaySegment(n.name, leafBasename(n.path, null)), used)
-    lookup.paths.push(display)
-    lookup.realToDisplay.set(n.path, display)
-    lookup.kindByDisplayPath.set(display, 'auth')
-    lookup.activators.set(display, () => onOpenFile(n))
-    lookup.filesByDisplayPath.set(display, { kind: 'auth', realPath: n.path, name: n.name })
-    lookup.iconByBasename[display.split('/').pop()!] = TAP_ICONS.lock
   }
 
   for (const root of nodes) visit(root, '')
@@ -690,6 +715,48 @@ function dirPath(path: string): string {
   return path.endsWith('/') ? path : `${path}/`
 }
 
+const NEW_REQUEST_PREFIX = 'New Request'
+
+/** First free `New Request {n}` inside `dirRealPath`. Checked against both the siblings'
+ *  display names and their on-disk filenames — a PUT to an existing path would overwrite
+ *  it, and two rows sharing a display name read as duplicates in the tree. Walks the raw
+ *  workspace tree, not the sidebar lookup, so an active search filter can't hide a
+ *  sibling and make us collide with it. */
+function nextRequestName(tree: TreeNode[], dirRealPath: string): string {
+  const dir = findTreeNode(tree, dirRealPath)
+  const names = new Set<string>()
+  const files = new Set<string>()
+  for (const c of dir?.children ?? []) {
+    names.add(c.name.trim().toLowerCase())
+    files.add((c.path.split('/').pop() ?? '').toLowerCase())
+  }
+  const taken = (name: string) =>
+    names.has(name.toLowerCase()) || files.has(`${nameToSlug(name)}.req.md`)
+  let n = 1
+  while (taken(`${NEW_REQUEST_PREFIX} ${n}`)) n++
+  return `${NEW_REQUEST_PREFIX} ${n}`
+}
+
+/** Locate a node by its workspace-relative path, descending only into ancestors of it. */
+function findTreeNode(nodes: TreeNode[], path: string): TreeNode | undefined {
+  for (const n of nodes) {
+    if (n.path === path) return n
+    if (path.startsWith(`${n.path}/`)) {
+      const hit = findTreeNode(n.children, path)
+      if (hit) return hit
+    }
+  }
+  return undefined
+}
+
+function nameToSlug(name: string): string {
+  return name.trim().toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .replace(/-+/g, '-')
+    .slice(0, 60)
+}
+
 function EmptyState({ kind }: { kind: 'requests' | 'auth' }) {
   const message = kind === 'requests'
     ? 'No collections yet — create one with +.'
@@ -697,25 +764,4 @@ function EmptyState({ kind }: { kind: 'requests' | 'auth' }) {
   return (
     <Text size="xs" c="dimmed" ta="center" py="xl" px="md">{message}</Text>
   )
-}
-
-function filterByKind(nodes: TreeNode[], kind: TreeNode['kind']): TreeNode[] {
-  const recurse = (n: TreeNode): TreeNode | null => {
-    if (n.kind === kind) return n
-    if (n.kind !== 'directory') return null
-    const kids = n.children.map(recurse).filter((x): x is TreeNode => x !== null)
-    return kids.length > 0 ? { ...n, children: kids } : null
-  }
-  return nodes.map(recurse).filter((x): x is TreeNode => x !== null)
-}
-
-function filterTreeByQuery(nodes: TreeNode[], q: string): TreeNode[] {
-  const recurse = (n: TreeNode): TreeNode | null => {
-    if (n.kind !== 'directory') {
-      return n.name.toLowerCase().includes(q) || n.path.toLowerCase().includes(q) ? n : null
-    }
-    const kids = n.children.map(recurse).filter((x): x is TreeNode => x !== null)
-    return kids.length > 0 ? { ...n, children: kids } : null
-  }
-  return nodes.map(recurse).filter((x): x is TreeNode => x !== null)
 }

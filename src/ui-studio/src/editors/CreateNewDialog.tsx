@@ -38,6 +38,10 @@ const KIND_OPTIONS: KindOption[] = [
 /** Collection sub-mode: from-scratch vs. import a Postman v2.1 export. */
 type CollectionMode = 'blank' | 'postman'
 
+/** Sentinel for "not owned by a collection" in the auth scope picker — Mantine's Select
+ *  treats '' as "nothing selected", so it can't carry a real choice. */
+const WORKSPACE_SCOPE = '__workspace__'
+
 interface PostmanPreview {
   /** Parsed JSON the importer will receive verbatim. */
   raw: unknown
@@ -59,6 +63,10 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
   const [name, setName] = useState('')
   /** For Request: which collection to drop the request into. */
   const [collectionSlug, setCollectionSlug] = useState<string | null>(null)
+  /** For Auth: which collection owns the profile, or `WORKSPACE_SCOPE` for a shared one
+   *  under `auth/`. A collection-scoped profile can reference that collection's variables
+   *  and stages; a workspace-scoped one only sees workspace + env. */
+  const [authScope, setAuthScope] = useState<string>(WORKSPACE_SCOPE)
   /** For Request: optional sub-folder path inside the chosen collection. */
   const [subFolder, setSubFolder] = useState<string>('')
   const [collections, setCollections] = useState<CollectionSummary[]>([])
@@ -68,6 +76,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
    *  Create, and we've handed off to a provider-pick + per-provider-fields stepper. */
   const [authWizardOpen, setAuthWizardOpen] = useState(false)
   const [authWizardName, setAuthWizardName] = useState('')
+  const [authWizardDir, setAuthWizardDir] = useState('auth')
 
   // Collection-specific state: pick blank vs Postman import, then carry the parsed
   // Postman file + an overwrite toggle. Reset when the kind switches away.
@@ -91,6 +100,9 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
 
   const slug = nameToSlug(name)
 
+  /** Directory the auth wizard writes into: the chosen collection, or the shared `auth/`. */
+  const authDir = authScope === WORKSPACE_SCOPE ? 'auth' : `collections/${authScope}`
+
   // Resolve the on-disk target path for the chosen kind.
   const targetPath = useMemo(() => {
     if (!slug) return ''
@@ -101,14 +113,15 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
         const prefix = sub ? `collections/${collectionSlug}/${sub}` : `collections/${collectionSlug}`
         return `${prefix}/${slug}.req.md`
       }
-      case 'auth': return `auth/${slug}.auth.md`
+      case 'auth': return `${authDir}/${slug}.auth.md`
       case 'env': return `environments/${slug}.env.md`
       case 'collection': return `collections/${slug}/_collection.md`
     }
-  }, [kind, slug, collectionSlug, subFolder])
+  }, [kind, slug, collectionSlug, subFolder, authDir])
 
   function reset() {
     setKind('request'); setName(''); setCollectionSlug(null); setSubFolder(''); setError(null)
+    setAuthScope(WORKSPACE_SCOPE)
     setCollectionMode('blank'); setPostman(null); setPostmanParseError(null)
     setOverwriteExisting(false); setImportWarnings(null)
   }
@@ -173,9 +186,10 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
 
     if (!slug || !name) { setError('Pick a name.'); return }
     // Auth gets a dedicated wizard — pick provider template + required fields. The base
-    // dialog hands off after collecting just the name; the wizard does the saveAuthSpec.
+    // dialog hands off after collecting the name + scope; the wizard does the saveAuthSpec.
     if (kind === 'auth') {
       setAuthWizardName(name)
+      setAuthWizardDir(authDir)
       setAuthWizardOpen(true)
       onOpenChange(false)
       return
@@ -266,6 +280,20 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
           onChange={(e) => setName(e.currentTarget.value)}
           autoFocus
         />
+
+        {kind === 'auth' && (
+          <Select
+            label="Scope"
+            description="A profile inside a collection can use that collection's variables and stages. A workspace profile is shared by every collection."
+            data={[
+              { value: WORKSPACE_SCOPE, label: 'Workspace (shared)' },
+              ...collectionOptions,
+            ]}
+            value={authScope}
+            onChange={(v) => setAuthScope(v ?? WORKSPACE_SCOPE)}
+            allowDeselect={false}
+          />
+        )}
 
         {kind === 'request' && (
           <>
@@ -364,7 +392,10 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
           <Text size="xs" c="dimmed">Imported into <Code fz="xs">.tap/collections/{slug}/</Code></Text>
         )}
         {kind === 'auth' && slug && (
-          <Text size="xs" c="dimmed">Next step picks a provider (GitHub, OAuth, API key, …).</Text>
+          <Text size="xs" c="dimmed">
+            Created at <Code fz="xs">.tap/{targetPath}</Code> — next step picks a provider
+            (GitHub, OAuth, API key, …).
+          </Text>
         )}
 
         {importWarnings && importWarnings.length > 0 && (
@@ -404,6 +435,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
         open={authWizardOpen}
         onOpenChange={setAuthWizardOpen}
         initialName={authWizardName}
+        targetDir={authWizardDir}
         onCreated={(p, k) => { onCreated(p, k); reset() }}
       />
     )}

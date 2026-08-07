@@ -78,7 +78,7 @@ public static class VariableViewBuilder
         }
         else if (requestPath is not null)
         {
-            collection = CollectionLocator.ForRequest(workspace, requestPath);
+            collection = CollectionLocator.ForFile(workspace, requestPath);
         }
 
         if (collection is not null)

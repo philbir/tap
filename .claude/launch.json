@@ -25,6 +25,18 @@
       "port": 5297
     },
     {
+      "name": "inspector-ui",
+      "runtimeExecutable": "yarn",
+      "runtimeArgs": ["--cwd", "src/ui-inspector", "dev", "--port", "5197", "--strictPort"],
+      "port": 5197
+    },
+    {
+      "name": "docs-site",
+      "runtimeExecutable": "yarn",
+      "runtimeArgs": ["--cwd", "docs-site", "dev", "--port", "5397", "--strictPort"],
+      "port": 5397
+    },
+    {
       "name": "studio-aspire",
       "runtimeExecutable": "sh",
       "runtimeArgs": ["-c", "echo 'attaching to aspire-managed studio on 55446'; while :; do sleep 3600; done"],

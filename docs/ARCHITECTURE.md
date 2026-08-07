@@ -1,6 +1,10 @@
 # Tap Architecture
 
-Tap has two user-facing entry points and one shared inspector runtime:
+> Scope: this document covers **Tap Tunnel + Inspector** — the tunnel providers, the capture
+> proxy, and the Inspector UI. Tap Studio, the request workbench, is a separate product with
+> its own stack; see [studio.md](studio.md) and [workspace-format.md](workspace-format.md).
+
+The Inspector half has two user-facing entry points and one shared runtime:
 
 ```mermaid
 flowchart LR

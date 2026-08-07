@@ -197,10 +197,17 @@ public static class WorkspaceEndpoints
             var dir = Path.GetDirectoryName(f.RelativePath)?.Replace('\\', '/') ?? string.Empty;
             EnsureDir(nodesByDir, dir);
 
+            // A collection is named by its directory (the slug), not by its metadata
+            // file — falling back to the filename would label every unnamed collection
+            // "_collection".
+            var fallbackName = f.Kind == WorkspaceKind.Collection && dir.Length > 0
+                ? dir[(dir.LastIndexOf('/') + 1)..]
+                : Path.GetFileNameWithoutExtension(f.RelativePath);
+
             var node = new TreeNodeDto(
                 Path: f.RelativePath,
                 Kind: f.Kind.ToString().ToLowerInvariant(),
-                Name: f.Name ?? Path.GetFileNameWithoutExtension(f.RelativePath),
+                Name: f.Name ?? fallbackName,
                 Id: f.Id,
                 Children: []);
             nodesByDir[dir].Add(node);

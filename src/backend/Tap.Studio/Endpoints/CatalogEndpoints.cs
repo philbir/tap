@@ -1,6 +1,7 @@
 using Tap.Studio.Contracts;
 using Tap.Studio.Specs;
 using Tap.Workspace.Model;
+using Tap.Workspace.Rendering;
 
 namespace Tap.Studio.Endpoints;
 
@@ -19,7 +20,9 @@ public static class CatalogEndpoints
         var auths = app.MapGroup("/api/auths");
         auths.MapGet("/", (WorkspaceService svc) => Results.Ok(
             (IReadOnlyList<AuthSummaryDto>)svc.Current.Auths
-                .Select(a => new AuthSummaryDto(a.RelativePath, a.Name ?? Stem(a.RelativePath), a.Id, a.Type))
+                .Select(a => new AuthSummaryDto(
+                    a.RelativePath, a.Name ?? Stem(a.RelativePath), a.Id, a.Type,
+                    CollectionLocator.SlugForFile(a.RelativePath)))
                 .ToArray()));
 
         auths.MapGet("/{*path}", (string path, WorkspaceService svc) =>
@@ -30,6 +33,7 @@ public static class CatalogEndpoints
                 Name: a.Name ?? Stem(a.RelativePath),
                 Id: a.Id,
                 Type: a.Type,
+                Collection: CollectionLocator.SlugForFile(a.RelativePath),
                 Fields: a.Fields,
                 Headers: a.Headers,
                 Query: a.Query,

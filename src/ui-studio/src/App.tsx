@@ -13,6 +13,7 @@ import shellStyles from './editors/EditorShell.module.css'
 import { RequestEditor } from './editors/RequestEditor'
 import { SettingsEditor } from './editors/SettingsEditor'
 import { WorkspaceEditor } from './editors/WorkspaceEditor'
+import { collectionDirOf } from './shell/explorerTree'
 import { Header } from './shell/Header'
 import { Sidebar } from './shell/Sidebar'
 import { TabBar } from './shell/TabBar'
@@ -49,6 +50,14 @@ export function App() {
     if (node.kind === 'directory') return
     if (node.kind === 'workspace') {
       openTab({ path: MANIFEST_TAB_PATH, kind: 'workspace', label: 'Workspace' })
+      return
+    }
+    if (node.kind === 'collection') {
+      // The tree hands us the `collections/<slug>/_collection.md` metadata file, but the
+      // collection editor is keyed on the collection *directory* — open the same tab the
+      // Requests view opens for that collection instead of a second, broken one.
+      const dir = collectionDirOf(node.path)
+      openTab({ path: dir, kind: 'collection', label: node.name || (dir.split('/').pop() ?? dir) })
       return
     }
     openTab({ path: node.path, kind: node.kind, label: node.name })

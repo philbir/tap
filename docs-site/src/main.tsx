@@ -5,6 +5,8 @@ import "./styles.css";
 const version = import.meta.env.VITE_TAP_VERSION ?? "v0.1.0";
 const repoUrl = import.meta.env.VITE_TAP_REPO_URL ?? "https://github.com/philbir/tap";
 
+type Product = "inspector" | "studio";
+
 type Feature = {
   title: string;
   text: string;
@@ -13,12 +15,36 @@ type Feature = {
 
 type DocSection = {
   id: string;
+  product: Product;
   eyebrow: string;
   title: string;
   body: string;
 };
 
-const features: Feature[] = [
+const principles: Feature[] = [
+  {
+    title: "Local-first, no account",
+    text: "Everything runs on your machine. No cloud workspace, no sync service, no telemetry. Quick tunnels are free; stable hostnames just need a domain you already own.",
+    glyph: "L",
+  },
+  {
+    title: "Plain text, in your repo",
+    text: "Studio's workspace is Markdown with YAML frontmatter — requests, collections, auth profiles, and environments all review as ordinary git diffs.",
+    glyph: "T",
+  },
+  {
+    title: "Secrets stay out of files",
+    text: "The Inspector never persists credentials. Studio resolves secret references at execute time and keeps OAuth tokens in your OS state folder, never in the workspace.",
+    glyph: "S",
+  },
+  {
+    title: "Explicit boundaries",
+    text: "Tailscale routes stay tailnet-only by default, public exposure is opt-in, and proxy auth (header, CIDR, country, OIDC) gates traffic before it reaches your service.",
+    glyph: "B",
+  },
+];
+
+const inspectorFeatures: Feature[] = [
   {
     title: "Tunnel without ceremony",
     text: "Use free TryCloudflare URLs, dashboard connector tokens, API-managed Cloudflare DNS, or Tailscale Serve/Funnel when your tailnet is the right boundary.",
@@ -56,66 +82,161 @@ const features: Feature[] = [
   },
 ];
 
+const studioFeatures: Feature[] = [
+  {
+    title: "Full request composition",
+    text: "Method, URL, query params, headers, and bodies as None / Form / Multipart / Raw / Binary / GraphQL — with JSON and XML formatting, multi-file uploads, and a GraphQL editor backed by the live schema.",
+    glyph: "R",
+  },
+  {
+    title: "Many authentication flows",
+    text: "OAuth 2.0 / OIDC with PKCE, client credentials, ROPC and device code; Microsoft Entra; Azure CLI direct and on-behalf-of; GitHub PAT, gh CLI, App and OAuth App; AWS SigV4; signed JWT; bearer, basic, API key, custom headers.",
+    glyph: "A",
+  },
+  {
+    title: "AI assistance",
+    text: "Hand the request to GitHub Copilot CLI or Claude Code — running locally under your existing CLI login — and get a proposed edit, with documentation, that you review before saving.",
+    glyph: "AI",
+  },
+  {
+    title: "Responses you can read",
+    text: "Status, duration, size, a syntax-highlighted body with image and binary previews, the exact request that went on the wire, the auth and variable flow behind it, and which secrets were resolved.",
+    glyph: "V",
+  },
+  {
+    title: "Streaming built in",
+    text: "Server-Sent Events stream into a live timeline, and requests marked protocol: websocket open a real socket that appends frames as they arrive.",
+    glyph: "S",
+  },
+  {
+    title: "Git-native workspace",
+    text: "Every request, collection, auth profile, and environment is a Markdown file in your repo. Branch, diff, stage, and commit without leaving the app.",
+    glyph: "G",
+  },
+  {
+    title: "Variables and secrets",
+    text: "A six-level cascade over pluggable providers: process env behind allowlists, an encrypted workspace file, Azure Key Vault, and machine-local system variables.",
+    glyph: "X",
+  },
+  {
+    title: "Desktop app",
+    text: "A native shell for macOS, Windows, and Linux that self-updates and registers a stable tap-studio:// redirect URI for OAuth sign-in.",
+    glyph: "D",
+  },
+];
+
 const docs: DocSection[] = [
   {
     id: "use-cases",
+    product: "inspector",
     eyebrow: "Why",
     title: "Use cases",
-    body: "Tap is for the moments when localhost needs to behave like a real internet endpoint, but you still want full visibility into every request.",
+    body: "For the moments when localhost needs to behave like a real internet endpoint, but you still want full visibility into every request.",
   },
   {
     id: "quickstart",
+    product: "inspector",
     eyebrow: "Start",
     title: "Quick start",
     body: "Run Tap from the CLI for ad hoc debugging, or add it to Aspire when tunnel wiring should live beside your app resources.",
   },
   {
     id: "entry-points",
+    product: "inspector",
     eyebrow: "Choose",
     title: "CLI or Aspire",
     body: "Both entry points use the same Tap.Server runtime. The difference is where configuration and lifecycle orchestration live.",
   },
   {
     id: "cli",
+    product: "inspector",
     eyebrow: "Terminal",
     title: "CLI reference",
     body: "The CLI is for one upstream URL at a time. Start local-only, add Cloudflare, or route through Tailscale Serve/Funnel.",
   },
   {
     id: "cloudflare",
+    product: "inspector",
     eyebrow: "Cloudflare",
     title: "Tunnel setup",
     body: "Existing-tunnel mode uses a Cloudflare Tunnel you have already created. API-managed mode needs a Cloudflare API token that can edit tunnels and DNS.",
   },
   {
     id: "tailscale",
+    product: "inspector",
     eyebrow: "Tailscale",
     title: "Serve and Funnel",
     body: "Tailscale support routes Tap through your tailnet. Serve is private by default; Funnel is public and should be paired with auth.",
   },
   {
     id: "auth",
+    product: "inspector",
     eyebrow: "Security",
-    title: "Authentication",
+    title: "Proxy authentication",
     body: "Authentication gates the public proxy path before traffic reaches the upstream. The local inspector UI remains the control plane.",
   },
   {
-    id: "architecture",
-    eyebrow: "Internals",
-    title: "Architecture",
-    body: "Tap has two entry points, a shared inspector host, and optional Cloudflare or Tailscale tunnel providers in front of the proxy port.",
-  },
-  {
     id: "modes",
+    product: "inspector",
     eyebrow: "Routing",
     title: "Tunnel modes",
     body: "Tap scales from a local capture proxy to Cloudflare-managed tunnels, Tailscale private Serve, and public Funnel.",
   },
   {
+    id: "architecture",
+    product: "inspector",
+    eyebrow: "Internals",
+    title: "Architecture",
+    body: "Tap has two entry points, a shared inspector host, and optional Cloudflare or Tailscale tunnel providers in front of the proxy port.",
+  },
+  {
     id: "config",
+    product: "inspector",
     eyebrow: "Operations",
     title: "Configuration",
     body: "Most configuration is written by the AppHost, with provider credentials, profile fields, and optional auth coming from normal .NET configuration.",
+  },
+  {
+    id: "studio-compose",
+    product: "studio",
+    eyebrow: "Compose",
+    title: "The request composer",
+    body: "One URL bar and eight tabs: params, headers, body, auth, variables, meta, docs, and the generated Markdown source.",
+  },
+  {
+    id: "studio-auth",
+    product: "studio",
+    eyebrow: "Identity",
+    title: "Authentication flows",
+    body: "Auth profiles are reusable files. Start from a template, fill only the fields that flow needs, and prove it works before wiring it to a request.",
+  },
+  {
+    id: "studio-ai",
+    product: "studio",
+    eyebrow: "Assist",
+    title: "AI assistance",
+    body: "Studio spawns an AI coding CLI you already have installed, hands it the real shape of your workspace, and applies what it proposes as an unsaved edit.",
+  },
+  {
+    id: "studio-workspace",
+    product: "studio",
+    eyebrow: "Format",
+    title: "The workspace is your repo",
+    body: "Five file kinds, all Markdown with YAML frontmatter. A runnable request is the composition of workspace, collection, stage, auth, environment, and request.",
+  },
+  {
+    id: "studio-variables",
+    product: "studio",
+    eyebrow: "Values",
+    title: "Variables and secrets",
+    body: "A cascade of scopes over pluggable providers, so a workspace file only ever contains a reference — never a secret value.",
+  },
+  {
+    id: "studio-install",
+    product: "studio",
+    eyebrow: "Install",
+    title: "Get Tap Studio",
+    body: "Studio ships as a native desktop app wrapping the self-contained backend, and runs from source through the Aspire dev loop.",
   },
 ];
 
@@ -232,6 +353,76 @@ dotnet user-secrets set Tailscale:UseDocker "true" \\
   sampleScenarios: `dotnet run --project samples/Sample.AppHost -- --scenarios tailscale
 dotnet run --project samples/Sample.AppHost -- --scenarios cloudflare
 dotnet run --project samples/Sample.AppHost -- --scenarios all`,
+  studioRequest: `---
+kind: request
+name: Create customer
+auth: ../../auth/stripe-bearer.auth.md
+tags: [customer, write]
+---
+
+# Create customer
+
+Called during signup. Idempotent on \`email\`.
+
+\`\`\`http
+POST /v1/customers
+Content-Type: application/json
+
+{ "email": "{{customer.email}}", "name": "{{customer.name}}" }
+\`\`\``,
+  studioCollection: `---
+kind: collection
+name: Stripe
+baseUrl: https://api.stripe.com
+defaultAuth: ../../auth/stripe-bearer.auth.md
+defaultHeaders:
+  Accept: application/json
+stages:
+- name: live
+- name: test
+  defaultAuth: ../../auth/stripe-test.auth.md
+---`,
+  studioAuth: `---
+kind: auth
+name: Corp Entra
+type: oauth2
+flow: authorization_code
+authority: https://login.microsoftonline.com/{{tenant}}/v2.0
+clientId: '{{env:ENTRA_CLIENT_ID}}'
+scopes:
+  - https://graph.microsoft.com/.default
+---`,
+  studioWorkspace: `---
+kind: workspace
+name: acme-billing
+defaultEnv: environments/local.env.md
+variableProviders:
+- name: env
+  type: env
+- name: vault
+  type: azkv
+  settings:
+    vaultUrl: https://acme-prod.vault.azure.net
+---`,
+  studioEnv: `---
+kind: env
+name: Production
+vars:
+  api.baseUrl: https://api.stripe.com
+  STRIPE_KEY: '{{vault:stripe-live-key}}'
+---`,
+  studioAllowlist: `export TAP_VARS_ALLOWED="DEMO_*,ASPNETCORE_ENVIRONMENT"
+export TAP_SECRETS_ALLOWED="ACME_*_TOKEN,AZURE_*"`,
+  studioRun: `cd samples
+aspire run
+
+# your own repo instead of the sample workspace
+STUDIO_WORKSPACE=/path/to/your/repo aspire run
+
+# add the native desktop window
+RunDesktop=true aspire run`,
+  studioBuild: `scripts/build-desktop.sh          # publish sidecar + tauri build
+scripts/build-desktop.sh --dev    # publish sidecar + tauri dev`,
 };
 
 const App = () => (
@@ -239,10 +430,10 @@ const App = () => (
     <SiteNav />
     <main>
       <Hero />
-      <PublicTunnelWarning />
-      <FeatureGrid />
-      <FlowSection />
-      <Docs />
+      <ProductSplit />
+      <Principles />
+      <InspectorProduct />
+      <StudioProduct />
       <FinalCta />
     </main>
   </>
@@ -255,15 +446,14 @@ const SiteNav = () => (
       <span>Tap</span>
     </a>
     <nav aria-label="Main">
-        <a href="#features">Features</a>
-        <a href="#use-cases">Use cases</a>
-        <a href="#quickstart">Quick start</a>
-        <a href="#entry-points">CLI/Aspire</a>
-        <a href="#cli">CLI</a>
-        <a href="#cloudflare">Cloudflare</a>
-        <a href="#tailscale">Tailscale</a>
-        <a href="#auth">Auth</a>
-        <a href="#architecture">Architecture</a>
+      <a href="#products">Products</a>
+      <a href="#inspector">Tunnel + Inspector</a>
+      <a href="#cli">CLI</a>
+      <a href="#cloudflare">Cloudflare</a>
+      <a href="#tailscale">Tailscale</a>
+      <a href="#studio">Studio</a>
+      <a href="#studio-auth">Auth flows</a>
+      <a href="#studio-ai">AI</a>
       <a className="nav-cta" href={repoUrl}>
         GitHub
       </a>
@@ -276,20 +466,20 @@ const Hero = () => (
     <div className="hero-copy">
       <div className="eyebrow">
         <span className="spark" />
-        Aspire-friendly tunnel inspector
+        Two local-first tools for HTTP
       </div>
-      <h1>localhost, ready for real callbacks.</h1>
+      <h1>See what arrives. Shape what you send.</h1>
       <p className="lead">
-        Tap gives local services a public URL for mobile hooks, webhooks, auth redirects,
-        partner integrations, and temporary demos, then captures the traffic so you can see
-        what actually happened.
+        Tap gives local services a public URL and captures everything that hits it — and Tap
+        Studio is the workbench where you compose those requests, run real authentication
+        flows, and keep the whole workspace in your repo as plain Markdown.
       </p>
       <div className="hero-actions">
-        <a className="button primary" href="#quickstart">
-          Start tunneling
+        <a className="button primary" href="#products">
+          See both products
         </a>
-        <a className="button ghost" href="#architecture">
-          See architecture
+        <a className="button ghost" href="#quickstart">
+          Start tunneling
         </a>
         <a className="button ghost" href={repoUrl}>
           View code
@@ -299,12 +489,12 @@ const Hero = () => (
         <span>{version}</span>
         <span>CLI</span>
         <span>Aspire</span>
+        <span>Desktop app</span>
         <span>TryCloudflare</span>
         <span>Tailscale Serve</span>
-        <span>Tailscale Funnel</span>
-        <span>API-managed DNS</span>
-        <span>QR links</span>
-        <span>HTTP replay</span>
+        <span>OAuth 2.0 / OIDC</span>
+        <span>AI assistant</span>
+        <span>Git-native</span>
         <span>Free as tap water</span>
       </div>
     </div>
@@ -312,6 +502,177 @@ const Hero = () => (
       <source srcSet="./tap-hero-dark.png" media="(prefers-color-scheme: dark)" />
       <img src="./tap-hero.png" alt="A tap extracting traffic from a tunnel into an inspector panel" />
     </picture>
+  </section>
+);
+
+const ProductSplit = () => (
+  <section className="section" id="products">
+    <div className="section-heading">
+      <span className="kicker">The big picture</span>
+      <h2>Local HTTP development has two halves.</h2>
+      <p>
+        Sometimes the internet needs to reach your laptop and you need to see exactly what
+        arrived. Other times you are the client, and you need to compose a request,
+        authenticate properly, send it, and keep it somewhere your team can find next month.
+        Tap is one product for each half — use either alone, or both together.
+      </p>
+    </div>
+    <div className="product-split">
+      <article className="product-card">
+        <span className="product-index">01</span>
+        <h3>Tap Tunnel + Inspector</h3>
+        <p>
+          A public URL for localhost through Cloudflare Tunnel or Tailscale, with every request,
+          response, SSE event, and WebSocket frame captured on the way through. Runs as the{" "}
+          <code>tap</code> CLI or as .NET Aspire resources.
+        </p>
+        <div className="product-tags">
+          <span>CLI</span>
+          <span>Aspire</span>
+          <span>Cloudflare</span>
+          <span>Tailscale</span>
+          <span>Replay</span>
+          <span>QR</span>
+        </div>
+        <a className="button primary" href="#inspector">
+          Explore the Inspector
+        </a>
+      </article>
+      <article className="product-card">
+        <span className="product-index">02</span>
+        <h3>Tap Studio</h3>
+        <p>
+          An HTTP workbench: full request composition, a catalogue of real authentication flows,
+          an AI assistant running on your own machine, and a workspace that lives in your git
+          repo as Markdown. Ships as a desktop app.
+        </p>
+        <div className="product-tags">
+          <span>Desktop</span>
+          <span>OAuth 2.0</span>
+          <span>Entra</span>
+          <span>AWS SigV4</span>
+          <span>GraphQL</span>
+          <span>AI</span>
+        </div>
+        <a className="button primary" href="#studio">
+          Explore Studio
+        </a>
+      </article>
+    </div>
+  </section>
+);
+
+const Principles = () => (
+  <section className="flow-band" id="principles">
+    <div className="section-heading">
+      <span className="kicker">Shared foundations</span>
+      <h2>Different jobs, same rules.</h2>
+      <p>
+        The two products share a philosophy more than they share code. Everything is local,
+        everything is inspectable, and nothing quietly leaves your machine.
+      </p>
+    </div>
+    <div className="feature-grid">
+      {principles.map((item) => (
+        <article className="feature-card" key={item.title}>
+          <span className="glyph">{item.glyph}</span>
+          <h3>{item.title}</h3>
+          <p>{item.text}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+);
+
+const InspectorProduct = () => (
+  <>
+    <ProductBand
+      id="inspector"
+      index="01"
+      title="Tap Tunnel + Inspector"
+      body="Give a local service a real public URL for mobile hooks, webhooks, auth redirects, partner integrations, and temporary demos — then read back exactly what happened."
+    />
+    <PublicTunnelWarning />
+    <section className="section" id="inspector-features">
+      <div className="section-heading">
+        <span className="kicker">What it does</span>
+        <h2>Public callbacks and local debugging in one workflow.</h2>
+        <p>
+          Start with free TryCloudflare URLs. Add a free Cloudflare account and your own domain
+          when you want stable hostnames. Tap itself is free like tap water: drink as much as
+          you like.
+        </p>
+      </div>
+      <div className="feature-grid">
+        {inspectorFeatures.map((feature) => (
+          <article className="feature-card" key={feature.title}>
+            <span className="glyph">{feature.glyph}</span>
+            <h3>{feature.title}</h3>
+            <p>{feature.text}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+    <FlowSection />
+    <Docs product="inspector" label="Inspector docs" />
+  </>
+);
+
+const StudioProduct = () => (
+  <>
+    <ProductBand
+      id="studio"
+      index="02"
+      title="Tap Studio"
+      body="The HTTP workbench: compose requests, authenticate against real identity providers, execute, document — and keep the whole thing in your repository as reviewable Markdown."
+    />
+    <section className="section" id="studio-features">
+      <Screenshot
+        src="./screenshots/studio-request.png"
+        alt="Tap Studio composing a POST request and showing the response"
+        caption="One URL bar, eight tabs, and a response panel that shows the status, timing, body, the exact request that went on the wire, and which secrets were resolved."
+      />
+      <div className="section-heading section-gap">
+        <span className="kicker">What it does</span>
+        <h2>A request client that behaves like part of your codebase.</h2>
+        <p>
+          Studio is the other direction of travel: you are the client. It composes the call,
+          runs the authentication flow behind it, executes it, and stores the result as text
+          your team can review.
+        </p>
+      </div>
+      <div className="feature-grid">
+        {studioFeatures.map((feature) => (
+          <article className="feature-card" key={feature.title}>
+            <span className="glyph">{feature.glyph}</span>
+            <h3>{feature.title}</h3>
+            <p>{feature.text}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+    <Docs product="studio" label="Studio docs" />
+  </>
+);
+
+const ProductBand = ({
+  id,
+  index,
+  title,
+  body,
+}: {
+  id: string;
+  index: string;
+  title: string;
+  body: string;
+}) => (
+  <section className="product-band" id={id}>
+    <span className="product-index large">{index}</span>
+    <div>
+      <span className="kicker">Product {index}</span>
+      <h2>{title}</h2>
+      <p>{body}</p>
+    </div>
   </section>
 );
 
@@ -338,28 +699,6 @@ const PublicTunnelWarning = () => (
       src="./public-tunnel-warning.png"
       alt="A suspicious actor sending malicious traffic through a public tunnel into a computer"
     />
-  </section>
-);
-
-const FeatureGrid = () => (
-  <section className="section" id="features">
-    <div className="section-heading">
-      <span className="kicker">Why Tap</span>
-      <h2>Public callbacks and local debugging finally share one workflow.</h2>
-      <p>
-        Start with free TryCloudflare URLs. Add a free Cloudflare account and your own domain
-        when you want stable hostnames. Tap itself is free like tap water: drink as much as you like.
-      </p>
-    </div>
-    <div className="feature-grid">
-      {features.map((feature) => (
-        <article className="feature-card" key={feature.title}>
-          <span className="glyph">{feature.glyph}</span>
-          <h3>{feature.title}</h3>
-          <p>{feature.text}</p>
-        </article>
-      ))}
-    </div>
   </section>
 );
 
@@ -391,23 +730,26 @@ const FlowSection = () => (
   </section>
 );
 
-const Docs = () => (
-  <section className="docs-wrap" id="docs">
-    <aside className="docs-sidebar" aria-label="Docs navigation">
-      <span className="kicker">Docs</span>
-      {docs.map((doc) => (
-        <a href={`#${doc.id}`} key={doc.id}>
-          {doc.title}
-        </a>
-      ))}
-    </aside>
-    <div className="docs-content">
-      {docs.map((doc) => (
-        <DocBlock doc={doc} key={doc.id} />
-      ))}
-    </div>
-  </section>
-);
+const Docs = ({ product, label }: { product: Product; label: string }) => {
+  const sections = docs.filter((doc) => doc.product === product);
+  return (
+    <section className="docs-wrap" id={`${product}-docs`}>
+      <aside className="docs-sidebar" aria-label={label}>
+        <span className="kicker">{label}</span>
+        {sections.map((doc) => (
+          <a href={`#${doc.id}`} key={doc.id}>
+            {doc.title}
+          </a>
+        ))}
+      </aside>
+      <div className="docs-content">
+        {sections.map((doc) => (
+          <DocBlock doc={doc} key={doc.id} />
+        ))}
+      </div>
+    </section>
+  );
+};
 
 const DocBlock = ({ doc }: { doc: DocSection }) => {
   if (doc.id === "use-cases") {
@@ -538,6 +880,8 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             ["--tailscale-authkey", "Auth key for ephemeral userspace tailscaled. Env: TAILSCALE_AUTHKEY."],
             ["--tailscale-system", "Force system mode even when an auth key exists in env or profile."],
             ["--tailscale-login-server", "Override the coordination server for Headscale or other control planes."],
+            ["--auth-header / --auth-cidr / --auth-country", "Static checks on the public proxy path."],
+            ["--auth-oidc-*", "Require browser sign-in through an OpenID Connect issuer."],
             ["--config", "Load defaults from a JSON tap.config file."],
           ].map(([key, value]) => (
             <div className="config-row" role="row" key={key}>
@@ -720,6 +1064,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
           <CodeBlock title="CLI: OIDC" code={commands.cliOidc} />
           <CodeBlock title="Aspire: proxy auth" code={commands.aspireAuth} />
         </div>
+        <p className="doc-note">
+          This gate protects the tunnelled proxy path. It is unrelated to Tap Studio's
+          authentication profiles, which are about signing <em>your own</em> outbound requests —
+          see <a href="#studio-auth">Studio auth flows</a>.
+        </p>
       </section>
     );
   }
@@ -803,36 +1152,285 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     );
   }
 
+  if (doc.id === "config") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="config-table" role="table" aria-label="Configuration">
+          {[
+            ["Cloudflare:TunnelToken", "Connector token for token tunnels."],
+            ["Cloudflare:ApiToken", "API-managed tunnels, DNS, and tunnel details."],
+            ["Tailscale:AuthKey", "Auth key for ephemeral userspace or Docker Tailscale nodes."],
+            ["Tailscale:UseSystem", "Sample AppHost flag that enables the system-daemon Tailscale scenario."],
+            ["Tailscale:UseDocker", "Sample AppHost flag that enables the Tailscale Docker scenario."],
+            ["Inspector__ProxyPort", "Captured application traffic."],
+            ["Inspector__UiPort", "Local UI, REST API, and SSE stream."],
+            ["Inspector__Provider", "cloudflare or tailscale; drives provider-specific UI and endpoints."],
+            ["Inspector__Ingress", "Serialized hostname-to-upstream routing table."],
+            ["Inspector__Tunnel__*", "Provider context for tunnel details, Tailscale socket path, mode, and status."],
+            ["Inspector__Auth__*", "Optional header, CIDR, country, and OIDC checks."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="callout">
+          <strong>Security boundary</strong>
+          <p>
+            Tap keeps the UI local and gates the public proxy path. Treat any tunnel as an
+            internet-facing endpoint and add an explicit access boundary for sensitive services.
+          </p>
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/inspector.md">
+          Full Inspector reference
+        </a>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-compose") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="config-table" role="table" aria-label="Request editor tabs">
+          {[
+            ["Params", "Query string as key/value rows, kept in sync with the URL bar."],
+            ["Headers", "Request headers, with completion for the common ones."],
+            ["Body", "None, Form, Multipart, Raw, Binary, or GraphQL. Raw bodies get JSON/Text/XML modes and a Format button; multipart handles multiple files."],
+            ["Auth", "Which profile applies: inherited from the collection, overridden here, or none."],
+            ["Variables", "Request-scoped variables with descriptions, defaults, and required flags."],
+            ["Meta", "Name, tags, and protocol — http or websocket."],
+            ["Docs", "Markdown documentation, rendered under the request. This is the file's body."],
+            ["Source", "The generated *.req.md, read-only. Studio is the only thing that writes YAML."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mode-grid section-gap">
+          {[
+            ["Response panel", "Status, duration, size, and content type, with tabs for the body, headers, the exact request sent, the auth and variable flow, and the secrets resolved."],
+            ["Streaming", "text/event-stream responses stream into a live timeline; protocol: websocket opens a real socket and appends frames as they arrive."],
+            ["GraphQL", "The GraphQL body mode fetches the endpoint schema, so queries, mutations, and variables get completion and validation against the live server."],
+            ["Base URL and stages", "A request stores a path; the collection contributes the base URL, and a named stage can override it for dev, uat, or prod."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-auth") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-auth-wizard.png"
+          alt="Tap Studio's auth template catalogue"
+          caption="Creating an auth profile starts from a template catalogue; the wizard then asks only for the fields that flow actually needs."
+        />
+        <div className="config-table" role="table" aria-label="Authentication templates">
+          {[
+            ["GitHub PAT", "Classic or fine-grained personal access token."],
+            ["GitHub CLI", "Reuses whichever account gh auth login is signed in as."],
+            ["GitHub App", "Mints an RS256 JWT from the App key, exchanges for an installation token."],
+            ["GitHub OAuth App", "Interactive sign-in for tools acting as a user."],
+            ["OAuth 2.0 / OIDC", "Authorization code with PKCE, client credentials, ROPC, or device code — endpoints by hand or via .well-known discovery."],
+            ["Microsoft Entra", "Pre-filled AAD v2 authority; supply tenant and client id."],
+            ["Azure CLI", "az account get-access-token, direct or on-behalf-of."],
+            ["AWS Signature V4", "Signs requests with AWS access keys."],
+            ["Signed JWT", "Mints a self-signed JWT per call for service-to-service patterns."],
+            ["Bearer / Basic / API key", "Static credentials, referenced from a variable provider."],
+            ["Custom headers", "Free-form header and cookie injection."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <Screenshot
+          src="./screenshots/studio-auth-oauth2.png"
+          alt="An OAuth 2.0 authorization code with PKCE profile in Tap Studio"
+          caption="Turn on discovery and Studio fetches /.well-known/openid-configuration to fill in the endpoints. Try it runs the flow on its own, so you can prove a profile works before wiring it to a request."
+        />
+        <div className="mode-grid">
+          {[
+            ["Tokens stay out of the repo", "Access tokens, refresh tokens, and expiry live in your OS state folder, keyed by workspace and profile, tightened to user-only permissions. Refresh is automatic."],
+            ["The redirect URI is runtime-owned", "Studio derives it from its own base URL and shows it read-only. The desktop app registers the stable tap-studio:// deep link instead of a random loopback port."],
+            ["Pick your browser", "Interactive flows let you choose which installed browser and profile handles the sign-in, so a work tenant doesn't land in your personal session."],
+            ["Profiles are inheritable", "Set a default auth on the collection and override it per request — or opt out entirely with auth: none."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <CodeBlock title="auth/corp-entra.auth.md" code={commands.studioAuth} />
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-ai") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-assistant.png"
+          alt="The Tap Studio AI assistant proposing an edit to a request"
+          caption="The assistant proposes; you apply. Its edit lands in the editor as an unsaved change you review and save — or discard."
+        />
+        <div className="mode-grid">
+          {[
+            ["Your CLI, your login", "Studio spawns GitHub Copilot CLI or Claude Code from your machine per request instead of bundling an SDK, so there is no extra native dependency and no second set of credentials."],
+            ["It sees the workspace", "The prompt carries the current request, the collection's base URL, default auth and shared headers, the available auth profiles, the environment names, and the variable catalogue with scopes and secret flags."],
+            ["It proposes, you apply", "The assistant never writes files. It returns a structured request that the UI applies as an unsaved edit; re-apply is one click."],
+            ["It documents as it goes", "New or meaningfully changed requests come back with Markdown documentation, and it refines existing notes rather than overwriting them."],
+            ["No inlined secrets", "Anything sensitive has to be a {{variable}} reference — the assistant is told never to hardcode a token or key."],
+            ["Model choice", "Pick the provider and model in Settings; the status endpoint reports what was detected and what still needs setup."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-workspace") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-git.png"
+          alt="A request edit shown as an ordinary git diff inside Tap Studio"
+          caption="Because a request is a couple of lines of Markdown, review, blame, cherry-pick, and revert all work the way they do for code. Branch, stage, diff, and commit without leaving the app."
+        />
+        <div className="config-table" role="table" aria-label="Workspace file kinds">
+          {[
+            ["tap.md", "The workspace: name, default environment, variable providers, workspace-wide variables."],
+            ["_collection.md", "A collection: base URL, named stages, default auth, default headers, collection variables."],
+            ["*.req.md", "One request, as a fenced http block plus Markdown documentation."],
+            ["*.auth.md", "A reusable authentication profile."],
+            ["*.env.md", "A named environment: a set of variables and secret references."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="callout">
+          <strong>A runnable request is a composition</strong>
+          <p>
+            Workspace + collection (+ stage) + auth + environment + request. No single file is the
+            whole story, and sub-folders inside a collection are pure grouping — they carry no
+            metadata and no inheritance.
+          </p>
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="collections/stripe/create-customer.req.md" code={commands.studioRequest} />
+          <CodeBlock title="collections/stripe/_collection.md" code={commands.studioCollection} />
+          <CodeBlock title="tap.md" code={commands.studioWorkspace} />
+          <CodeBlock title="environments/prod.env.md" code={commands.studioEnv} />
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/workspace-format.md">
+          Read the workspace format spec
+        </a>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-variables") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="callout">
+          <strong>Two token shapes</strong>
+          <p>
+            `{"{{name}}"}` resolves from the scope cascade first, then across providers in
+            registration order. `{"{{provider:name}}"}` resolves only against that provider. Write
+            a backslash before the braces for a literal.
+          </p>
+        </div>
+        <div className="flow section-gap" aria-label="Variable cascade">
+          {["workspace", "collection", "stage", "env", "request", "run"].map((step, index) => (
+            <React.Fragment key={step}>
+              <div className="flow-node">{step}</div>
+              {index < 5 ? <div className="flow-link" /> : null}
+            </React.Fragment>
+          ))}
+        </div>
+        <div className="config-table section-gap" role="table" aria-label="Variable providers">
+          {[
+            ["env", "Process environment, gated by TAP_VARS_ALLOWED (values may be shown) and TAP_SECRETS_ALLOWED (values stay masked but resolve at execute time). Unset means deny everything."],
+            ["file", "A YAML file under the workspace. Values marked secret are encrypted at rest with AES-256-GCM under a passphrase-derived key."],
+            ["azkv", "Azure Key Vault, through DefaultAzureCredential."],
+            ["system", "Machine-local variables stored in Studio's own settings, edited from the Settings screen and kept outside the repo."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <CodeBlock title="Allowlisting host environment variables" code={commands.studioAllowlist} />
+        <p className="doc-note">
+          Every execution records which variables and secrets were touched — provider, name, and
+          whether it was secret — so the Secrets tab can show what a request depends on without
+          ever surfacing a value.
+        </p>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-install") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="mode-grid">
+          {[
+            ["macOS", "A signed .dmg / .app for Apple Silicon and Intel."],
+            ["Windows", "An .msi and an NSIS setup .exe."],
+            ["Linux", "A .deb package."],
+            ["Auto-update", "Each release publishes a signed manifest the updater client polls, so the app keeps itself current."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="code-grid">
+          <CodeBlock title="Run from source" code={commands.studioRun} />
+          <CodeBlock title="Build the desktop bundle" code={commands.studioBuild} />
+        </div>
+        <p className="doc-note">
+          The dev loop starts a demo API that exercises every verb, content type, SSE, WebSockets,
+          GraphQL, and a real OAuth2/OIDC server — so every Studio feature has something to talk to
+          out of the box.
+        </p>
+        <a className="text-link" href={`${repoUrl}/releases`}>
+          Download Tap Studio
+        </a>
+      </section>
+    );
+  }
+
   return (
     <section className="doc-block" id={doc.id}>
       <DocHeader doc={doc} />
-      <div className="config-table" role="table" aria-label="Configuration">
-        {[
-          ["Cloudflare:TunnelToken", "Connector token for token tunnels."],
-          ["Cloudflare:ApiToken", "API-managed tunnels, DNS, and tunnel details."],
-          ["Tailscale:AuthKey", "Auth key for ephemeral userspace or Docker Tailscale nodes."],
-          ["Tailscale:UseSystem", "Sample AppHost flag that enables the system-daemon Tailscale scenario."],
-          ["Tailscale:UseDocker", "Sample AppHost flag that enables the Tailscale Docker scenario."],
-          ["Inspector__ProxyPort", "Captured application traffic."],
-          ["Inspector__UiPort", "Local UI, REST API, and SSE stream."],
-          ["Inspector__Provider", "cloudflare or tailscale; drives provider-specific UI and endpoints."],
-          ["Inspector__Ingress", "Serialized hostname-to-upstream routing table."],
-          ["Inspector__Tunnel__*", "Provider context for tunnel details, Tailscale socket path, mode, and status."],
-          ["Inspector__Auth__*", "Optional header, CIDR, country, and OIDC checks."],
-        ].map(([key, value]) => (
-          <div className="config-row" role="row" key={key}>
-            <code role="cell">{key}</code>
-            <span role="cell">{value}</span>
-          </div>
-        ))}
-      </div>
-      <div className="callout">
-        <strong>Security boundary</strong>
-        <p>
-          Tap keeps the UI local and gates the public proxy path. Treat any tunnel as an
-          internet-facing endpoint and add an explicit access boundary for sensitive services.
-        </p>
-      </div>
     </section>
   );
 };
@@ -882,9 +1480,12 @@ const Screenshot = ({ src, alt, caption }: { src: string; alt: string; caption: 
 const FinalCta = () => (
   <section className="final-cta">
     <div>
-      <span className="kicker">Ready for callbacks</span>
-      <h2>Give local services a public URL you can actually debug.</h2>
-      <p>Build the docs site, publish it to GitHub Pages, and point users at one clear Tap workflow.</p>
+      <span className="kicker">Two tools, one workflow</span>
+      <h2>Compose the call in Studio. Watch it land in the Inspector.</h2>
+      <p>
+        Both halves are free, local, and open source. Install the CLI, grab the desktop app, or
+        read the code.
+      </p>
     </div>
     <a className="button primary" href={repoUrl}>
       View on GitHub

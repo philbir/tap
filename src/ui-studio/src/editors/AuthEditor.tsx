@@ -1,5 +1,5 @@
 import {
-  ActionIcon, Alert, Box, Button, Checkbox, Code, Collapse, Divider, Group, ScrollArea,
+  ActionIcon, Alert, Anchor, Badge, Box, Button, Checkbox, Code, Collapse, Divider, Group, ScrollArea,
   Select, Stack, Switch, Tabs, TagsInput, Text, TextInput, Textarea, Tooltip,
 } from '@mantine/core'
 import { useClipboard, useDebouncedValue, useDisclosure } from '@mantine/hooks'
@@ -48,11 +48,17 @@ export function AuthEditor({ path }: Props) {
   const tagSuggestions = useTagDictionary()
   const activeEnv = useActiveEnv()
   const [varsOpened, setVarsOpened] = useState(false)
-  const variableContext = useMemo<VariableContext>(() => ({
-    envPath: activeEnv ?? undefined,
-  }), [activeEnv])
 
   const [detail, setDetail] = useState<AuthDetail | null>(null)
+  // A profile stored under `collections/<slug>/` is owned by that collection: its fields
+  // expand against the collection's (and active stage's) variables, so the variable panel
+  // and every VariableInput must resolve through the same context the runner uses.
+  const collectionSlug = detail?.collection ?? null
+  const variableContext = useMemo<VariableContext>(() => ({
+    envPath: activeEnv ?? undefined,
+    collectionPath: collectionSlug ? `collections/${collectionSlug}/_collection.md` : undefined,
+  }), [activeEnv, collectionSlug])
+
   const [spec, setSpec] = useState<AuthSpec | null>(null)
   const [savedSpec, setSavedSpec] = useState<AuthSpec | null>(null)
   const [tab, setTab] = useState<string | null>('config')
@@ -127,6 +133,7 @@ export function AuthEditor({ path }: Props) {
 
         <Tabs.Panel value="config">
           <Stack gap="md" maw={880}>
+            <ScopeRow slug={collectionSlug} />
             <Group gap="md" align="flex-start" wrap="nowrap">
               <Select
                 label="Type"
@@ -256,6 +263,43 @@ export function AuthEditor({ path }: Props) {
     </EditorShell>
     <VariablesPanel opened={varsOpened} onClose={() => setVarsOpened(false)} context={variableContext} />
     </AuthVarContext.Provider>
+  )
+}
+
+/**
+ * Where this profile lives, and therefore which variables its fields can reference. A
+ * profile under `collections/<slug>/` sees workspace < collection < stage < env; one under
+ * `auth/` only sees workspace < env, but is reusable from every collection.
+ */
+function ScopeRow({ slug }: { slug: string | null }) {
+  const collection = useTapStore((s) => s.collections.find((c) => c.slug === slug) ?? null)
+  const openTab = useTapStore((s) => s.openTab)
+
+  if (!slug) {
+    return (
+      <Group gap={8}>
+        <Badge size="sm" variant="light" color="gray">Workspace</Badge>
+        <Text size="xs" c="dimmed">
+          Shared across collections. Resolves workspace + environment variables only.
+        </Text>
+      </Group>
+    )
+  }
+
+  const label = collection?.name ?? slug
+  return (
+    <Group gap={8}>
+      <Badge size="sm" variant="light" color="blue">Collection</Badge>
+      <Anchor
+        size="xs"
+        onClick={() => openTab({ path: `collections/${slug}`, kind: 'collection', label })}
+      >
+        {label}
+      </Anchor>
+      <Text size="xs" c="dimmed">
+        — this profile can use the collection's variables and stages.
+      </Text>
+    </Group>
   )
 }
 
@@ -535,7 +579,9 @@ function OAuth2Fields({ spec, update }: { spec: AuthSpec; update: <K extends key
     if (!spec.useDiscovery || !debouncedAuthority.trim()) return
     let cancelled = false
     setDiscoveryBusy(true); setDiscoveryErr(null)
-    api.oidcDiscovery(debouncedAuthority.trim()).then((doc) => {
+    // Pass the profile path so an authority like `{{IDP_URL}}/tenant` resolves through the
+    // owning collection's variables, not just the workspace's.
+    api.oidcDiscovery(debouncedAuthority.trim(), spec.path).then((doc) => {
       if (cancelled) return
       update('tokenUrl', doc.tokenEndpoint)
       update('authorizeUrl', doc.authorizationEndpoint)
@@ -544,7 +590,7 @@ function OAuth2Fields({ spec, update }: { spec: AuthSpec; update: <K extends key
     }).finally(() => { if (!cancelled) setDiscoveryBusy(false) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec.useDiscovery, debouncedAuthority])
+  }, [spec.useDiscovery, debouncedAuthority, spec.path])
 
   return (
     <Stack gap="md">

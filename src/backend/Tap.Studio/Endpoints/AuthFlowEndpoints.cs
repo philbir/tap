@@ -25,8 +25,11 @@ public static class AuthFlowEndpoints
         // The UI hands us the raw authority field straight off the editor — which may still
         // contain {{var}} / ${{secret}} refs (e.g. `http://{{DEMO_API_URL}}`). Expand them
         // through the same resolver the runner uses so the .well-known fetch hits a real URL.
+        // `authPath` is the profile being edited: when it lives inside a collection, the
+        // authority may reference that collection's (or its stage's) variables.
         app.MapGet("/api/auth/discovery", async (
-            string authority, OidcDiscoveryClient client, WorkspaceService ws, CancellationToken ct) =>
+            string authority, OidcDiscoveryClient client, WorkspaceService ws, CancellationToken ct,
+            string? authPath = null, string? stage = null) =>
         {
             if (string.IsNullOrWhiteSpace(authority))
                 return Results.BadRequest(new { code = "missing-authority", message = "authority query parameter is required." });
@@ -36,7 +39,10 @@ public static class AuthFlowEndpoints
                 Tap.Workspace.Model.EnvFile? env = null;
                 if (workspace.Manifest?.DefaultEnv is { } defaultRef)
                     env = workspace.Resolve(defaultRef) as Tap.Workspace.Model.EnvFile;
-                var resolver = new AuthFieldResolver(workspace, ws.CreateRegistry(), env);
+                var context = authPath is null
+                    ? default
+                    : AuthScopeResolver.ContextFor(workspace, authPath, requestPath: null, stageName: stage);
+                var resolver = new AuthFieldResolver(workspace, ws.CreateRegistry(), env, context);
                 var resolved = await resolver.AllAsync(authority, ct).ConfigureAwait(false) ?? authority;
 
                 var doc = await client.FetchAsync(resolved, ct).ConfigureAwait(false);
@@ -54,23 +60,26 @@ public static class AuthFlowEndpoints
         // ----- Execute -----
         app.MapPost("/api/auth/execute", async (AuthExecuteRequestDto body, AuthRunner runner, CancellationToken ct) =>
         {
-            var result = await runner.ExecuteAsync(body.Path, body.ForceReauthenticate, ct).ConfigureAwait(false);
+            var result = await runner
+                .ExecuteAsync(body.Path, body.ForceReauthenticate, ct, body.RequestPath, body.Stage)
+                .ConfigureAwait(false);
             return Results.Ok(ToDto(result));
         });
 
         // ----- Clear cached token -----
-        // Removes the persisted runtime token for an auth profile scoped to the current
-        // workspace. After this call the Flow tab's status flips back to `missing` and the
-        // next request Send will fire without an Authorization header (until the user runs
-        // the auth flow again). 404 when the path doesn't point at an auth file — guards
-        // against accidental writes via a malformed client request.
+        // Removes every persisted runtime token for an auth profile scoped to the current
+        // workspace — including the per-stage entries a collection-scoped profile accumulates.
+        // After this call the Flow tab's status flips back to `missing` and the next request
+        // Send will fire without an Authorization header (until the user runs the auth flow
+        // again). 404 when the path doesn't point at an auth file — guards against accidental
+        // writes via a malformed client request.
         app.MapPost("/api/auth/clear", (AuthClearRequestDto body, WorkspaceService svc, AuthTokenStore tokens) =>
         {
             if (string.IsNullOrWhiteSpace(body.Path))
                 return Results.BadRequest(new { code = "missing-path", message = "Path is required." });
             if (svc.Current.FindByPath(body.Path) is not AuthFile)
                 return Results.NotFound(new { code = "auth-not-found", message = $"Auth profile '{body.Path}' not in workspace." });
-            tokens.Remove(svc.RootDirectory, body.Path);
+            tokens.RemoveAll(svc.RootDirectory, body.Path);
             return Results.NoContent();
         });
 

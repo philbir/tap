@@ -64,6 +64,10 @@ public static class RequestEndpoints
             try
             {
                 svc.Save(spec.Path, RequestSpecEmitter.ToFileSource(spec));
+                // A create-then-open client (sidebar "New request", the create dialog, duplicate)
+                // refetches the request the moment this returns — the watcher's debounced reload
+                // would lose that race and the GET would 404.
+                svc.ReloadNow();
                 return Results.NoContent();
             }
             catch (WorkspaceParseException ex)

@@ -11,8 +11,8 @@ GET /user
 # Authenticated user profile
 
 `GET /user` returns the GitHub user the request is authenticated as. Uses the
-`github-cli` auth inherited from `apis/github.api.md`, so this fires off whichever
-account `gh auth login` last signed into.
+`github-cli` auth inherited from this collection's `_collection.md`, so this fires
+off whichever account `gh auth login` last signed into.
 
 Expect a JSON body shaped like:
 

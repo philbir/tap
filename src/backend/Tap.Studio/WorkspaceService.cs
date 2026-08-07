@@ -226,7 +226,7 @@ public sealed class WorkspaceService : IDisposable
     /// </summary>
     private ResolvedRequest InjectAuthToken(LoadedWorkspace ws, RequestFile req, ResolvedRequest rendered)
     {
-        var auth = ResolveAuth(ws, req);
+        var auth = ResolveAuth(ws, req, rendered.Metadata.StageName);
         if (auth is null || auth.Type is "none" or "basic" or "bearer" or "apiKey" or "custom" or "aws-sigv4")
             return rendered;
 
@@ -239,7 +239,12 @@ public sealed class WorkspaceService : IDisposable
                 return rendered;
         }
 
-        var cached = _tokens.Get(_root, auth.RelativePath);
+        // A profile that lives inside a collection has one cached token per stage — read the
+        // one minted for the stage this render resolved to.
+        var scope = AuthScopeResolver
+            .ContextFor(ws, auth.RelativePath, req.RelativePath, rendered.Metadata.StageName)
+            .ScopeFor(auth.RelativePath);
+        var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
             return rendered;
 
@@ -255,8 +260,12 @@ public sealed class WorkspaceService : IDisposable
     /// which profile is bound (via request &lt; stage &lt; collection precedence), whether a
     /// usable runtime token is cached, and whether running the flow would be interactive.
     /// The Flow tab uses this to decide between "already authorized" vs "Run auth" affordances.
+    ///
+    /// <para><paramref name="stageName"/> is the stage the caller has selected. It only changes
+    /// the answer for a profile that lives inside the request's own collection, where each
+    /// stage caches its own token.</para>
     /// </summary>
-    public AuthStatusDto BuildAuthStatus(string requestPath, RequestSpecDto? draftSpec = null)
+    public AuthStatusDto BuildAuthStatus(string requestPath, RequestSpecDto? draftSpec = null, string? stageName = null)
     {
         var ws = Current;
         RequestFile req;
@@ -266,7 +275,7 @@ public sealed class WorkspaceService : IDisposable
             return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
         }
 
-        var auth = ResolveAuth(ws, req);
+        var auth = ResolveAuth(ws, req, stageName);
         if (auth is null)
             return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
 
@@ -285,7 +294,10 @@ public sealed class WorkspaceService : IDisposable
         }
 
         var interactive = IsInteractive(auth);
-        var cached = _tokens.Get(_root, auth.RelativePath);
+        var scope = AuthScopeResolver
+            .ContextFor(ws, auth.RelativePath, req.RelativePath, stageName)
+            .ScopeFor(auth.RelativePath);
+        var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
             return new AuthStatusDto(auth.RelativePath, auth.Type, Source: "missing", interactive, ExpiresAt: null);
 
@@ -316,20 +328,22 @@ public sealed class WorkspaceService : IDisposable
     }
 
     /// <summary>
-    /// Mirrors <see cref="WorkspaceRenderer"/>'s auth resolution order — request &lt; stage &lt; api —
+    /// Mirrors <see cref="WorkspaceRenderer"/>'s auth resolution order — request &lt; stage &lt; collection —
     /// so the token injector targets the same file the renderer's static <c>ApplyAuthHeaders</c>
-    /// saw. Returning null means there's no auth attached (or the ref didn't resolve).
+    /// saw. <paramref name="stageName"/> is the stage the render resolved to; null falls back
+    /// to the collection's default stage, same as the renderer. Returning null means there's
+    /// no auth attached (or the ref didn't resolve).
     /// </summary>
-    private static AuthFile? ResolveAuth(LoadedWorkspace ws, RequestFile req)
+    private static AuthFile? ResolveAuth(LoadedWorkspace ws, RequestFile req, string? stageName)
     {
         var requestDir = Path.GetDirectoryName(req.RelativePath) ?? string.Empty;
         if (ws.Resolve(req.Auth, requestDir) is AuthFile direct) return direct;
 
-        var collection = CollectionLocator.ForRequest(ws, req.RelativePath);
+        var collection = CollectionLocator.ForFile(ws, req.RelativePath);
         if (collection is null) return null;
         var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-        if (collection.DefaultStage is { } stageName && collection.FindStage(stageName)?.DefaultAuth is { } stageAuthRef
-            && ws.Resolve(stageAuthRef, collectionDir) is AuthFile stageAuth)
+        var stage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
+        if (stage?.DefaultAuth is { } stageAuthRef && ws.Resolve(stageAuthRef, collectionDir) is AuthFile stageAuth)
             return stageAuth;
         if (collection.DefaultAuth is { } collectionAuthRef && ws.Resolve(collectionAuthRef, collectionDir) is AuthFile collectionAuth)
             return collectionAuth;

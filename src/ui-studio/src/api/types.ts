@@ -168,6 +168,10 @@ export interface AuthSummary {
   name: string
   id: string | null
   type: string
+  /** Slug of the collection that owns this profile (it lives under `collections/<slug>/`),
+   *  or null for a workspace-scoped profile under `auth/`. A collection-scoped profile
+   *  resolves `{{var}}` refs against that collection's variables and stages. */
+  collection: string | null
 }
 
 export interface AuthDetail extends AuthSummary {

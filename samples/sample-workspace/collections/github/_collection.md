@@ -2,7 +2,7 @@
 kind: collection
 name: GitHub
 baseUrl: https://api.github.com
-defaultAuth: ../../auth/github-cli.auth.md
+defaultAuth: github-cli.auth.md
 defaultHeaders:
   Accept: application/vnd.github+json
   User-Agent: tap-studio-demo/0.1
@@ -14,6 +14,12 @@ Sample requests against `api.github.com`. The collection defaults to the
 `github-cli` auth profile — every call below picks up whichever account
 `gh auth login` is signed in as on this machine.
 
+That profile lives *inside* this collection (`github-cli.auth.md`, referenced as a
+sibling) rather than in the shared `auth/` folder: nothing outside GitHub uses it, so
+it travels with the collection. See §8.0 of the workspace format spec for when to pick
+collection scope over workspace scope.
+
+- **github-cli.auth.md** — collection-scoped auth profile
 - **profile.req.md** — `GET /user`, the authenticated user's profile
 - **repos.req.md**   — `GET /user/repos`, repos the authenticated user can access
 

@@ -8,10 +8,11 @@ import {
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
-  AuthSummary, CollectionDetail, CollectionSpec, CollectionStageSpec, VariableContext,
+  AuthSummary, CollectionDetail, CollectionSpec, CollectionStageSpec, CollectionSummary, VariableContext,
 } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
+import { authSelectGroups } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
 import { KvTable, type KvRow } from './KvTable'
@@ -32,6 +33,7 @@ export function CollectionEditor({ path }: Props) {
   const generation = useTapStore((s) => s.generation)
   const reload = useTapStore((s) => s.reload)
   const auths = useTapStore((s) => s.auths)
+  const collections = useTapStore((s) => s.collections)
   const tagSuggestions = useTagDictionary()
   const slug = useMemo(() => path.split('/').pop() ?? path, [path])
   // Auth refs in the collection file are relative to `collections/<slug>/_collection.md`.
@@ -154,7 +156,10 @@ export function CollectionEditor({ path }: Props) {
             <Select
               label="Default Auth"
               description="Inherited by requests in this collection that don't override `auth:`."
-              data={[{ value: '', label: '(none)' }, ...auths.map((a) => ({ value: relativizeFrom(collectionFilePath, a.path), label: a.name }))]}
+              data={[
+                { value: '', label: '(none)' },
+                ...authSelectGroups({ auths, collections, fromPath: collectionFilePath }),
+              ]}
               value={spec.defaultAuth ?? ''}
               onChange={(v) => update('defaultAuth', v && v !== '' ? v : undefined)}
               allowDeselect={false}
@@ -236,6 +241,7 @@ export function CollectionEditor({ path }: Props) {
             stages={stages}
             defaultStage={spec.defaultStage ?? null}
             auths={auths}
+            collections={collections}
             collectionFilePath={collectionFilePath}
             onChangeStages={(next) => update('stages', next.length > 0 ? next : undefined)}
             onChangeDefault={(name) => update('defaultStage', name ?? undefined)}
@@ -307,27 +313,20 @@ function specFromDetail(d: CollectionDetail): CollectionSpec {
   }
 }
 
-function relativizeFrom(from: string, to: string): string {
-  const fromParts = from.split('/').slice(0, -1)
-  const toParts = to.split('/')
-  let i = 0
-  while (i < fromParts.length && i < toParts.length - 1 && fromParts[i] === toParts[i]) i++
-  return '../'.repeat(fromParts.length - i) + toParts.slice(i).join('/')
-}
-
 // ---- Stages master/detail ------------------------------------------------------------
 
 interface StagesEditorProps {
   stages: CollectionStageSpec[]
   defaultStage: string | null
   auths: AuthSummary[]
+  collections: CollectionSummary[]
   collectionFilePath: string
   onChangeStages: (next: CollectionStageSpec[]) => void
   onChangeDefault: (name: string | null) => void
   onOpenVariables: () => void
 }
 
-function StagesEditor({ stages, defaultStage, auths, collectionFilePath, onChangeStages, onChangeDefault, onOpenVariables }: StagesEditorProps) {
+function StagesEditor({ stages, defaultStage, auths, collections, collectionFilePath, onChangeStages, onChangeDefault, onOpenVariables }: StagesEditorProps) {
   const [selected, setSelected] = useState<number>(stages.length > 0 ? 0 : -1)
   const safe = selected >= 0 && selected < stages.length ? selected : stages.length > 0 ? 0 : -1
   const stage = safe >= 0 ? stages[safe] : null
@@ -444,7 +443,10 @@ function StagesEditor({ stages, defaultStage, auths, collectionFilePath, onChang
             </Box>
             <Select
               label="Default Auth (override)"
-              data={[{ value: '', label: '(inherit from collection)' }, ...auths.map((a) => ({ value: relativizeFrom(collectionFilePath, a.path), label: a.name }))]}
+              data={[
+                { value: '', label: '(inherit from collection)' },
+                ...authSelectGroups({ auths, collections, fromPath: collectionFilePath }),
+              ]}
               value={stage.defaultAuth ?? ''}
               onChange={(v) => patchStage(safe, { defaultAuth: v && v !== '' ? v : undefined })}
               allowDeselect={false}

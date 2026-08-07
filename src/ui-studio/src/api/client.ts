@@ -259,14 +259,26 @@ export const api = {
 
   // --- Auth flow ----------------------------------------------------------------------
 
-  /** Fetch the OpenID Connect discovery document for a given authority URL. */
-  oidcDiscovery: (authority: string) =>
-    get<OidcDiscovery>(`/api/auth/discovery?authority=${encodeURIComponent(authority)}`),
+  /** Fetch the OpenID Connect discovery document for a given authority URL. `authPath` is
+   *  the profile being edited — passing it lets a collection-scoped profile resolve an
+   *  authority that references its collection's (or stage's) variables. */
+  oidcDiscovery: (authority: string, authPath?: string, stage?: string) => {
+    const q = new URLSearchParams({ authority })
+    if (authPath) q.set('authPath', authPath)
+    if (stage) q.set('stage', stage)
+    return get<OidcDiscovery>(`/api/auth/discovery?${q}`)
+  },
 
   /** Run an auth profile. For OAuth2 client_credentials returns tokens synchronously;
-   *  for authorization_code+PKCE returns a loginUrl + flowId for the UI to drive. */
-  executeAuth: (path: string, forceReauthenticate = false) =>
-    post<AuthExecuteResponse>('/api/auth/execute', { path, forceReauthenticate }),
+   *  for authorization_code+PKCE returns a loginUrl + flowId for the UI to drive.
+   *  `context` carries the caller's request + stage so a collection-scoped profile expands
+   *  against the right stage (and caches its token there); ignored for workspace-scoped ones. */
+  executeAuth: (path: string, forceReauthenticate = false,
+                context?: { requestPath?: string; stage?: string }) =>
+    post<AuthExecuteResponse>('/api/auth/execute', {
+      path, forceReauthenticate,
+      requestPath: context?.requestPath, stage: context?.stage,
+    }),
 
   /** Poll a pending flow until it transitions to completed or failed. */
   authFlow: (id: string) => get<AuthExecuteResponse>(`/api/auth/flows/${encodeURIComponent(id)}`),

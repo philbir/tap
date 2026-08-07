@@ -51,6 +51,10 @@ public sealed class AuthFlow
     public required string Id { get; init; }
     /// <summary>Workspace-relative path of the auth profile this flow is for.</summary>
     public required string AuthPath { get; init; }
+    /// <summary>Collection stage in effect when the flow started, or <c>null</c> for a
+    /// workspace-scoped profile. Carried so the callback caches the resulting token under the
+    /// same key <see cref="AuthRunner.ExecuteAsync"/> would have read it from.</summary>
+    public string? Stage { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
 
     /// <summary>PKCE code verifier — only kept until token exchange completes.</summary>

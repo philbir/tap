@@ -321,10 +321,13 @@ interface Props {
   onOpenChange: (v: boolean) => void
   /** Pre-seeded display name from the create dialog. Editable in step 2. */
   initialName: string
+  /** Workspace-relative directory the profile is written to — `auth` for a shared profile,
+   *  `collections/<slug>` for one owned by a collection. Chosen in the create dialog. */
+  targetDir?: string
   onCreated: (path: string, kind: WorkspaceFileKind) => void
 }
 
-export function AuthWizard({ open, onOpenChange, initialName, onCreated }: Props) {
+export function AuthWizard({ open, onOpenChange, initialName, targetDir = 'auth', onCreated }: Props) {
   const reload = useTapStore((s) => s.reload)
   const [step, setStep] = useState(0)
   const [templateKey, setTemplateKey] = useState<string | null>(null)
@@ -343,7 +346,7 @@ export function AuthWizard({ open, onOpenChange, initialName, onCreated }: Props
 
   const template = TEMPLATES.find((t) => t.key === templateKey) ?? null
   const slug = nameToSlug(name)
-  const targetPath = slug ? `auth/${slug}.auth.md` : ''
+  const targetPath = slug ? `${targetDir}/${slug}.auth.md` : ''
 
   function pickTemplate(key: string) {
     setTemplateKey(key)

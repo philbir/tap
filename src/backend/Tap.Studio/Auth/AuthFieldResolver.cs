@@ -7,9 +7,13 @@ namespace Tap.Studio.Auth;
 
 /// <summary>
 /// Expands <c>{{var}}</c> + <c>{{provider:name}}</c> references inside auth-profile fields.
-/// Auth profiles aren't bound to a request, so the cascade here is just workspace + default env
-/// — the same prefix the renderer would build for a request, minus the api/stage/request
-/// layers. The provider registry is consulted for anything not in the cascade.
+/// An auth profile isn't bound to a request, so the cascade here is the renderer's minus the
+/// request layer: workspace &lt; collection &lt; stage &lt; env. The collection/stage layers
+/// are only populated for a profile that lives under <c>collections/&lt;slug&gt;/</c> — that's
+/// the whole point of putting one there, so its endpoints and client ids can come from the
+/// collection's (or the active stage's) variables. Workspace-scoped profiles under
+/// <c>auth/</c> see workspace &lt; env exactly as before. The provider registry is consulted
+/// for anything not in the cascade.
 ///
 /// Without this pass, a tokenUrl like <c>http://{{DEMO_API_URL}}/connect/token</c> would
 /// be sent verbatim and the runner would 500 with an invalid-URI.
@@ -20,24 +24,29 @@ public sealed class AuthFieldResolver
     private readonly VariableProviderRegistry _registry;
     private readonly IReadOnlyDictionary<string, string> _cascade;
 
-    public AuthFieldResolver(LoadedWorkspace workspace, VariableProviderRegistry registry, EnvFile? env)
+    public AuthFieldResolver(
+        LoadedWorkspace workspace,
+        VariableProviderRegistry registry,
+        EnvFile? env,
+        AuthContext context = default)
     {
         _workspace = workspace;
         _registry = registry;
 
-        // workspace < env. Skipped nulls so an unset value doesn't write the literal "null".
+        // workspace < collection < stage < env. Skipped nulls so an unset value doesn't
+        // write the literal "null".
         var cascade = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (workspace.Manifest is not null)
-        {
-            foreach (var (k, v) in workspace.Manifest.Vars)
-                if (v.Default is { } d) cascade[k] = d;
-        }
-        if (env is not null)
-        {
-            foreach (var (k, v) in env.Vars)
-                if (v.Default is { } d) cascade[k] = d;
-        }
+        if (workspace.Manifest is not null) Merge(cascade, workspace.Manifest.Vars);
+        if (context.Collection is not null) Merge(cascade, context.Collection.Vars);
+        if (context.Stage is not null) Merge(cascade, context.Stage.Vars);
+        if (env is not null) Merge(cascade, env.Vars);
         _cascade = cascade;
+    }
+
+    private static void Merge(Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src)
+    {
+        foreach (var (k, v) in src)
+            if (v.Default is { } d) dest[k] = d;
     }
 
     /// <summary>Expand <c>{{var}}</c> + <c>{{provider:name}}</c> in one call. Async because

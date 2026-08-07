@@ -1,6 +1,7 @@
 import { Text } from '@mantine/core'
 import { useMemo } from 'react'
 import type { TreeNode } from '../api/types'
+import { collectionFileOf } from './explorerTree'
 import { PierreFileTree } from './PierreFileTree'
 import { TAP_TREE_ICONS, TAP_TREE_UNSAFE_CSS } from './treeIcons'
 
@@ -28,6 +29,14 @@ export function FilesystemView({ tree, search, activePath, onOpenFile }: Props) 
     return allPaths.filter((p) => p.toLowerCase().includes(q))
   }, [allPaths, search])
 
+  // A collection tab is keyed on its directory (`collections/<slug>`); the row that opened
+  // it is the `_collection.md` inside — highlight that one.
+  const selectedPath = useMemo(() => {
+    if (!activePath || fileByPath.has(activePath)) return activePath
+    const metaPath = collectionFileOf(activePath)
+    return fileByPath.has(metaPath) ? metaPath : activePath
+  }, [activePath, fileByPath])
+
   if (paths.length === 0) {
     return <Text size="xs" c="dimmed" ta="center" py="xl" px="md">Empty .tap/ directory.</Text>
   }
@@ -35,7 +44,7 @@ export function FilesystemView({ tree, search, activePath, onOpenFile }: Props) 
   return (
     <PierreFileTree
       paths={paths}
-      selectedPath={activePath}
+      selectedPath={selectedPath}
       initialExpansion="open"
       icons={TAP_TREE_ICONS}
       unsafeCSS={TAP_TREE_UNSAFE_CSS}

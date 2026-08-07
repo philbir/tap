@@ -24,12 +24,14 @@ This document is the authoritative spec for the on-disk format. The Tap parser (
 | Kind | Filename suffix | Purpose |
 |---|---|---|
 | `request` | `*.req.md` | A single HTTP request template. |
-| `auth` | `*.auth.md` | A reusable authentication profile (bearer, basic, OAuth2, custom). |
+| `auth` | `*.auth.md` | A reusable authentication profile (bearer, basic, OAuth2, custom). Lives either in `auth/` (workspace-scoped) or inside a collection (collection-scoped) — see §8.0. |
 | `env` | `*.env.md` | A named environment (set of variables and secret bindings). |
 | `collection` | `_collection.md` *(at `collections/<slug>/`)* | A top-level group of requests. Owns the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. |
 | `workspace` | `tap.md` *(at workspace root)* | Workspace-level config: name, default env, registered secret providers. |
 
 Sub-directories inside a collection are pure grouping for the explorer tree — they carry no metadata, no variables, and no inherited defaults. Every request below a collection inherits its baseUrl, stages, default auth, default headers, and variables; variable sharing across a group of requests lives on `_collection.md`.
+
+An `*.auth.md` placed inside a collection is *owned* by it: the profile's fields resolve against that collection's variables and its active stage. That's the only kind of file below a collection that inherits anything besides a request.
 
 The filename suffix is canonical. The `kind:` frontmatter field is required and must match the suffix. A mismatch is a hard parse error.
 
@@ -45,7 +47,7 @@ my-service/
     │   ├── auth.schema.json
     │   ├── env.schema.json
     │   └── workspace.schema.json
-    ├── auth/
+    ├── auth/                            ← workspace-scoped profiles, shared by every collection
     │   ├── stripe-bearer.auth.md
     │   └── corp-oidc.auth.md
     ├── environments/
@@ -55,6 +57,7 @@ my-service/
     └── collections/
         └── stripe/
             ├── _collection.md        ← kind: collection (owns baseUrl, default auth/headers, stages)
+            ├── stripe-oauth.auth.md  ← collection-scoped profile (sees this collection's vars/stages)
             ├── create-customer.req.md
             ├── get-customer.req.md
             └── refunds/              ← pure-grouping sub-folder
@@ -67,6 +70,10 @@ structural: `auth/` and `environments/` hold flat lists of typed files; `collect
 hosts one sub-directory per collection. Inside each collection, nested directories
 are freeform grouping with no metadata — variable sharing across a group of requests
 lives on `_collection.md`.
+
+Auth profiles are the one kind that can live in either place. Put a profile in `auth/`
+when several collections share it; put it inside a collection when its endpoints or
+credentials come from that collection's variables. See §8.0.
 
 ---
 
@@ -358,6 +365,65 @@ Resolution is single-pass — a variable may not reference another variable that
 
 A reusable authentication profile. Used by requests via the `auth:` frontmatter field, or applied as an API default.
 
+### 8.0 Where a profile lives — workspace vs collection scope
+
+An auth file may sit in either of two places, and the choice decides which variables its
+fields can reference:
+
+| Location | Scope | Cascade its fields resolve against |
+|---|---|---|
+| `auth/**/*.auth.md` | **workspace** — shared by every collection | workspace < env |
+| `collections/<slug>/**/*.auth.md` | **collection** — owned by that collection | workspace < collection < stage < env |
+
+Both are referenced the same way, by relative path from the referencing file:
+
+```yaml
+# a request inside collections/stripe/, pointing at a workspace profile
+auth: ../../auth/stripe-bearer.auth.md
+
+# the same request pointing at its own collection's profile
+auth: stripe-oauth.auth.md
+```
+
+Pick collection scope when the profile's token URL, client id, audience, or credentials are
+already expressed as collection (or stage) variables:
+
+```yaml
+# collections/stripe/_collection.md
+kind: collection
+name: Stripe
+baseUrl: '{{API_URL}}'
+defaultAuth: stripe-oauth.auth.md
+vars:
+  API_URL: https://api.stripe.test
+  IDP_URL: https://idp.stripe.test
+stages:
+- name: dev
+- name: prod
+  vars:
+    API_URL: https://api.stripe.com
+    IDP_URL: https://idp.stripe.com
+```
+
+```yaml
+# collections/stripe/stripe-oauth.auth.md
+kind: auth
+name: Stripe OAuth
+type: oauth2
+flow: client_credentials
+tokenUrl: '{{IDP_URL}}/connect/token'   # resolves per stage
+clientId: '{{STRIPE_CLIENT_ID}}'
+```
+
+Selecting the `prod` stage repoints `tokenUrl` without touching the profile. Runtime tokens
+are cached **per stage**, so `dev` and `prod` never hand each other a token; clearing a
+profile's token clears every stage at once. A workspace-scoped profile has no stage, so its
+cache behaves exactly as it always has.
+
+Nothing else changes with scope: a request in collection A may reference a profile owned by
+collection B (it just resolves against B's variables, not A's), and a collection-scoped
+profile still shows up in Studio's Auth tab alongside the shared ones.
+
 ### 8.1 Common frontmatter
 
 | Field | Type | Required | Notes |
@@ -515,7 +581,7 @@ The render pipeline:
 2. Find the owning collection by walking the request path (`collections/<slug>/...`); resolve the active stage, the request-or-stage-or-collection `auth:` ref, and inherited default headers.
 3. Load the active `env.md`. Build the merged variable scope (§7.3).
 4. Expand `{{var}}` in the URL line, header lines, and body of the fenced `http` block. Reject on unknown var.
-5. Apply auth: bearer/basic/apikey inject headers/cookies/query; oauth2 obtains a token via the token cache (refreshing if needed); aws-sigv4 signs the canonical request.
+5. Apply auth: bearer/basic/apikey inject headers/cookies/query; oauth2 obtains a token via the token cache (refreshing if needed); aws-sigv4 signs the canonical request. The profile's own fields expand against *its* scope (§8.0) — the owning collection's, which is not necessarily the request's.
 6. Resolve `${{secret}}` references inline (last step — keeps secrets out of stages 1–4).
 7. Return the resolved request. The caller (executor, CLI `render`, diff viewer) consumes it.
 
@@ -527,7 +593,7 @@ Step 6 is auditable: the renderer emits an `ISecretResolutionTrace` listing whic
 
 Two ways to point from one file to another:
 
-1. **Relative path** (recommended for v0): `auth: ../../auth/stripe-bearer.auth.md`. Survives `git mv` provided both files move together. Clearer in diffs.
+1. **Relative path** (recommended for v0): `auth: ../../auth/stripe-bearer.auth.md`, or `auth: stripe-oauth.auth.md` for a sibling inside the same collection. Survives `git mv` provided both files move together. Clearer in diffs.
 2. **Id reference**: `auth: id:0192-3a4d-9000-...`. Tap maintains an index built from `id:` fields. Survives rename without coordinated moves but requires the index to be up-to-date.
 
 The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Tap's writer always emits relative paths.

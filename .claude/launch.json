@@ -3,8 +3,12 @@
   "configurations": [
     {
       "name": "studio-api",
-      "runtimeExecutable": "dotnet",
+      "runtimeExecutable": "env",
       "runtimeArgs": [
+        "DEMO_API_URL=localhost:5399",
+        "TAP_VARS_ALLOWED=DEMO_API_URL,USER",
+        "TAP_SECRETS_ALLOWED=DEMO_JWT_SECRET",
+        "dotnet",
         "run",
         "--project",
         "src/backend/Tap.Studio/Tap.Studio.csproj",
@@ -14,6 +18,18 @@
         "--Studio:Port=5298"
       ],
       "port": 5298
+    },
+    {
+      "name": "demo-api",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "ASPNETCORE_URLS=http://localhost:5399",
+        "dotnet",
+        "run",
+        "--project",
+        "samples/Demo.Api"
+      ],
+      "port": 5399
     },
     {
       "name": "studio-ui",
@@ -27,19 +43,36 @@
     {
       "name": "inspector-ui",
       "runtimeExecutable": "yarn",
-      "runtimeArgs": ["--cwd", "src/ui-inspector", "dev", "--port", "5197", "--strictPort"],
+      "runtimeArgs": [
+        "--cwd",
+        "src/ui-inspector",
+        "dev",
+        "--port",
+        "5197",
+        "--strictPort"
+      ],
       "port": 5197
     },
     {
       "name": "docs-site",
       "runtimeExecutable": "yarn",
-      "runtimeArgs": ["--cwd", "docs-site", "dev", "--port", "5397", "--strictPort"],
+      "runtimeArgs": [
+        "--cwd",
+        "docs-site",
+        "dev",
+        "--port",
+        "5397",
+        "--strictPort"
+      ],
       "port": 5397
     },
     {
       "name": "studio-aspire",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "echo 'attaching to aspire-managed studio on 55446'; while :; do sleep 3600; done"],
+      "runtimeArgs": [
+        "-c",
+        "echo 'attaching to aspire-managed studio on 55446'; while :; do sleep 3600; done"
+      ],
       "port": 55446
     }
   ]

@@ -37,6 +37,29 @@ internal static class HttpExecutionHelpers
         || name.Equals("Expires", StringComparison.OrdinalIgnoreCase)
         || name.Equals("Last-Modified", StringComparison.OrdinalIgnoreCase);
 
+    /// <summary>Header name for the product token we default in when the request doesn't set one.</summary>
+    private const string UserAgentHeader = "User-Agent";
+
+    /// <summary>Stamps <c>User-Agent: tap-studio/{version}</c> onto a rendered request that
+    /// doesn't already define one. Applied to the <see cref="ResolvedRequest"/> rather than to
+    /// the outgoing <see cref="HttpRequestMessage"/> so the header the upstream sees is also
+    /// the header the UI's Request tab reports. A request (or its collection defaults, env, or
+    /// auth block) that sets its own User-Agent — including an empty one — is left untouched.</summary>
+    public static ResolvedRequest WithDefaultUserAgent(ResolvedRequest rendered)
+    {
+        // Scanned rather than looked up: the renderer hands us an OrdinalIgnoreCase dictionary
+        // today, but this shouldn't silently start double-sending the header if that changes.
+        foreach (var name in rendered.Headers.Keys)
+        {
+            if (name.Equals(UserAgentHeader, StringComparison.OrdinalIgnoreCase)) return rendered;
+        }
+
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (k, v) in rendered.Headers) headers[k] = v;
+        headers[UserAgentHeader] = StudioVersion.UserAgent;
+        return rendered with { Headers = headers };
+    }
+
     /// <summary>Throws <see cref="InvalidOperationException"/> if the URL's scheme is outside
     /// the allow-list. Called immediately before we open a connection.</summary>
     public static void ValidateScheme(ResolvedRequest rendered)

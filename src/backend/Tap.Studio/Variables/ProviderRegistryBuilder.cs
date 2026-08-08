@@ -45,7 +45,8 @@ public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory
         LoadedWorkspace workspace,
         string workspaceRoot,
         IReadOnlyList<VariableProviderConfig> systemProviders,
-        string? systemDefaultProvider = null)
+        string? systemDefaultProvider = null,
+        EnvFile? env = null)
     {
         var workspaceConfigs = workspace.Manifest?.VariableProviders ?? [];
         var workspaceNames = new HashSet<string>(workspaceConfigs.Select(c => c.Name), StringComparer.OrdinalIgnoreCase);
@@ -100,11 +101,31 @@ public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory
             }
         }
 
-        // Workspace default wins; fall back to the system-level default when the workspace
-        // hasn't declared one of its own. Mirrors the cascade semantics for provider configs:
-        // workspace > system.
-        var defaultProvider = workspace.Manifest?.DefaultVariableProvider ?? systemDefaultProvider;
-        return new VariableProviderRegistry(providers, defaultProvider);
+        // Default precedence mirrors the variable cascade: env > workspace > system. The
+        // env's aliases + strict flag ride along so switching envs re-points bare tokens
+        // and alias prefixes without touching any provider declaration.
+        var defaultProvider = env?.DefaultVariableProvider
+            ?? workspace.Manifest?.DefaultVariableProvider
+            ?? systemDefaultProvider;
+
+        if (env?.ProviderAliases is { Count: > 0 } aliasMap)
+        {
+            foreach (var (alias, target) in aliasMap)
+            {
+                if (!providers.Any(p => string.Equals(p.Name, target, StringComparison.OrdinalIgnoreCase)))
+                {
+                    logger.LogWarning(
+                        "Env '{Env}' aliases '{Alias}' to provider '{Target}', which is not registered.",
+                        env.RelativePath, alias, target);
+                }
+            }
+        }
+
+        return new VariableProviderRegistry(
+            providers,
+            defaultProvider,
+            env?.ProviderAliases,
+            env?.StrictVariables ?? false);
     }
 
     private IVariableProvider? TryInstantiate(VariableProviderConfig cfg, ProviderFactoryContext context)

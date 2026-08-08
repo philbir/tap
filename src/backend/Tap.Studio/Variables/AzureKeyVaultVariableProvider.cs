@@ -26,7 +26,7 @@ namespace Tap.Studio.Variables;
 /// <para>Every value from KV is treated as <see cref="VariableValue.IsSecret"/> = true. KV
 /// values are sensitive by definition; we don't bother distinguishing.</para>
 /// </summary>
-public sealed class AzureKeyVaultVariableProvider : IVariableProvider
+public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefreshableVariableProvider
 {
     private readonly VariableProviderConfig _config;
     private readonly SecretClient _client;
@@ -72,6 +72,14 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider
         {
             return null;
         }
+        catch (Azure.RequestFailedException ex) when (ex.Status == 400 && ex.ErrorCode == "BadParameter")
+        {
+            // KV secret names only allow [0-9a-zA-Z-]; anything else (DEMO_API_URL,
+            // user.name, …) draws a 400 BadParameter. Such a name can never exist in a
+            // vault, so it's a miss, not a provider failure — critical when a vault is the
+            // env's default provider and every bare {{token}} gets probed here first.
+            return null;
+        }
     }
 
     public async ValueTask<IReadOnlyList<VariableValue>> ListAsync(CancellationToken ct)
@@ -99,6 +107,11 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider
         return list;
     }
 
+    public void InvalidateListCache()
+    {
+        lock (_gate) { _listCache = null; }
+    }
+
     public async ValueTask SetAsync(string name, string value, bool isSecret, CancellationToken ct)
     {
         // KV secrets are sensitive by definition — the isSecret flag is ignored here; values
@@ -114,6 +127,40 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider
 public sealed class AzureKeyVaultVariableProviderFactory : IVariableProviderFactory
 {
     public string Type => "azkv";
+
+    public ProviderTypeDescriptor Descriptor { get; } = new()
+    {
+        Type = "azkv",
+        DisplayName = "Azure Key Vault",
+        Icon = "azure",
+        Description = "Reads and writes secrets in an Azure Key Vault via DefaultAzureCredential (az login, managed identity, …).",
+        Mode = ProviderMode.ReadWrite,
+        Fields =
+        [
+            new ProviderSettingField
+            {
+                Key = "vaultName",
+                Label = "Vault name",
+                Description = "Short vault name — expands to https://<name>.vault.azure.net/.",
+                Required = true,
+                Placeholder = "my-team-kv",
+                Picker = "azure-keyvault",
+            },
+            new ProviderSettingField
+            {
+                Key = "tenantId",
+                Label = "Tenant ID",
+                Description = "Pins authentication to one tenant when your account can access several.",
+            },
+            new ProviderSettingField
+            {
+                Key = "prefix",
+                Label = "Secret name prefix",
+                Description = "Prepended to every Key Vault lookup; tokens keep using the unprefixed name.",
+            },
+        ],
+    };
+
     public IVariableProvider Create(VariableProviderConfig config, ProviderFactoryContext context)
         => new AzureKeyVaultVariableProvider(config);
 }

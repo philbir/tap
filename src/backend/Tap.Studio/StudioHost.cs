@@ -99,8 +99,10 @@ public static class StudioHost
         builder.Services.AddSingleton<IVariableProviderFactory, EnvVariableProviderFactory>();
         builder.Services.AddSingleton<IVariableProviderFactory, FileVariableProviderFactory>();
         builder.Services.AddSingleton<IVariableProviderFactory, AzureKeyVaultVariableProviderFactory>();
+        builder.Services.AddSingleton<IVariableProviderFactory, OnePasswordVariableProviderFactory>();
         builder.Services.AddSingleton<IVariableProviderFactory, SystemVariableProviderFactory>();
         builder.Services.AddSingleton<ProviderRegistryBuilder>();
+        builder.Services.AddSingleton<Tap.Studio.AzureDiscovery.AzureDiscoveryService>();
 
         builder.Services.ConfigureHttpJsonOptions(o =>
         {
@@ -135,6 +137,8 @@ public static class StudioHost
         VariableEndpoints.Map(app);
         ProviderEndpoints.Map(app);
         SystemEndpoints.Map(app);
+        AzureEndpoints.Map(app);
+        OnePasswordEndpoints.Map(app);
         BrowserEndpoints.Map(app);
         AiEndpoints.Map(app);
 

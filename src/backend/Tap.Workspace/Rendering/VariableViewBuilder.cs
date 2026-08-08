@@ -112,13 +112,41 @@ public static class VariableViewBuilder
             sets.Add(BuildSet(VariableScope.Request, req2.RelativePath, req2.Name ?? Path.GetFileNameWithoutExtension(req2.RelativePath), req2.Vars));
         }
 
+        // Merged result mirrors what a bare {{name}} token actually resolves to. Provider
+        // precedence is the registry's: default provider first, then registration order,
+        // FIRST hit wins — so we merge in reverse precedence (default last) and let higher
+        // precedence overwrite. With a strict env binding, bare tokens can only reach the
+        // default provider, so other providers stay out of the merged result entirely
+        // (their sets above remain browsable and reachable via explicit {{provider:name}}).
         var merged = new Dictionary<string, Variable>(StringComparer.Ordinal);
-        foreach (var set in sets)
+
+        var providerSets = sets.Where(s => s.Scope == VariableScope.Provider).ToList();
+        var defaultSet = registry.DefaultProviderName is { } defaultName
+            ? providerSets.FirstOrDefault(s => string.Equals(s.ProviderName, defaultName, StringComparison.OrdinalIgnoreCase))
+            : null;
+
+        IEnumerable<VariableSet> providerMergeOrder;
+        if (registry.StrictVariables && defaultSet is not null)
         {
-            foreach (var v in set.Variables)
-            {
-                merged[v.Name] = v;
-            }
+            providerMergeOrder = [defaultSet];
+        }
+        else
+        {
+            providerMergeOrder = providerSets
+                .Where(s => !ReferenceEquals(s, defaultSet))
+                .Reverse()
+                .Concat(defaultSet is null ? [] : [defaultSet]);
+        }
+        foreach (var set in providerMergeOrder)
+        {
+            foreach (var v in set.Variables) merged[v.Name] = v;
+        }
+
+        // Cascade layers override providers, most specific last (list order is already
+        // workspace → collection → stage → env → request).
+        foreach (var set in sets.Where(s => s.Scope != VariableScope.Provider))
+        {
+            foreach (var v in set.Variables) merged[v.Name] = v;
         }
 
         return new VariableView(sets, [.. merged.Values]);

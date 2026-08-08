@@ -112,6 +112,17 @@ internal static class SpecYaml
     private static YamlDotNet.Core.ScalarStyle QuoteStyleFor(string value)
     {
         if (value.Length == 0) return YamlDotNet.Core.ScalarStyle.Any;
+        // Multi-line values (PEM keys, JWT payload JSON) go out as literal block scalars so
+        // the line breaks survive verbatim and stay readable in a diff. Left to itself the
+        // emitter picks folded style, which turns single newlines into spaces — fatal for a
+        // PEM header. CRLF can't be expressed in any block scalar (it normalises to LF), so
+        // those fall back to the double-quoted form, where \r survives as an escape.
+        if (value.Contains('\n'))
+        {
+            return value.Contains('\r')
+                ? YamlDotNet.Core.ScalarStyle.DoubleQuoted
+                : YamlDotNet.Core.ScalarStyle.Literal;
+        }
         var first = value[0];
         if (first == '$' || first == '{' || first == '*' || first == '&' || first == '!' || first == '@')
             return YamlDotNet.Core.ScalarStyle.SingleQuoted;
@@ -124,15 +135,22 @@ internal static class SpecYaml
     private static string SerializeMapping(YamlMappingNode mapping)
     {
         // YamlStream prepends a "---" doc marker and appends a "...". We strip both so the
-        // caller can lay out its own fence.
+        // caller can lay out its own fence — but only where they actually are (first line /
+        // last line). Replacing them everywhere would chew through the dashes inside a value:
+        // "-----BEGIN PRIVATE KEY-----\n" contains "---\n".
         var doc = new YamlDocument(mapping);
         var stream = new YamlStream(doc);
         var sb = new StringBuilder();
         using var writer = new StringWriter(sb);
         stream.Save(writer, assignAnchors: false);
-        var text = sb.ToString().Replace("---\r\n", string.Empty).Replace("---\n", string.Empty);
-        var end = text.IndexOf("\n...", StringComparison.Ordinal);
-        if (end > 0) text = text[..end];
+
+        var text = sb.ToString();
+        if (text.StartsWith("---\r\n", StringComparison.Ordinal)) text = text[5..];
+        else if (text.StartsWith("---\n", StringComparison.Ordinal)) text = text[4..];
+
+        text = text.TrimEnd();
+        if (text.EndsWith("\n...", StringComparison.Ordinal)) text = text[..^4];
+        else if (text.EndsWith("\r\n...", StringComparison.Ordinal)) text = text[..^5];
         return text.Trim();
     }
 }

@@ -31,6 +31,7 @@ public sealed class SystemSettingsStore
     private readonly string _path;
     private readonly Lock _gate = new();
     private SystemSettingsFile _state;
+    private DateTime _loadedWriteTimeUtc;
 
     public SystemSettingsStore(StudioOptions options)
     {
@@ -51,7 +52,30 @@ public sealed class SystemSettingsStore
         else
         {
             _state = loaded;
+            _loadedWriteTimeUtc = SafeWriteTimeUtc(_path);
         }
+    }
+
+    /// <summary>Re-reads <c>system.json</c> when its on-disk timestamp moved past what we
+    /// loaded. Several Studio processes routinely share <c>~/.tap</c> (desktop app + a dev
+    /// instance); without this, an instance keeps serving — and on the next save,
+    /// <b>writes back</b> — a stale snapshot, silently discarding providers/variables another
+    /// instance persisted in the meantime. Must be called under <see cref="_gate"/>.</summary>
+    private void ReloadIfChangedLocked()
+    {
+        var mtime = SafeWriteTimeUtc(_path);
+        if (mtime == _loadedWriteTimeUtc) return;
+        if (Load(_path) is { } fresh)
+        {
+            _state = fresh;
+            _loadedWriteTimeUtc = mtime;
+        }
+    }
+
+    private static DateTime SafeWriteTimeUtc(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path); }
+        catch { return DateTime.MinValue; }
     }
 
     public string SystemDir { get; }
@@ -62,7 +86,14 @@ public sealed class SystemSettingsStore
     /// declare its own.</summary>
     public string? DefaultVariableProvider
     {
-        get { lock (_gate) return _state.DefaultVariableProvider; }
+        get
+        {
+            lock (_gate)
+            {
+                ReloadIfChangedLocked();
+                return _state.DefaultVariableProvider;
+            }
+        }
     }
 
     /// <summary>The persisted system-scope provider configs, including the implicit
@@ -72,6 +103,7 @@ public sealed class SystemSettingsStore
     {
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             var list = new List<VariableProviderConfig>(_state.VariableProviders.Count + 1)
             {
                 // Implicit, always-on provider. Kept first so its variables resolve before
@@ -103,6 +135,7 @@ public sealed class SystemSettingsStore
     {
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             return new Dictionary<string, StoredVariable>(_state.Variables, StringComparer.Ordinal);
         }
     }
@@ -111,7 +144,11 @@ public sealed class SystemSettingsStore
     /// or <c>null</c> when the user hasn't configured AI yet.</summary>
     public StoredAiSettings? GetAiSettings()
     {
-        lock (_gate) return _state.Ai;
+        lock (_gate)
+        {
+            ReloadIfChangedLocked();
+            return _state.Ai;
+        }
     }
 
     /// <summary>Replace the AI settings block. Pass <c>null</c> to clear it (revert to
@@ -120,6 +157,7 @@ public sealed class SystemSettingsStore
     {
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             _state = _state with { Ai = ai };
             Persist();
         }
@@ -134,6 +172,9 @@ public sealed class SystemSettingsStore
     {
         lock (_gate)
         {
+            // Base the wholesale replace on fresh disk state so the untouched sections
+            // (variables, AI settings) can't revert another instance's writes.
+            ReloadIfChangedLocked();
             var clean = providers
                 .Where(p => !string.IsNullOrEmpty(p.Name)
                     && !string.IsNullOrEmpty(p.Type)
@@ -170,6 +211,7 @@ public sealed class SystemSettingsStore
     {
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             var dict = new Dictionary<string, StoredVariable>(StringComparer.Ordinal);
             foreach (var (k, v) in variables)
             {
@@ -192,6 +234,7 @@ public sealed class SystemSettingsStore
 
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             var dict = new Dictionary<string, StoredVariable>(_state.Variables, StringComparer.Ordinal)
             {
                 [name] = new StoredVariable(value, isSecret),
@@ -211,6 +254,7 @@ public sealed class SystemSettingsStore
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
         File.WriteAllText(_path, JsonSerializer.Serialize(_state, SystemSettingsJson.Default.SystemSettingsFile));
+        _loadedWriteTimeUtc = SafeWriteTimeUtc(_path);
     }
 
     private static SystemSettingsFile? Load(string path)

@@ -68,6 +68,26 @@ public sealed record EnvFile : WorkspaceFile
     /// the UI displays secret values as <c>***</c> in catalogs and autocomplete.</summary>
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
         new Dictionary<string, VarSpec>();
+
+    /// <summary>Provider that bare <c>{{name}}</c> lookups consult first (and that receives
+    /// un-targeted writes) while this env is active. Overrides the workspace manifest's and
+    /// the system-level default. May name a provider directly or through
+    /// <see cref="ProviderAliases"/>. This is what lets each environment point at its own
+    /// Key Vault while requests stay unchanged.</summary>
+    public string? DefaultVariableProvider { get; init; }
+
+    /// <summary>Alias → provider-name map applied while this env is active. Lets requests
+    /// use a stable prefix (<c>{{kv:secret}}</c>) whose target vault is chosen per env
+    /// (<c>kv: kv-dev</c> in dev.env.md, <c>kv: kv-prod</c> in prod.env.md). Providers are
+    /// still declared once at workspace/system scope; the env only points at them.</summary>
+    public IReadOnlyDictionary<string, string> ProviderAliases { get; init; } =
+        new Dictionary<string, string>();
+
+    /// <summary>When true (and <see cref="DefaultVariableProvider"/> is set), bare
+    /// <c>{{name}}</c> lookups that miss the default provider fail instead of falling
+    /// through to the remaining providers. Guards per-env vault setups against silently
+    /// reading a same-named secret from another environment's vault.</summary>
+    public bool StrictVariables { get; init; }
 }
 
 /// <summary>

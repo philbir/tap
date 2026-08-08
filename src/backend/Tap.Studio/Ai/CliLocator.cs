@@ -129,7 +129,8 @@ public static class CliLocator
             $"Version check failed with exit {code}: {(stderr.Trim().Length > 0 ? stderr.Trim() : stdout.Trim())}");
     }
 
-    private static ProcessStartInfo NewStartInfo(string command, IReadOnlyList<string> args)
+    private static ProcessStartInfo NewStartInfo(
+        string command, IReadOnlyList<string> args, IReadOnlyDictionary<string, string>? env = null)
     {
         var psi = new ProcessStartInfo
         {
@@ -142,18 +143,22 @@ public static class CliLocator
         };
         foreach (var a in args) psi.ArgumentList.Add(a);
         psi.Environment["NO_COLOR"] = "1";
+        if (env is not null)
+            foreach (var (key, value) in env) psi.Environment[key] = value;
         return psi;
     }
 
     /// <summary>
     /// Spawn <paramref name="cliPath"/> with <paramref name="args"/>, optionally writing
     /// <paramref name="stdin"/>, and collect stdout/stderr until exit or <paramref name="timeout"/>.
-    /// Returns the exit code (-1 if killed on timeout).
+    /// Returns the exit code (-1 if killed on timeout). <paramref name="env"/> entries are
+    /// layered onto the inherited environment.
     /// </summary>
     public static async Task<(int Code, string Stdout, string Stderr)> RunAsync(
-        string cliPath, IReadOnlyList<string> args, string? stdin, TimeSpan timeout, CancellationToken ct)
+        string cliPath, IReadOnlyList<string> args, string? stdin, TimeSpan timeout, CancellationToken ct,
+        IReadOnlyDictionary<string, string>? env = null)
     {
-        var psi = NewStartInfo(cliPath, args);
+        var psi = NewStartInfo(cliPath, args, env);
 
         using var proc = new Process { StartInfo = psi, EnableRaisingEvents = true };
         var stdout = new StringBuilder();

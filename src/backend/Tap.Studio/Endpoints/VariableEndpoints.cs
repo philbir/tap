@@ -1,4 +1,5 @@
 using Tap.Studio.Contracts;
+using Tap.Studio.Variables;
 using Tap.Workspace.Model;
 using Tap.Workspace.Rendering;
 using Tap.Workspace.Variables;
@@ -25,9 +26,13 @@ public static class VariableEndpoints
 {
     public static void Map(IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/variables/views", async (VariableContextDto body, WorkspaceService svc, CancellationToken ct) =>
+        app.MapPost("/api/variables/views", async (
+            VariableContextDto body,
+            WorkspaceService svc,
+            IEnumerable<IVariableProviderFactory> factories,
+            CancellationToken ct) =>
         {
-            var registry = svc.CreateRegistry();
+            var registry = svc.CreateRegistry(body.EnvPath);
             var view = await VariableViewBuilder.BuildAsync(
                 svc.Current,
                 registry,
@@ -37,21 +42,41 @@ public static class VariableEndpoints
                 envPath: body.EnvPath,
                 stageName: body.Stage).ConfigureAwait(false);
 
-            return Results.Ok(new VariableViewDto(
-                Sets: view.Sets.Select(s => new VariableSetDto(
+            // Provider sets carry provenance (origin + type display name + icon) so the
+            // variables panel can render one labelled group per provider instead of an
+            // undifferentiated pile of names.
+            VariableSetDto MapSet(VariableSet s)
+            {
+                string? origin = null, typeDisplayName = null, icon = null;
+                if (s.ProviderName is not null && registry.Get(s.ProviderName) is { } provider)
+                {
+                    origin = provider.Config.Origin == ProviderOrigin.System ? "system" : "workspace";
+                    var descriptor = ProviderSettingsMask.DescriptorFor(factories, provider.Config.Type);
+                    typeDisplayName = descriptor?.DisplayName;
+                    icon = descriptor?.Icon;
+                }
+                return new VariableSetDto(
                     Scope: ScopeName(s.Scope),
                     SourcePath: s.SourcePath,
                     Label: s.Label,
                     Count: s.Variables.Count,
                     ProviderName: s.ProviderName,
-                    Variables: s.Variables.Select(MapVariable).ToArray())).ToArray(),
+                    Variables: s.Variables.Select(MapVariable).ToArray(),
+                    Origin: origin,
+                    TypeDisplayName: typeDisplayName,
+                    Icon: icon);
+            }
+
+            return Results.Ok(new VariableViewDto(
+                Sets: view.Sets.Select(MapSet).ToArray(),
                 Result: view.Result.Select(MapVariable).ToArray(),
-                DefaultProvider: registry.DefaultProviderName));
+                DefaultProvider: registry.DefaultProviderName,
+                Aliases: registry.Aliases));
         });
 
         app.MapPost("/api/variables/compile", async (CompileTemplateRequestDto body, WorkspaceService svc, CancellationToken ct) =>
         {
-            var registry = svc.CreateRegistry();
+            var registry = svc.CreateRegistry(body.Context.EnvPath);
             var view = await VariableViewBuilder.BuildAsync(
                 svc.Current,
                 registry,
@@ -62,7 +87,7 @@ public static class VariableEndpoints
                 stageName: body.Context.Stage).ConfigureAwait(false);
 
             var scope = view.Result.ToDictionary(v => v.Name, v => v, StringComparer.Ordinal);
-            var result = VariableCompiler.Compile(body.Template ?? string.Empty, scope, view.Sets);
+            var result = VariableCompiler.Compile(body.Template ?? string.Empty, scope, view.Sets, registry.Aliases);
 
             return Results.Ok(new CompileTemplateResponseDto(
                 Value: result.Value,
@@ -80,7 +105,9 @@ public static class VariableEndpoints
 
         app.MapPost("/api/variables/set", async (SetVariableDto body, WorkspaceService svc, CancellationToken ct) =>
         {
-            var registry = svc.CreateRegistry();
+            // Env matters here: a write without an explicit target lands on the active
+            // env's default provider (its vault), not a global one.
+            var registry = svc.CreateRegistry(body.EnvPath);
             var provider = body.VariableProvider is null
                 ? registry.DefaultWritableProvider
                 : registry.Get(body.VariableProvider);

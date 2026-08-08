@@ -805,7 +805,7 @@ public sealed class AuthRunner
         req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", assertion);
         req.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/vnd.github+json"));
         req.Headers.Add("X-GitHub-Api-Version", GithubApiVersion);
-        req.Headers.UserAgent.Add(new System.Net.Http.Headers.ProductInfoHeaderValue("tap-studio", "1.0"));
+        req.Headers.TryAddWithoutValidation("User-Agent", StudioVersion.UserAgent);
 
         using var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
         var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);

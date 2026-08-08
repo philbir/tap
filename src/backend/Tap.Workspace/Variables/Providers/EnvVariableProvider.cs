@@ -94,6 +94,19 @@ public sealed class EnvVariableProvider(VariableProviderConfig config) : IVariab
 public sealed class EnvVariableProviderFactory : IVariableProviderFactory
 {
     public string Type => "env";
+
+    public ProviderTypeDescriptor Descriptor { get; } = new()
+    {
+        Type = "env",
+        DisplayName = "Host environment",
+        Icon = "terminal",
+        Description = "Reads allow-listed environment variables from the Studio host process.",
+        Mode = ProviderMode.Read,
+        // No per-instance settings on purpose: the allowlists (TAP_VARS_ALLOWED /
+        // TAP_SECRETS_ALLOWED) live on the host so files can't widen secret reachability.
+        Fields = [],
+    };
+
     public IVariableProvider Create(VariableProviderConfig config, ProviderFactoryContext context)
         => new EnvVariableProvider(config);
 }

@@ -1,24 +1,21 @@
 import {
-  ActionIcon, Anchor, Badge, Box, Button, Code, Group, Select, Stack, Tabs, Text, TextInput, Tooltip,
+  ActionIcon, Anchor, Badge, Box, Button, Code, Collapse, Group, Select, Stack, Tabs, Text, TextInput, Tooltip,
+  UnstyledButton,
 } from '@mantine/core'
 import {
-  IconBrandGit, IconCode, IconFolder, IconLayoutDashboard, IconPlug, IconPlus, IconX,
+  IconBrandGit, IconChevronDown, IconChevronRight, IconCode, IconFolder, IconLayoutDashboard, IconPlug, IconX,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { KnownWorkspace, ProviderConfig, WorkspaceDetail, WorkspaceSpec } from '../api/types'
+import type { KnownWorkspace, ProviderConfig, ProviderTypeDescriptor, WorkspaceDetail, WorkspaceSpec } from '../api/types'
 import { modeForProviderType } from '../api/types'
 import { useTapStore } from '../store'
 import { EditorShell, TabCount } from './EditorShell'
 import { SourceTab } from './SourceTab'
-
-/** Variable-provider types the UI offers as quick-add. Custom types are still allowed
- *  by hand-editing the YAML — the server's factory registry is the source of truth. */
-const KNOWN_TYPES = [
-  { value: 'env', label: 'env — process environment variables (read)' },
-  { value: 'file', label: 'file — encrypted at-rest store (read/write)' },
-  { value: 'azkv', label: 'azkv — Azure Key Vault (read/write)' },
-]
+import {
+  BrowseProviderControl, ProviderSettingsFields, ProviderTypeIcon, ProviderTypeSelect,
+  TestProviderControl, descriptorFor, useProviderTypes,
+} from './providerMeta'
 
 /** Workspace manifest editor — `tap.md`. Typed state; server emits canonical YAML. */
 export function WorkspaceEditor() {
@@ -33,6 +30,7 @@ export function WorkspaceEditor() {
   const [tab, setTab] = useState<string | null>('general')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
+  const { types: providerTypes } = useProviderTypes()
 
   useEffect(() => {
     let cancelled = false
@@ -65,6 +63,12 @@ export function WorkspaceEditor() {
 
   async function save() {
     if (!spec) return
+    // A provider row without a name would be silently skipped by the parser on the next
+    // load — block the save instead of letting the row vanish from tap.md.
+    if ((spec.variableProviders ?? []).some((p) => p.origin !== 'system' && !p.name.trim())) {
+      setError('Every variable provider needs a name — fill in the empty Name field before saving.')
+      return
+    }
     setSaving(true); setError(null)
     try {
       await api.saveWorkspaceSpec(spec)
@@ -85,9 +89,11 @@ export function WorkspaceEditor() {
   // Filter out system-origin providers from the workspace editor — they're managed in
   // app config, not tap.md. Workspace-origin providers stay editable.
   const workspaceProviders = providers.filter(p => p.origin !== 'system')
+  const isWritable = (p: ProviderConfig) =>
+    (descriptorFor(providerTypes, p.type)?.mode ?? modeForProviderType(p.type)) === 'readwrite'
   const writableProviderOptions = [
     { value: '', label: '(auto — first writable)' },
-    ...providers.filter(p => modeForProviderType(p.type) === 'readwrite').map(p => ({ value: p.name, label: p.name })),
+    ...providers.filter(isWritable).map(p => ({ value: p.name, label: p.name })),
   ]
 
   return (
@@ -149,6 +155,7 @@ export function WorkspaceEditor() {
                 <ProviderRow
                   key={`${p.origin}:${p.name}`}
                   provider={p}
+                  types={providerTypes}
                   readOnly={p.origin === 'system'}
                   onChange={(next) => updateProvider(i, next)}
                   onRemove={() => removeProvider(i)}
@@ -160,9 +167,9 @@ export function WorkspaceEditor() {
             </Stack>
 
             <Group>
-              <Select
+              <ProviderTypeSelect
+                types={providerTypes}
                 placeholder="+ Add variable provider…"
-                data={KNOWN_TYPES}
                 value={null}
                 onChange={(v) => {
                   if (!v) return
@@ -170,7 +177,6 @@ export function WorkspaceEditor() {
                   const next: ProviderConfig = { name, type: v, settings: {}, origin: 'workspace' }
                   update('variableProviders', [...providers, next])
                 }}
-                leftSection={<IconPlus size={14} />}
                 w={360}
               />
             </Group>
@@ -344,85 +350,96 @@ function isHttpUrl(url: string): boolean {
 }
 
 function ProviderRow({
-  provider, readOnly, onChange, onRemove,
+  provider, types, readOnly, onChange, onRemove,
 }: {
   provider: ProviderConfig
+  types: ProviderTypeDescriptor[]
   readOnly: boolean
   onChange: (next: ProviderConfig) => void
   onRemove: () => void
 }) {
-  const settingFields = settingFieldsFor(provider.type)
-  const mode = modeForProviderType(provider.type)
+  // Rows list collapsed; expanding reveals the name + settings form. An unnamed row
+  // (would be dropped on save) starts expanded so its required-name error is visible.
+  const [expanded, setExpanded] = useState(provider.name.trim() === '')
+  const descriptor = descriptorFor(types, provider.type)
+  const mode = descriptor?.mode ?? modeForProviderType(provider.type)
+  const summary = descriptor?.fields
+    .find((f) => f.kind === 'text' && (provider.settings[f.key] ?? '').trim() !== '')
+  const summaryValue = summary ? provider.settings[summary.key] : null
+
   return (
-    <Stack
-      gap="xs"
-      p="sm"
+    <Box
       style={{
         border: '1px solid var(--mantine-color-default-border)',
         borderRadius: 6,
         background: 'var(--mantine-color-default)',
       }}
     >
-      <Group justify="space-between" wrap="nowrap">
+      <Group justify="space-between" wrap="nowrap" p="sm">
+        <UnstyledButton
+          onClick={() => setExpanded((e) => !e)}
+          style={{ flex: 1, minWidth: 0 }}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} provider ${provider.name || '(unnamed)'}`}
+        >
+          <Group gap="xs" wrap="nowrap">
+            {expanded ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
+            <ProviderTypeIcon icon={descriptor?.icon} size={16} />
+            {provider.name.trim() === '' ? (
+              <Text size="sm" c="red" fs="italic">(unnamed)</Text>
+            ) : (
+              <Text size="sm" fw={600} ff="var(--mono)">{provider.name}</Text>
+            )}
+            <Text size="sm" c="dimmed">{descriptor?.displayName ?? provider.type}</Text>
+            {summaryValue && (
+              <Text size="xs" c="dimmed" ff="var(--mono)" truncate>· {summaryValue}</Text>
+            )}
+            <Badge size="xs" variant="light" color={mode === 'readwrite' ? 'green' : 'gray'}>
+              {mode === 'readwrite' ? 'read/write' : 'read-only'}
+            </Badge>
+            <Badge size="xs" variant="light" color={provider.origin === 'system' ? 'blue' : 'tap'}>
+              {provider.origin}
+            </Badge>
+          </Group>
+        </UnstyledButton>
         <Group gap="xs" wrap="nowrap">
-          <Code fz="sm" fw={600} c="tap.6">{provider.type}</Code>
-          <Text size="sm">{provider.name}</Text>
-          <Badge size="xs" variant="light" color={mode === 'readwrite' ? 'green' : 'gray'}>
-            {mode}
-          </Badge>
-          <Badge size="xs" variant="light" color={provider.origin === 'system' ? 'blue' : 'tap'}>
-            {provider.origin}
-          </Badge>
+          <TestProviderControl
+            name={provider.name || null}
+            type={provider.type}
+            settings={provider.settings}
+          />
+          {provider.name && <BrowseProviderControl providerName={provider.name} />}
+          {!readOnly && (
+            <ActionIcon variant="subtle" color="red" size="sm" onClick={onRemove} title="Remove variable provider" aria-label="Remove variable provider">
+              <IconX size={14} />
+            </ActionIcon>
+          )}
         </Group>
-        {!readOnly && (
-          <ActionIcon variant="subtle" color="red" size="sm" onClick={onRemove} title="Remove variable provider" aria-label="Remove variable provider">
-            <IconX size={14} />
-          </ActionIcon>
-        )}
       </Group>
-      {!readOnly && (
-        <TextInput
-          label="Name" size="xs" value={provider.name}
-          onChange={(e) => onChange({ ...provider, name: e.currentTarget.value })}
-        />
-      )}
-      {settingFields.map((f) => (
-        <TextInput
-          key={f.key}
-          label={f.label}
-          description={f.help}
-          placeholder={f.placeholder}
-          type={f.sensitive ? 'password' : 'text'}
-          size="xs"
-          value={provider.settings[f.key] ?? ''}
-          disabled={readOnly}
-          onChange={(e) => onChange({
-            ...provider,
-            settings: { ...provider.settings, [f.key]: e.currentTarget.value || null },
-          })}
-        />
-      ))}
-    </Stack>
-  )
-}
 
-function settingFieldsFor(type: string): Array<{ key: string; label: string; help?: string; placeholder?: string; sensitive?: boolean }> {
-  switch (type) {
-    case 'env':
-      return []
-    case 'file':
-      return [
-        { key: 'encryptionKey', label: 'Encryption key', help: 'Passphrase used to encrypt secret values. Echoed as *** after save; clearing this field on a saved provider preserves the on-disk key.', sensitive: true, placeholder: '••••••••' },
-      ]
-    case 'azkv':
-      return [
-        { key: 'vaultName', label: 'Vault name', help: 'Short name; expanded to https://<name>.vault.azure.net/.', placeholder: 'my-team-kv' },
-        { key: 'tenantId', label: 'Tenant ID (optional)' },
-        { key: 'prefix', label: 'Key prefix (optional)', help: 'Prepended to each lookup. Tokens still use the unprefixed name.' },
-      ]
-    default:
-      return []
-  }
+      <Collapse expanded={expanded}>
+        <Stack gap="xs" px="sm" pb="sm">
+          {!readOnly && (
+            <TextInput
+              label="Name" size="xs" value={provider.name}
+              onChange={(e) => onChange({ ...provider, name: e.currentTarget.value })}
+              required
+              error={provider.name.trim() === '' ? 'Name is required' : undefined}
+              styles={{ input: { fontFamily: 'var(--mono)' } }}
+            />
+          )}
+          <ProviderSettingsFields
+            descriptor={descriptor}
+            settings={provider.settings}
+            onChange={(settings) => onChange({ ...provider, settings })}
+            disabled={readOnly}
+            providerName={provider.name || null}
+            size="xs"
+          />
+        </Stack>
+      </Collapse>
+    </Box>
+  )
 }
 
 function uniqueName(type: string, existing: ProviderConfig[]): string {

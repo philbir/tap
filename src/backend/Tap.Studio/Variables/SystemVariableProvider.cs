@@ -60,6 +60,19 @@ public sealed class SystemVariableProviderFactory : IVariableProviderFactory
 
     public string Type => SystemVariableProvider.ProviderType;
 
+    // Never shown in the add-provider picker (the Studio filters the `system` type out),
+    // but the descriptor still exists so masking/labelling code can treat all factories
+    // uniformly.
+    public ProviderTypeDescriptor Descriptor { get; } = new()
+    {
+        Type = SystemVariableProvider.ProviderType,
+        DisplayName = "System variables",
+        Icon = "settings",
+        Description = "Built-in provider backed by the user-level system.json variable list.",
+        Mode = ProviderMode.ReadWrite,
+        Fields = [],
+    };
+
     public IVariableProvider Create(VariableProviderConfig config, ProviderFactoryContext context)
         => new SystemVariableProvider(_store, config);
 }

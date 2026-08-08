@@ -1,19 +1,21 @@
 import {
   ActionIcon, Alert, Anchor, Badge, Box, Button, Checkbox, Code, Collapse, Divider, Group, ScrollArea,
-  Select, Stack, Switch, Tabs, TagsInput, Text, TextInput, Textarea, Tooltip,
+  Select, Stack, Switch, Tabs, TagsInput, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import { useClipboard, useDebouncedValue, useDisclosure } from '@mantine/hooks'
 import {
   IconAlertCircle, IconCheck, IconChevronDown, IconChevronRight, IconCode, IconCopy,
   IconExternalLink, IconKey, IconFileText, IconPlayerPlayFilled, IconRefresh, IconShieldCheck, IconTrash,
 } from '@tabler/icons-react'
-import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react'
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
 import type { AuthDetail, AuthExecuteResponse, AuthSpec, VariableContext } from '../api/types'
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { decodeJwt } from '../workspace/jwt'
+import { generateSigningKey, type GeneratedSigningKey } from '../workspace/jwtKeys'
+import { RawBodyEditor } from './RawBodyEditor'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabDot } from './EditorShell'
 import { KvTable } from './KvTable'
@@ -313,12 +315,14 @@ function ScopeRow({ slug }: { slug: string | null }) {
  */
 const AuthVarContext = createContext<{ context?: VariableContext; onOpenVariables?: () => void }>({})
 
-function VariableField({ label, value, onChange, hint, secret }: {
+function VariableField({ label, value, onChange, hint, secret, action }: {
   label: string
   value: string
   onChange: (v: string) => void
   hint?: string
   secret?: boolean
+  /** Optional control pinned to the right of the label row (e.g. "Generate"). */
+  action?: ReactNode
 }) {
   const { context, onOpenVariables } = useContext(AuthVarContext)
   return (
@@ -326,6 +330,7 @@ function VariableField({ label, value, onChange, hint, secret }: {
       <Group gap={6} mb={4}>
         <Text size="sm" fw={500}>{label}</Text>
         {secret && <Tooltip label="Secret-bearing — use a {{var}} reference (e.g. {{env:NAME}}); the variable's `secret: true` flag keeps the value masked"><IconKey size={12} color="var(--mantine-color-yellow-7)" /></Tooltip>}
+        {action && <Box ml="auto">{action}</Box>}
       </Group>
       <VariableInput value={value} onChange={onChange} context={context} onOpenVariables={onOpenVariables} />
       {hint && <Text size="xs" c="dimmed" mt={4}>{hint}</Text>}
@@ -423,13 +428,14 @@ function specFromDetail(d: AuthDetail, path: string): AuthSpec {
     case 'jwt': return {
       ...base,
       jwtAlgorithm: f['algorithm'] ?? 'HS256',
-      jwtIssuer: f['issuer'] ?? undefined,
-      jwtAudience: f['audience'] ?? undefined,
-      jwtSubject: f['subject'] ?? undefined,
       jwtKeyId: f['keyId'] ?? f['kid'] ?? undefined,
       jwtKey: f['key'] ?? undefined,
       jwtExpiresIn: f['expiresIn'] ? Number(f['expiresIn']) : undefined,
-      jwtPayload: f['payload'] ?? undefined,
+      // iss / aud / sub used to have dedicated inputs; they're ordinary payload claims now.
+      // Fold the legacy front-matter keys into the payload on load so opening an older
+      // profile doesn't drop them — the minter merges payload over the auto-filled claims,
+      // so the token comes out identical either way.
+      jwtPayload: foldLegacyJwtClaims(f['payload'], { iss: f['issuer'], aud: f['audience'], sub: f['subject'] }),
     }
     case 'aws-sigv4': return {
       ...base,
@@ -508,9 +514,6 @@ function trimToType(spec: AuthSpec): AuthSpec {
     case 'jwt': return {
       ...base,
       jwtAlgorithm: spec.jwtAlgorithm ?? 'HS256',
-      jwtIssuer: spec.jwtIssuer,
-      jwtAudience: spec.jwtAudience,
-      jwtSubject: spec.jwtSubject,
       jwtKeyId: spec.jwtKeyId,
       jwtKey: spec.jwtKey,
       jwtExpiresIn: spec.jwtExpiresIn,
@@ -546,6 +549,27 @@ function trimToType(spec: AuthSpec): AuthSpec {
 }
 
 function basename(p: string): string { return p.split('/').pop() ?? p }
+
+/**
+ * Merge the retired `issuer` / `audience` / `subject` front-matter keys into the payload
+ * JSON. Claims already present in the payload win — they overrode the dedicated fields at
+ * mint time too, so the merge can't change what a profile produces. A payload that isn't a
+ * parseable JSON object is left untouched (nothing sane to merge into).
+ */
+function foldLegacyJwtClaims(payload: string | null | undefined, legacy: Record<string, string | null | undefined>): string | undefined {
+  const claims = Object.entries(legacy).filter(([, v]) => v != null && v.trim().length > 0)
+  if (claims.length === 0) return payload || undefined
+
+  let existing: Record<string, unknown>
+  try {
+    const parsed = payload && payload.trim().length > 0 ? JSON.parse(payload) : {}
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return payload || undefined
+    existing = parsed as Record<string, unknown>
+  } catch {
+    return payload || undefined
+  }
+  return JSON.stringify({ ...Object.fromEntries(claims), ...existing }, null, 2)
+}
 
 // ---- OAuth2 fields --------------------------------------------------------------------
 
@@ -834,28 +858,60 @@ const JWT_ALGORITHMS = [
   { value: 'ES512', label: 'ES512 (ECDSA P-521)' },
 ]
 
+const JWT_PAYLOAD_PLACEHOLDER = `{
+  "iss": "tap-studio",
+  "aud": "https://api.example.com",
+  "sub": "alice",
+  "scope": "read:items"
+}`
+
 /**
- * Editor for the self-signed JWT auth type. Mirrors dreamr's CreateRawJwtTokenRequest:
- * algorithm + standard claims (iss/aud/sub/exp) + a JSON blob of extra claims that
- * override the auto-filled set. The signing key is always treated as secret — typically
- * a `{{var}}` reference to a secret-flagged workspace variable.
+ * Editor for the self-signed JWT auth type: algorithm + lifetime + signing key, with every
+ * claim (including iss / aud / sub) authored as JSON in the payload editor — the minter
+ * merges it over the auto-filled `exp / iat / jti`, so there's no reason for the registered
+ * claims to have their own inputs. The signing key is always treated as secret — typically a
+ * `{{var}}` reference to a secret-flagged workspace variable; the Generate button mints one
+ * locally for when there's no key yet.
  */
 function JwtFields({ spec, update }: { spec: AuthSpec; update: <K extends keyof AuthSpec>(k: K, v: AuthSpec[K]) => void }) {
-  const isHmac = (spec.jwtAlgorithm ?? 'HS256').startsWith('HS')
+  const algorithm = spec.jwtAlgorithm ?? 'HS256'
+  const isHmac = algorithm.startsWith('HS')
+  const [generating, setGenerating] = useState(false)
+  const [generated, setGenerated] = useState<GeneratedSigningKey | null>(null)
+  const [genError, setGenError] = useState<string | null>(null)
+  const clipboard = useClipboard({ timeout: 1200 })
+
+  // Empty payload is fine (you get exp/iat/jti only); anything else has to parse as a JSON
+  // object or the run fails server-side, so flag it here rather than at execute time.
+  const payloadError = useMemo(() => {
+    const raw = spec.jwtPayload
+    if (!raw || raw.trim().length === 0) return null
+    try {
+      const parsed = JSON.parse(raw)
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return 'Must be a JSON object'
+      return null
+    } catch { return 'Invalid JSON' }
+  }, [spec.jwtPayload])
+
+  async function generateKey() {
+    setGenerating(true); setGenError(null); setGenerated(null)
+    try {
+      const result = await generateSigningKey(algorithm)
+      update('jwtKey', result.privateKey)
+      setGenerated(result)
+    } catch (e) {
+      setGenError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setGenerating(false)
+    }
+  }
+
   return (
     <Stack gap="md">
-      <Alert color="tap" variant="light" icon={<IconShieldCheck size={14} />}>
-        <Text size="xs">
-          Mints a self-signed JWT each time the profile runs and stamps it as
-          <Code> Authorization: Bearer …</Code>. Useful for service-to-service "client
-          assertion" patterns, dev-mode JWT-bearer endpoints, or signed webhooks.
-        </Text>
-      </Alert>
-
       <Group grow align="flex-start" gap="md">
         <Select
           label="Algorithm"
-          value={spec.jwtAlgorithm ?? 'HS256'}
+          value={algorithm}
           data={JWT_ALGORITHMS}
           onChange={(v) => v && update('jwtAlgorithm', v)}
           allowDeselect={false}
@@ -868,9 +924,6 @@ function JwtFields({ spec, update }: { spec: AuthSpec; update: <K extends keyof 
         />
       </Group>
 
-      <VariableField label="Issuer (iss)" value={spec.jwtIssuer ?? ''} onChange={(v) => update('jwtIssuer', v || undefined)} />
-      <VariableField label="Audience (aud)" value={spec.jwtAudience ?? ''} onChange={(v) => update('jwtAudience', v || undefined)} />
-      <VariableField label="Subject (sub)" value={spec.jwtSubject ?? ''} onChange={(v) => update('jwtSubject', v || undefined)} />
       <VariableField label="Key ID (kid)" value={spec.jwtKeyId ?? ''} onChange={(v) => update('jwtKeyId', v || undefined)} hint="Optional. For HMAC, we derive a stable kid from the key hash when unset." />
 
       <VariableField
@@ -881,21 +934,88 @@ function JwtFields({ spec, update }: { spec: AuthSpec; update: <K extends keyof 
           ? 'HMAC: raw shared secret. Use a {{var}} reference to keep it out of the file.'
           : 'RSA / ECDSA: PEM-encoded private key (-----BEGIN PRIVATE KEY-----). Use a {{var}} ref.'}
         secret
+        action={
+          <Button
+            size="compact-xs"
+            variant="light"
+            leftSection={<IconRefresh size={12} />}
+            loading={generating}
+            onClick={generateKey}
+          >
+            {isHmac ? 'Generate secret' : 'Generate keypair'}
+          </Button>
+        }
       />
 
+      {genError && (
+        <Alert color="red" variant="light" icon={<IconAlertCircle size={14} />} withCloseButton onClose={() => setGenError(null)}>
+          <Text size="xs">{genError}</Text>
+        </Alert>
+      )}
+
+      {generated && (
+        <Alert
+          color="yellow"
+          variant="light"
+          icon={<IconKey size={14} />}
+          title={`New ${generated.label}`}
+          withCloseButton
+          onClose={() => setGenerated(null)}
+        >
+          <Stack gap="xs">
+            <Text size="xs">
+              Generated in your browser and written into the field above — it lands in the
+              workspace file on save. Move it into a secret variable and reference it with{' '}
+              <Code>{'{{var}}'}</Code> before committing.
+            </Text>
+            {generated.publicKey && (
+              <>
+                <Text size="xs">
+                  Public key for whoever verifies the token — Studio doesn't keep a copy:
+                </Text>
+                <Code block style={{ fontSize: 11, maxHeight: 120, overflow: 'auto' }}>{generated.publicKey}</Code>
+              </>
+            )}
+            <Group gap="xs">
+              <Button
+                size="compact-xs"
+                variant="default"
+                leftSection={clipboard.copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
+                onClick={() => clipboard.copy(generated.publicKey ?? generated.privateKey)}
+              >
+                {clipboard.copied ? 'Copied' : generated.publicKey ? 'Copy public key' : 'Copy secret'}
+              </Button>
+            </Group>
+          </Stack>
+        </Alert>
+      )}
+
       <Box>
-        <Text size="sm" fw={500} mb={4}>Payload (extra claims)</Text>
-        <Textarea
+        <Group gap={8} mb={4}>
+          <Text size="sm" fw={500}>Payload (claims)</Text>
+          {payloadError && <Badge size="xs" color="red" variant="light">{payloadError}</Badge>}
+        </Group>
+        <RawBodyEditor
           value={spec.jwtPayload ?? ''}
-          onChange={(e) => update('jwtPayload', e.currentTarget.value || undefined)}
-          placeholder={'{\n  "scope": "read:items",\n  "roles": ["admin"]\n}'}
-          autosize
-          minRows={4}
-          styles={{ input: { fontFamily: 'var(--mono)', fontSize: 12 } }}
+          onChange={(v) => update('jwtPayload', v.trim().length > 0 ? v : undefined)}
+          rawSub="json"
+          height={280}
         />
         <Text size="xs" c="dimmed" mt={4}>
-          Optional JSON object. Merged onto the auto-filled <Code>iss / aud / sub / exp / iat / jti</Code> claims — same-named entries override.
+          JSON object of claims — <Code>iss</Code>, <Code>aud</Code>, <Code>sub</Code> and anything custom.
+          Merged onto the auto-filled <Code>exp / iat / jti</Code>; same-named entries override.
+          Values may contain <Code>{'{{var}}'}</Code> references.
         </Text>
+        {(!spec.jwtPayload || spec.jwtPayload.trim().length === 0) && (
+          <Button
+            size="compact-xs"
+            variant="subtle"
+            mt={6}
+            onClick={() => update('jwtPayload', JWT_PAYLOAD_PLACEHOLDER)}
+          >
+            Insert example claims
+          </Button>
+        )}
       </Box>
     </Stack>
   )
@@ -1251,6 +1371,7 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
 
 function TokenResultView({ result }: { result: AuthExecuteResponse }) {
   const decoded = result.accessToken ? decodeJwt(result.accessToken) : null
+  const clipboard = useClipboard({ timeout: 1200 })
 
   return (
     <Stack gap="md">
@@ -1264,7 +1385,22 @@ function TokenResultView({ result }: { result: AuthExecuteResponse }) {
 
       {result.accessToken && (
         <Box>
-          <Text size="xs" fw={600} tt="uppercase" c="tap" lts={0.5} mb={4}>Access token</Text>
+          <Group gap={6} mb={4} wrap="nowrap">
+            <Text size="xs" fw={600} tt="uppercase" c="tap" lts={0.5}>Access token</Text>
+            {/* The block below is truncated for display — the button copies the whole token. */}
+            <Tooltip label={clipboard.copied ? 'Copied' : 'Copy token'} withArrow>
+              <ActionIcon
+                size="sm"
+                variant="subtle"
+                color={clipboard.copied ? 'teal' : 'gray'}
+                ml="auto"
+                aria-label="Copy access token"
+                onClick={() => clipboard.copy(result.accessToken)}
+              >
+                {clipboard.copied ? <IconCheck size={14} /> : <IconCopy size={14} />}
+              </ActionIcon>
+            </Tooltip>
+          </Group>
           <Code block fz="xs" style={{ wordBreak: 'break-all', maxHeight: 220, overflow: 'auto' }}>
             {result.accessToken.length > 200 ? result.accessToken.slice(0, 200) + '…' : result.accessToken}
           </Code>

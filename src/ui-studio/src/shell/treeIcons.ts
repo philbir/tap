@@ -81,11 +81,19 @@ const TAP_TREE_UNSAFE_CSS = `
 
   /* Selection styling: pierre paints a strong tap-light band on the selected row.
      Tone it down to just bold + keep the foreground colour so the selection reads
-     as the active tab without dominating the sidebar. */
+     as the active tab without dominating the sidebar.
+     The overlay var matters as much as the row background: the middle-truncation
+     marker (the "…" that occludes overflowing text) paints
+     --truncate-marker-background-overlay-color on top of its own backdrop, and
+     pierre points that at --trees-selected-bg for selected rows — which is why a
+     truncated selected label showed a purple block behind the ellipsis. Both
+     declarations need !important: pierre's rule nests to
+     [data-type="item"][data-item-selected="true"], which outranks ours. */
   [data-item-selected="true"] {
     background-color: transparent !important;
     color: var(--trees-fg) !important;
     font-weight: 600;
+    --truncate-marker-background-overlay-color: transparent !important;
   }
   [data-item-selected="true"]::before {
     outline-color: transparent !important;

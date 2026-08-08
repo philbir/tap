@@ -9,21 +9,15 @@ namespace Tap.Studio.Endpoints;
 /// under <c>TAP_SYSTEM_DIR</c> (default <c>~/.tap</c>): system-scope variable providers
 /// and system variables.
 ///
-/// <para>Sensitive provider setting values (keys listed in <see cref="SensitiveSettingKeys"/>)
-/// are masked in <see cref="MaskSettings"/> on the way out. On save, when the client sends
-/// back the literal mask string for a setting, the server preserves the existing on-disk
-/// value for that key instead of overwriting it — so a UI round-trip never leaks a stored
-/// secret through the API and never clobbers a secret the user didn't intend to edit.</para>
+/// <para>Sensitive provider setting values (fields the type descriptor marks
+/// <c>secret</c>) are masked via <see cref="ProviderSettingsMask"/> on the way out. On save,
+/// when the client sends back the literal mask string for a setting, the server preserves
+/// the existing on-disk value for that key instead of overwriting it — so a UI round-trip
+/// never leaks a stored secret through the API and never clobbers a secret the user didn't
+/// intend to edit.</para>
 /// </summary>
 public static class SystemEndpoints
 {
-    private const string Mask = "***";
-
-    private static readonly HashSet<string> SensitiveSettingKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "encryptionKey",
-    };
-
     public static void Map(IEndpointRouteBuilder app)
     {
         app.MapGet("/api/system/settings", (
@@ -33,27 +27,27 @@ public static class SystemEndpoints
             var providers = store.GetProviderConfigs()
                 // Hide the implicit `system` entry: the UI never lets users add/edit/remove it.
                 .Where(p => !string.Equals(p.Type, SystemVariableProvider.ProviderType, StringComparison.OrdinalIgnoreCase))
-                .Select(p => new SystemProviderDto(p.Name, p.Type, MaskSettings(p.Settings)))
+                .Select(p => new SystemProviderDto(
+                    p.Name,
+                    p.Type,
+                    ProviderSettingsMask.Apply(ProviderSettingsMask.DescriptorFor(factories, p.Type), p.Settings)))
                 .ToArray();
             var variables = store.GetVariables()
                 .OrderBy(kv => kv.Key, StringComparer.Ordinal)
                 .Select(kv => new SystemVariableDto(kv.Key, kv.Value.Secret ? string.Empty : kv.Value.Value, kv.Value.Secret))
-                .ToArray();
-            var availableTypes = factories
-                .Select(f => f.Type)
-                .Where(t => !string.Equals(t, SystemVariableProvider.ProviderType, StringComparison.OrdinalIgnoreCase))
-                .OrderBy(t => t, StringComparer.Ordinal)
                 .ToArray();
 
             return Results.Ok(new SystemSettingsDto(
                 store.SystemDir,
                 store.DefaultVariableProvider,
                 providers,
-                variables,
-                availableTypes));
+                variables));
         });
 
-        app.MapPut("/api/system/settings", (SaveSystemSettingsDto body, SystemSettingsStore store) =>
+        app.MapPut("/api/system/settings", (
+            SaveSystemSettingsDto body,
+            SystemSettingsStore store,
+            IEnumerable<IVariableProviderFactory> factories) =>
         {
             var previousProviders = store.GetProviderConfigs()
                 .Where(p => !string.Equals(p.Type, SystemVariableProvider.ProviderType, StringComparison.OrdinalIgnoreCase))
@@ -64,19 +58,23 @@ public static class SystemEndpoints
             foreach (var p in body.VariableProviders ?? Array.Empty<SystemProviderDto>())
             {
                 if (string.IsNullOrWhiteSpace(p.Name) || string.IsNullOrWhiteSpace(p.Type)) continue;
-                var settings = new Dictionary<string, string?>(StringComparer.Ordinal);
+                var descriptor = ProviderSettingsMask.DescriptorFor(factories, p.Type);
                 previousProviders.TryGetValue(p.Name, out var prev);
-                foreach (var (k, v) in p.Settings ?? new Dictionary<string, string?>())
+                var settings = ProviderSettingsMask.RestoreMasked(
+                    descriptor,
+                    p.Settings ?? new Dictionary<string, string?>(),
+                    prev?.Settings);
+
+                if (descriptor is not null
+                    && ProviderSettingsMask.FirstMissingRequired(descriptor, settings) is { } missing)
                 {
-                    if (SensitiveSettingKeys.Contains(k) && v == Mask)
+                    return Results.BadRequest(new
                     {
-                        // Mask round-tripped unchanged — keep whatever's on disk for this key.
-                        if (prev?.Settings.TryGetValue(k, out var prevValue) == true)
-                            settings[k] = prevValue;
-                        continue;
-                    }
-                    settings[k] = v;
+                        code = "provider-setting-required",
+                        message = $"Provider '{p.Name}': required setting '{missing}' is empty.",
+                    });
                 }
+
                 providers.Add(new StoredProvider { Name = p.Name, Type = p.Type, Settings = settings });
             }
 
@@ -107,15 +105,5 @@ public static class SystemEndpoints
 
             return Results.NoContent();
         });
-    }
-
-    private static IReadOnlyDictionary<string, string?> MaskSettings(IReadOnlyDictionary<string, string?> settings)
-    {
-        var masked = new Dictionary<string, string?>(settings.Count);
-        foreach (var (k, v) in settings)
-        {
-            masked[k] = SensitiveSettingKeys.Contains(k) && !string.IsNullOrEmpty(v) ? Mask : v;
-        }
-        return masked;
     }
 }

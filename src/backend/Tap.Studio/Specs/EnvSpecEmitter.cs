@@ -12,6 +12,9 @@ public static class EnvSpecEmitter
         fm.SetIfNotEmpty("id", spec.Id);
         fm.Set("name", spec.Name);
         fm.SetStringList("tags", spec.Tags);
+        fm.SetIfNotEmpty("defaultVariableProvider", spec.DefaultVariableProvider);
+        fm.SetStringMap("providerAliases", spec.ProviderAliases);
+        fm.SetIfTrue("strictVariables", spec.StrictVariables);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
         return SpecYaml.ToFrontmatter(fm, spec.Body);
     }

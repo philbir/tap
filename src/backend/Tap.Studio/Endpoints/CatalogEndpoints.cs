@@ -1,7 +1,9 @@
 using Tap.Studio.Contracts;
 using Tap.Studio.Specs;
+using Tap.Studio.Variables;
 using Tap.Workspace.Model;
 using Tap.Workspace.Rendering;
+using Tap.Workspace.Variables;
 
 namespace Tap.Studio.Endpoints;
 
@@ -62,13 +64,16 @@ public static class CatalogEndpoints
                 Vars: e.Vars,
                 Tags: e.Tags,
                 Body: e.Body,
-                Source: svc.ReadSource(e.RelativePath)));
+                Source: svc.ReadSource(e.RelativePath),
+                DefaultVariableProvider: e.DefaultVariableProvider,
+                ProviderAliases: e.ProviderAliases,
+                StrictVariables: e.StrictVariables));
         });
 
         envs.MapPut("/spec", (EnvSpecDto spec, WorkspaceService svc) => SaveSpec(svc, spec.Path, EnvSpecEmitter.ToFileSource(spec)));
 
         // ----- Workspace manifest -----
-        app.MapGet("/api/workspace/manifest", (WorkspaceService svc) =>
+        app.MapGet("/api/workspace/manifest", (WorkspaceService svc, IEnumerable<IVariableProviderFactory> factories) =>
         {
             var m = svc.Current.Manifest;
             if (m is null) return Results.NotFound();
@@ -76,7 +81,7 @@ public static class CatalogEndpoints
                 Name: m.Name ?? "workspace",
                 Id: m.Id,
                 DefaultEnv: m.DefaultEnv?.RelativePath,
-                VariableProviders: m.VariableProviders.Select(MapProviderConfig).ToArray(),
+                VariableProviders: m.VariableProviders.Select(p => MapProviderConfig(p, factories)).ToArray(),
                 DefaultVariableProvider: m.DefaultVariableProvider,
                 Vars: m.Vars,
                 Tags: m.Tags,
@@ -84,8 +89,39 @@ public static class CatalogEndpoints
                 Source: svc.ReadSource(m.RelativePath)));
         });
 
-        app.MapPut("/api/workspace/manifest/spec", (WorkspaceSpecDto spec, WorkspaceService svc) =>
-            SaveSpec(svc, "tap.md", WorkspaceSpecEmitter.ToFileSource(spec)));
+        app.MapPut("/api/workspace/manifest/spec", (
+            WorkspaceSpecDto spec,
+            WorkspaceService svc,
+            IEnumerable<IVariableProviderFactory> factories) =>
+        {
+            // Masked (***) secret settings round-trip from the GET above — restore the
+            // on-disk values before emitting, and hold saves to the descriptor's required
+            // fields so a typo'd provider doesn't land in tap.md.
+            if (spec.VariableProviders is { Count: > 0 } incoming)
+            {
+                var stored = svc.Current.Manifest?.VariableProviders ?? [];
+                var restored = new List<ProviderConfigDto>(incoming.Count);
+                foreach (var p in incoming)
+                {
+                    var descriptor = ProviderSettingsMask.DescriptorFor(factories, p.Type);
+                    var prev = stored.FirstOrDefault(s => string.Equals(s.Name, p.Name, StringComparison.OrdinalIgnoreCase));
+                    var settings = ProviderSettingsMask.RestoreMasked(descriptor, p.Settings, prev?.Settings);
+
+                    if (descriptor is not null
+                        && ProviderSettingsMask.FirstMissingRequired(descriptor, settings) is { } missing)
+                    {
+                        return Results.BadRequest(new WorkspaceErrorDto(
+                            WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
+                            $"Provider '{p.Name}': required setting '{missing}' is empty.",
+                            "tap.md", null));
+                    }
+                    restored.Add(p with { Settings = settings });
+                }
+                spec = spec with { VariableProviders = restored };
+            }
+
+            return SaveSpec(svc, "tap.md", WorkspaceSpecEmitter.ToFileSource(spec));
+        });
     }
 
     private static IResult SaveSpec(WorkspaceService svc, string path, string content)
@@ -95,22 +131,17 @@ public static class CatalogEndpoints
         { return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line)); }
     }
 
-    private static ProviderConfigDto MapProviderConfig(Tap.Workspace.Variables.VariableProviderConfig p)
+    private static ProviderConfigDto MapProviderConfig(VariableProviderConfig p, IEnumerable<IVariableProviderFactory> factories)
     {
-        var masked = new Dictionary<string, string?>(p.Settings.Count);
-        foreach (var (k, v) in p.Settings)
-        {
-            // Sensitive settings are echoed back as "***" so the UI can show "set" without
-            // ever seeing the clear text. WorkspaceSpecEmitter recognizes the placeholder
-            // and preserves the on-disk value when round-tripping.
-            masked[k] = string.Equals(k, "encryptionKey", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(v)
-                ? "***" : v;
-        }
+        // Sensitive settings (descriptor-declared secret fields) are echoed back as "***"
+        // so the UI can show "set" without ever seeing the clear text. The manifest PUT
+        // recognizes the placeholder and restores the on-disk value when round-tripping.
+        var descriptor = ProviderSettingsMask.DescriptorFor(factories, p.Type);
         return new ProviderConfigDto(
             Name: p.Name,
             Type: p.Type,
-            Settings: masked,
-            Origin: p.Origin == Tap.Workspace.Variables.ProviderOrigin.System ? "system" : "workspace");
+            Settings: ProviderSettingsMask.Apply(descriptor, p.Settings),
+            Origin: p.Origin == ProviderOrigin.System ? "system" : "workspace");
     }
 
     private static string Stem(string path) => Path.GetFileNameWithoutExtension(path);

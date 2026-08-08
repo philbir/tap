@@ -324,8 +324,18 @@ A named environment. Activated by Tap at execute time; provides values for `{{va
 | `name` | string | no | |
 | `id` | uuid | no | |
 | `vars` | map<string, string \| number \| boolean \| secret-ref> | no | |
+| `defaultVariableProvider` | string | no | Provider (or alias) that bare `{{name}}` tokens hit first — and that receives un-targeted variable writes — while this env is active. Overrides the workspace/system default. |
+| `providerAliases` | map<string, string> | no | Alias → provider-name bindings. Requests use a stable prefix (`{{kv:secret}}`); each env points the alias at its own provider (`kv: kv-dev` vs `kv: kv-prod`). |
+| `strictVariables` | boolean | no | With a `defaultVariableProvider` set: bare `{{name}}` lookups that miss it fail instead of falling through to other providers. Recommended for one-vault-per-environment setups. |
 
 The value of any `vars` entry may be a literal **or** a secret reference (`${{scheme:path}}`). Tap delays resolution until execute time and never logs the resolved value.
+
+The provider-binding fields make the one-vault-per-environment pattern work: declare
+`kv-dev` and `kv-prod` once (in `tap.md` or the system settings), then have
+`dev.env.md` bind `kv: kv-dev` and `prod.env.md` bind `kv: kv-prod`. Requests keep a
+single spelling — `{{kv:clientSecret}}` — and switching the environment switches the
+vault. Explicit `{{provider:name}}` tokens never fall through; `strictVariables`
+extends the same guarantee to bare tokens.
 
 ### 7.2 Example
 
@@ -586,6 +596,8 @@ The render pipeline:
 7. Return the resolved request. The caller (executor, CLI `render`, diff viewer) consumes it.
 
 Step 6 is auditable: the renderer emits an `ISecretResolutionTrace` listing which refs were resolved, in which provider, at what timestamp.
+
+Executors may add their own defaults on top of the resolved headers. Tap Studio stamps `User-Agent: tap-studio/<version>` when the rendered headers don't already carry one (case-insensitive) — a `User-Agent` set on the request, the collection's `defaultHeaders`, or the auth profile always wins.
 
 ---
 

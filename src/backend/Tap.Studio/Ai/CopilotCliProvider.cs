@@ -14,17 +14,24 @@ public sealed class CopilotCliProvider : IAiProvider
     public const string ProviderName = "copilot";
     private const string EnvOverride = "TAP_COPILOT_CLI";
 
-    private static readonly IReadOnlyList<AiModelOption> BuiltInModels = new[]
+    /// <summary>Last-resort catalog, used only when the live ACP probe can't run (CLI missing,
+    /// signed out, offline, or too old for <c>--acp</c>). GitHub rotates its model line-up
+    /// often, so treat this as a hint — <see cref="ListModelsAsync"/> prefers the live list.</summary>
+    private static readonly IReadOnlyList<AiModelOption> FallbackModels = new[]
     {
-        new AiModelOption("claude-sonnet-4.6", "Claude Sonnet 4.6"),
-        new AiModelOption("claude-sonnet-4.5", "Claude Sonnet 4.5"),
-        new AiModelOption("claude-haiku-4.5", "Claude Haiku 4.5"),
-        new AiModelOption("claude-opus-4.6", "Claude Opus 4.6"),
-        new AiModelOption("gpt-5.4", "GPT-5.4"),
-        new AiModelOption("gpt-5.3-codex", "GPT-5.3 Codex"),
-        new AiModelOption("gpt-5.1", "GPT-5.1"),
-        new AiModelOption("gpt-5-mini", "GPT-5 Mini"),
+        new AiModelOption("auto", "Auto"),
+        new AiModelOption("claude-sonnet-5", "Claude Sonnet 5"),
+        new AiModelOption("claude-opus-5", "Claude Opus 5"),
+        new AiModelOption("gpt-5.3-codex", "GPT-5.3-Codex"),
+        new AiModelOption("gpt-5.6-luna", "GPT-5.6 Luna"),
+        new AiModelOption("gpt-5.6-sol", "GPT-5.6 Sol"),
+        new AiModelOption("gpt-5.6-terra", "GPT-5.6 Terra"),
+        new AiModelOption("gemini-3.1-pro-preview", "Gemini 3.1 Pro"),
     };
+
+    private static readonly TimeSpan ModelsCacheTtl = TimeSpan.FromMinutes(10);
+    private static readonly SemaphoreSlim s_modelsGate = new(1, 1);
+    private static (string CliPath, DateTimeOffset FetchedAt, IReadOnlyList<AiModelOption> Models)? s_modelsCache;
 
     private readonly LocatedCli _cli;
     private readonly bool _authFound;
@@ -32,7 +39,9 @@ public sealed class CopilotCliProvider : IAiProvider
 
     public CopilotCliProvider(string? model, string? cliPath)
     {
-        Model = string.IsNullOrWhiteSpace(model) ? "claude-sonnet-4.5" : model.Trim();
+        // Empty means "don't pass --model" — the CLI then uses the account's own default.
+        // Never bake a model id in here: ids go stale and the CLI hard-fails on unknown ones.
+        Model = string.IsNullOrWhiteSpace(model) ? "" : model.Trim();
         _cli = Locate(cliPath);
         _authFound = DetectAuth();
         SetupHint = BuildSetupHint(_cli, _authFound);
@@ -83,8 +92,9 @@ public sealed class CopilotCliProvider : IAiProvider
             : $"Copilot CLI found at {cli.Command}. Set GITHUB_TOKEN with Copilot access, or run the CLI once to sign in.";
     }
 
-    // Point the CLI at an isolated config dir so it doesn't load the user's MCP servers /
-    // agents on every spawn — that's where most of the startup cost lives.
+    // Point the CLI at an isolated home so it doesn't load the user's MCP servers / agents /
+    // skills on every spawn — that's where most of the startup cost lives. This goes in via
+    // COPILOT_HOME; the older --config-dir flag is deprecated and no longer isolates MCP.
     private static string IsolatedConfigDir()
     {
         if (s_isolatedConfigDir is not null) return s_isolatedConfigDir;
@@ -111,8 +121,42 @@ public sealed class CopilotCliProvider : IAiProvider
         };
     }
 
-    public Task<IReadOnlyList<AiModelOption>> ListModelsAsync(CancellationToken ct)
-        => Task.FromResult(BuiltInModels);
+    /// <summary>Live catalog from the CLI itself, cached briefly because the ACP handshake
+    /// costs a process spawn (~3s). Any failure degrades to <see cref="FallbackModels"/>
+    /// rather than showing an empty dropdown.</summary>
+    public async Task<IReadOnlyList<AiModelOption>> ListModelsAsync(CancellationToken ct)
+    {
+        if (!_cli.Found) return FallbackModels;
+        if (TryReadCache() is { } fresh) return fresh;
+
+        await s_modelsGate.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (TryReadCache() is { } cached) return cached;
+            var catalog = await CopilotAcp
+                .ProbeAsync(_cli.Command, IsolatedConfigDir(), TimeSpan.FromSeconds(30), ct)
+                .ConfigureAwait(false);
+            s_modelsCache = (_cli.Command, DateTimeOffset.UtcNow, catalog.Models);
+            return catalog.Models;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return FallbackModels;
+        }
+        finally
+        {
+            s_modelsGate.Release();
+        }
+    }
+
+    private IReadOnlyList<AiModelOption>? TryReadCache()
+        => s_modelsCache is { } c && c.CliPath == _cli.Command && DateTimeOffset.UtcNow - c.FetchedAt < ModelsCacheTtl
+            ? c.Models
+            : null;
 
     public async Task<AiChatResult> ChatAsync(AiChatInput input, CancellationToken ct)
     {
@@ -126,12 +170,12 @@ public sealed class CopilotCliProvider : IAiProvider
             "--output-format", "json",
             "--no-color",
             "--allow-all-tools",
-            "--config-dir", IsolatedConfigDir(),
         };
         if (!string.IsNullOrWhiteSpace(useModel)) { args.Add("--model"); args.Add(useModel); }
 
+        var env = new Dictionary<string, string> { ["COPILOT_HOME"] = IsolatedConfigDir() };
         var (code, stdout, stderr) = await CliLocator
-            .RunAsync(_cli.Command, args, stdin: null, TimeSpan.FromMinutes(3), ct)
+            .RunAsync(_cli.Command, args, stdin: null, TimeSpan.FromMinutes(3), ct, env)
             .ConfigureAwait(false);
 
         string assistant = "";
@@ -151,6 +195,9 @@ public sealed class CopilotCliProvider : IAiProvider
             {
                 case "assistant.message" when evt.Data?.Content is { } content:
                     assistant = content;
+                    // The CLI reports which model actually served the turn — authoritative when
+                    // we didn't pass --model and let the account default win.
+                    if (!string.IsNullOrWhiteSpace(evt.Data.Model)) modelOut = evt.Data.Model;
                     break;
                 case "error" or "session.error" when evt.Data?.Message is { } msg:
                     errored = msg;
@@ -252,6 +299,7 @@ internal sealed record CopilotEventData
 {
     [JsonPropertyName("content")] public string? Content { get; init; }
     [JsonPropertyName("message")] public string? Message { get; init; }
+    [JsonPropertyName("model")] public string? Model { get; init; }
     [JsonPropertyName("toolCallId")] public string? ToolCallId { get; init; }
     [JsonPropertyName("toolName")] public string? ToolName { get; init; }
     [JsonPropertyName("arguments")] public JsonElement? Arguments { get; init; }

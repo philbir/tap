@@ -1,21 +1,26 @@
 import {
-  ActionIcon, Alert, Anchor, Badge, Box, Button, Code, Divider, Group, Loader, ScrollArea, Select, Stack, Table, Tabs,
-  Text, TextInput, Tooltip,
+  ActionIcon, Alert, Anchor, Badge, Box, Button, Code, Collapse, Divider, Group, Loader, ScrollArea, Select, Stack,
+  Table, Tabs, Text, TextInput, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
 import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 import {
-  IconAlertCircle, IconCheck, IconCode, IconDeviceFloppy, IconEye, IconEyeOff, IconKey, IconPlus,
-  IconRefresh, IconSearch, IconServer, IconSparkles, IconTrash, IconVariable, IconX,
+  IconAlertCircle, IconCheck, IconChevronDown, IconChevronRight, IconCode, IconDeviceFloppy, IconEye, IconEyeOff,
+  IconKey, IconPlus, IconRefresh, IconSearch, IconServer, IconSparkles, IconTrash, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
-  AiConfig, AiModelOption, AiProviderName, SaveAiConfig, SaveSystemSettings, SystemProvider, SystemSettings, SystemVariable,
+  AiConfig, AiModelOption, AiProviderName, ProviderTypeDescriptor, SaveAiConfig, SaveSystemSettings,
+  SystemProvider, SystemSettings, SystemVariable,
 } from '../api/types'
 import { ensureThemes, useMonacoTheme } from './monacoSetup'
 import { TabCount } from './EditorShell'
+import {
+  BrowseProviderControl, ProviderSettingsFields, ProviderTypeIcon, ProviderTypeSelect,
+  TestProviderControl, descriptorFor, useProviderTypes,
+} from './providerMeta'
 
 /**
  * Settings editor — opens as a tab. Two sub-tabs:
@@ -35,6 +40,7 @@ export function SettingsEditor() {
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const { types: providerTypes } = useProviderTypes()
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -56,10 +62,7 @@ export function SettingsEditor() {
     const cleanedProviders = providers.map(({ id: _id, ...p }) => ({
       name: p.name.trim(),
       type: p.type,
-      settings: p.settings.reduce<Record<string, string | null>>((acc, kv) => {
-        if (kv.key.trim()) acc[kv.key.trim()] = kv.value
-        return acc
-      }, {}),
+      settings: p.settings,
     }))
     const cleanedVariables = variables
       .filter((v) => v.name.trim())
@@ -76,19 +79,21 @@ export function SettingsEditor() {
   }, [data, defaultProvider, providers, variables])
 
   async function save() {
+    // A provider without a name would be silently dropped by the server — surface it
+    // instead of letting the card vanish on the post-save reload.
+    if (providers.some((p) => !p.name.trim())) {
+      setError('Every provider needs a name — fill in the empty Name field before saving.')
+      return
+    }
     setBusy(true); setError(null)
     try {
       const body: SaveSystemSettings = {
         defaultVariableProvider: defaultProvider,
         variableProviders: providers
-          .filter((p) => p.name.trim() && p.type)
           .map<SystemProvider>((p) => ({
             name: p.name.trim(),
             type: p.type,
-            settings: p.settings.reduce<Record<string, string | null>>((acc, kv) => {
-              if (kv.key.trim()) acc[kv.key.trim()] = kv.value
-              return acc
-            }, {}),
+            settings: p.settings,
           })),
         variables: variables
           .filter((v) => v.name.trim())
@@ -120,8 +125,6 @@ export function SettingsEditor() {
       </Stack>
     )
   }
-
-  const availableTypes = data.availableProviderTypes
 
   return (
     <Box h="100%" style={{ display: 'flex', flexDirection: 'column' }}>
@@ -184,7 +187,7 @@ export function SettingsEditor() {
             <Box p="md">
               <ProvidersTab
                 providers={providers}
-                availableTypes={availableTypes}
+                types={providerTypes}
                 defaultProvider={defaultProvider}
                 onDefaultProviderChange={setDefaultProvider}
                 onChange={setProviders}
@@ -227,12 +230,11 @@ export function SettingsEditor() {
 
 // ----------- Variable providers tab ---------------------------------------------------
 
-interface SettingKv { id: string; key: string; value: string | null }
 interface DraftProvider {
   id: string
   name: string
   type: string
-  settings: SettingKv[]
+  settings: Record<string, string | null>
 }
 
 function toDraftProvider(p: SystemProvider): DraftProvider {
@@ -240,20 +242,32 @@ function toDraftProvider(p: SystemProvider): DraftProvider {
     id: nextId(),
     name: p.name,
     type: p.type,
-    settings: Object.entries(p.settings).map(([k, v]) => ({ id: nextId(), key: k, value: v })),
+    settings: { ...p.settings },
   }
 }
 
+/** First free name derived from the type: `azkv`, then `azkv-2`, `azkv-3`, … The implicit
+ *  `system` name stays reserved. */
+function uniqueProviderName(type: string, existing: DraftProvider[]): string {
+  const taken = new Set(existing.map((p) => p.name.trim().toLowerCase()))
+  taken.add('system')
+  if (!taken.has(type.toLowerCase())) return type
+  for (let i = 2; i < 100; i++) {
+    const candidate = `${type}-${i}`
+    if (!taken.has(candidate)) return candidate
+  }
+  return `${type}-${Date.now()}`
+}
+
 function ProvidersTab({
-  providers, availableTypes, defaultProvider, onDefaultProviderChange, onChange,
+  providers, types, defaultProvider, onDefaultProviderChange, onChange,
 }: {
   providers: DraftProvider[]
-  availableTypes: string[]
+  types: ProviderTypeDescriptor[]
   defaultProvider: string | null
   onDefaultProviderChange: (next: string | null) => void
   onChange: (next: DraftProvider[]) => void
 }) {
-  const typeOptions = availableTypes.map((t) => ({ value: t, label: t }))
   // Only ReadWrite-ish providers (anything the user has defined here) are valid defaults.
   // The implicit `system` provider is always a ReadWrite candidate; expose it explicitly so
   // users can pick it without typing.
@@ -270,13 +284,25 @@ function ProvidersTab({
     return out
   }, [providers])
 
+  // Cards render collapsed (one summary row each); the set tracks which are expanded.
+  // Newly added providers open expanded so their settings are right there to fill in.
+  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(new Set())
+  const toggle = (id: string) => setExpandedIds((cur) => {
+    const next = new Set(cur)
+    if (next.has(id)) next.delete(id); else next.add(id)
+    return next
+  })
+
   const update = (id: string, patch: Partial<DraftProvider>) =>
     onChange(providers.map((p) => (p.id === id ? { ...p, ...patch } : p)))
   const remove = (id: string) => onChange(providers.filter((p) => p.id !== id))
-  const add = () => onChange([
-    ...providers,
-    { id: nextId(), name: '', type: availableTypes[0] ?? '', settings: [] },
-  ])
+  // New cards get a usable name right away (azkv, azkv-2, …) — an empty name would be
+  // dropped on save, which reads as "my provider disappeared".
+  const add = (type: string) => {
+    const draft: DraftProvider = { id: nextId(), name: uniqueProviderName(type, providers), type, settings: {} }
+    onChange([...providers, draft])
+    setExpandedIds((cur) => new Set(cur).add(draft.id))
+  }
 
   return (
     <Stack gap="md">
@@ -305,145 +331,136 @@ function ProvidersTab({
         <ProviderCard
           key={p.id}
           provider={p}
-          typeOptions={typeOptions}
+          types={types}
           isDefault={defaultProvider !== null && p.name.trim() === defaultProvider}
+          expanded={expandedIds.has(p.id)}
+          onToggle={() => toggle(p.id)}
           onChange={(patch) => update(p.id, patch)}
           onRemove={() => remove(p.id)}
         />
       ))}
 
       <Group>
-        <Button
-          variant="default"
-          leftSection={<IconPlus size={14} />}
-          onClick={add}
-          disabled={availableTypes.length === 0}
-        >
-          Add provider
-        </Button>
+        <ProviderTypeSelect
+          types={types}
+          value={null}
+          onChange={(t) => t && add(t)}
+          placeholder="+ Add provider…"
+          w={360}
+        />
       </Group>
     </Stack>
   )
 }
 
 function ProviderCard({
-  provider, typeOptions, isDefault, onChange, onRemove,
+  provider, types, isDefault, expanded, onToggle, onChange, onRemove,
 }: {
   provider: DraftProvider
-  typeOptions: { value: string; label: string }[]
+  types: ProviderTypeDescriptor[]
   isDefault: boolean
+  expanded: boolean
+  onToggle: () => void
   onChange: (patch: Partial<DraftProvider>) => void
   onRemove: () => void
 }) {
-  function patchSetting(id: string, patch: Partial<SettingKv>) {
-    onChange({ settings: provider.settings.map((s) => (s.id === id ? { ...s, ...patch } : s)) })
-  }
-  function addSetting() {
-    onChange({ settings: [...provider.settings, { id: nextId(), key: '', value: '' }] })
-  }
-  function removeSetting(id: string) {
-    onChange({ settings: provider.settings.filter((s) => s.id !== id) })
-  }
+  const descriptor = descriptorFor(types, provider.type)
+  // Collapsed rows still say which instance this is: surface the first filled
+  // non-secret setting (azkv → the vault name) next to the type.
+  const summary = descriptor?.fields
+    .find((f) => f.kind === 'text' && (provider.settings[f.key] ?? '').trim() !== '')
+  const summaryValue = summary ? provider.settings[summary.key] : null
 
   return (
     <Box
-      p="md"
       style={{
         border: '1px solid var(--mantine-color-default-border)',
         borderRadius: 6,
         background: 'var(--mantine-color-default-hover)',
       }}
     >
-      <Group justify="space-between" align="flex-start" mb="sm">
-        <Group gap="xs" align="flex-end" wrap="nowrap">
-          <TextInput
-            label="Name"
-            value={provider.name}
-            onChange={(e) => onChange({ name: e.currentTarget.value })}
-            placeholder="my-provider"
-            w={220}
-            styles={{ input: { fontFamily: 'var(--mono)' } }}
+      <Group justify="space-between" wrap="nowrap" p="sm">
+        <UnstyledButton
+          onClick={onToggle}
+          style={{ flex: 1, minWidth: 0 }}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? 'Collapse' : 'Expand'} provider ${provider.name || '(unnamed)'}`}
+        >
+          <Group gap="xs" wrap="nowrap">
+            {expanded ? <IconChevronDown size={16} /> : <IconChevronRight size={16} />}
+            <ProviderTypeIcon icon={descriptor?.icon} size={16} />
+            {provider.name.trim() === '' ? (
+              <Text size="sm" c="red" fs="italic">(unnamed)</Text>
+            ) : (
+              <Text size="sm" fw={600} ff="var(--mono)">{provider.name}</Text>
+            )}
+            <Text size="sm" c="dimmed">{descriptor?.displayName ?? provider.type}</Text>
+            {summaryValue && (
+              <Text size="xs" c="dimmed" ff="var(--mono)" truncate>· {summaryValue}</Text>
+            )}
+            {descriptor && (
+              <Badge size="xs" variant="light" color={descriptor.mode === 'readwrite' ? 'green' : 'gray'}>
+                {descriptor.mode === 'readwrite' ? 'read/write' : 'read-only'}
+              </Badge>
+            )}
+            {isDefault && (
+              <Tooltip label="Selected as the system default writable provider." withArrow>
+                <Badge size="xs" variant="light" color="tap">default</Badge>
+              </Tooltip>
+            )}
+          </Group>
+        </UnstyledButton>
+        <Group gap="xs" wrap="nowrap">
+          <TestProviderControl
+            name={provider.name.trim() || null}
+            type={provider.type}
+            settings={provider.settings}
           />
-          <Select
-            label="Type"
-            value={provider.type}
-            data={typeOptions}
-            onChange={(v) => v && onChange({ type: v })}
-            w={160}
-            allowDeselect={false}
-          />
-          {isDefault && (
-            <Tooltip label="Selected as the system default writable provider." withArrow>
-              <Code fz="xs" c="tap" mb={8}>default</Code>
-            </Tooltip>
-          )}
+          {provider.name.trim() && <BrowseProviderControl providerName={provider.name.trim()} />}
+          <Tooltip label="Remove provider" withArrow>
+            <ActionIcon
+              variant="subtle"
+              color="red"
+              onClick={onRemove}
+              aria-label="Remove provider"
+            >
+              <IconTrash size={16} />
+            </ActionIcon>
+          </Tooltip>
         </Group>
-        <Tooltip label="Remove provider" withArrow>
-          <ActionIcon
-            variant="subtle"
-            color="red"
-            onClick={onRemove}
-            aria-label="Remove provider"
-            mt={22}
-          >
-            <IconTrash size={16} />
-          </ActionIcon>
-        </Tooltip>
       </Group>
 
-      <Text size="xs" c="dimmed" mb={4}>Settings</Text>
-      {provider.settings.length === 0 && (
-        <Text size="xs" c="dimmed" mb="xs">No settings — add rows for the keys this provider expects.</Text>
-      )}
-      {provider.settings.length > 0 && (
-        <Table verticalSpacing={4} horizontalSpacing="xs" withRowBorders={false}>
-          <Table.Tbody>
-            {provider.settings.map((s) => (
-              <Table.Tr key={s.id}>
-                <Table.Td style={{ width: '40%' }}>
-                  <TextInput
-                    size="xs"
-                    value={s.key}
-                    placeholder="key"
-                    onChange={(e) => patchSetting(s.id, { key: e.currentTarget.value })}
-                    styles={{ input: { fontFamily: 'var(--mono)' } }}
-                  />
-                </Table.Td>
-                <Table.Td>
-                  <TextInput
-                    size="xs"
-                    value={s.value ?? ''}
-                    placeholder="value"
-                    onChange={(e) => patchSetting(s.id, { value: e.currentTarget.value })}
-                    styles={{ input: { fontFamily: 'var(--mono)' } }}
-                  />
-                </Table.Td>
-                <Table.Td style={{ width: 32 }}>
-                  <ActionIcon
-                    variant="subtle"
-                    color="red"
-                    size="sm"
-                    onClick={() => removeSetting(s.id)}
-                    aria-label="Remove setting"
-                  >
-                    <IconX size={14} />
-                  </ActionIcon>
-                </Table.Td>
-              </Table.Tr>
-            ))}
-          </Table.Tbody>
-        </Table>
-      )}
-      <Group mt="xs">
-        <Button
-          size="xs"
-          variant="default"
-          leftSection={<IconPlus size={12} />}
-          onClick={addSetting}
-        >
-          Add setting
-        </Button>
-      </Group>
+      <Collapse expanded={expanded}>
+        <Stack gap="xs" px="md" pb="md">
+          <Group gap="xs" align="flex-start" wrap="nowrap">
+            <TextInput
+              label="Name"
+              leftSection={<ProviderTypeIcon icon={descriptor?.icon} size={14} />}
+              value={provider.name}
+              onChange={(e) => onChange({ name: e.currentTarget.value })}
+              placeholder="my-provider"
+              required
+              error={provider.name.trim() === '' ? 'Name is required' : undefined}
+              w={220}
+              styles={{ input: { fontFamily: 'var(--mono)' } }}
+            />
+            <ProviderTypeSelect
+              types={types}
+              label="Type"
+              value={provider.type}
+              onChange={(v) => v && onChange({ type: v })}
+              w={220}
+            />
+          </Group>
+          <ProviderSettingsFields
+            descriptor={descriptor}
+            settings={provider.settings}
+            onChange={(settings) => onChange({ settings })}
+            providerName={provider.name || null}
+            size="xs"
+          />
+        </Stack>
+      </Collapse>
     </Box>
   )
 }
@@ -594,10 +611,7 @@ function SourceJsonTab({
         .map((p) => ({
           name: p.name.trim(),
           type: p.type,
-          settings: p.settings.reduce<Record<string, string | null>>((acc, kv) => {
-            if (kv.key.trim()) acc[kv.key.trim()] = kv.value
-            return acc
-          }, {}),
+          settings: p.settings,
         })),
       variables: variables
         .filter((v) => v.name.trim())
@@ -784,6 +798,9 @@ function AiSettingsTab() {
   const [testing, setTesting] = useState(false)
   const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Which provider the current `models` belong to — null until the first fetch, so opening
+  // the panel doesn't clear a saved model the way an actual provider switch does.
+  const fetchedFor = useRef<AiProviderName | null>(null)
 
   const load = async () => {
     setLoading(true); setError(null)
@@ -794,12 +811,34 @@ function AiSettingsTab() {
       setModel(c.model)
       setCopilotPath(c.copilotCliPath ?? '')
       setClaudePath(c.claudeCliPath ?? '')
-      try { setModels((await api.aiModels()).models) } catch { /* models are best-effort */ }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
     } finally { setLoading(false) }
   }
   useEffect(() => { void load() }, [])
+
+  // Each provider exposes its own catalog, so the list has to follow the *draft* provider —
+  // not the persisted one — or flipping to Claude Code would keep listing Copilot's GPT models.
+  useEffect(() => {
+    if (loading) return
+    const switched = fetchedFor.current !== null && fetchedFor.current !== provider
+    fetchedFor.current = provider
+    let cancelled = false
+    void (async () => {
+      try {
+        const r = await api.aiModels({ provider, copilotCliPath: copilotPath.trim(), claudeCliPath: claudePath.trim() })
+        if (cancelled) return
+        setModels(r.models)
+        // Drop a pick the new provider can't serve (Copilot's "auto" has no Claude Code
+        // equivalent), but keep ids both share, e.g. claude-sonnet-5.
+        if (switched) setModel((m) => (m && r.models.some((x) => x.id === m) ? m : null))
+      } catch {
+        if (!cancelled) setModels([])
+      }
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [provider, loading])
 
   const draft = (): SaveAiConfig => ({
     provider,
@@ -861,7 +900,13 @@ function AiSettingsTab() {
       const saved = await api.saveAiConfig(draft())
       setConfig(saved)
       notifications.show({ color: 'teal', title: 'Saved', message: 'AI settings updated.' })
-      try { setModels((await api.aiModels()).models) } catch { /* best-effort */ }
+      try {
+        setModels((await api.aiModels({
+          provider: saved.provider ?? provider,
+          copilotCliPath: saved.copilotCliPath,
+          claudeCliPath: saved.claudeCliPath,
+        })).models)
+      } catch { /* best-effort */ }
     } catch (e) {
       const msg = e instanceof ApiError ? e.message : String(e)
       setError(msg)

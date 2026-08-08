@@ -86,9 +86,29 @@ public static class AiEndpoints
             }
         });
 
-        g.MapGet("/models", async (AiProviderFactory factory, CancellationToken ct) =>
+        // Catalogs are provider-specific — Copilot's "auto" and its GPT/Gemini ids mean nothing
+        // to Claude Code. `provider` (plus optional draft CLI paths) lets the settings UI preview
+        // another provider's models before saving; without it the list would keep showing the
+        // persisted provider's models after the user flips the dropdown.
+        g.MapGet("/models", async (
+            string? provider, string? copilotCliPath, string? claudeCliPath,
+            AiProviderFactory factory, SystemSettingsStore store, CancellationToken ct) =>
         {
-            var p = factory.Get();
+            IAiProvider p;
+            if (string.IsNullOrWhiteSpace(provider))
+            {
+                p = factory.Get();
+            }
+            else
+            {
+                var stored = store.GetAiSettings();
+                p = AiProviderFactory.FromConfig(
+                    provider,
+                    model: null,
+                    Trim(copilotCliPath) ?? stored?.CopilotCliPath,
+                    Trim(claudeCliPath) ?? stored?.ClaudeCliPath);
+            }
+
             if (!p.Configured)
                 return Results.Ok(new AiModelsResponseDto(p.Name, p.Model, [], null));
             try

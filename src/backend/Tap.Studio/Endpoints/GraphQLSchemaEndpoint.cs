@@ -107,6 +107,8 @@ public static class GraphQLSchemaEndpoint
                 }
                 if (!isSdl && !req.Headers.Accept.Any())
                     req.Headers.TryAddWithoutValidation("Accept", "application/json");
+                if (!req.Headers.Contains("User-Agent"))
+                    req.Headers.TryAddWithoutValidation("User-Agent", StudioVersion.UserAgent);
 
                 using var resp = await HttpClient.SendAsync(req, HttpCompletionOption.ResponseContentRead, ct)
                     .ConfigureAwait(false);

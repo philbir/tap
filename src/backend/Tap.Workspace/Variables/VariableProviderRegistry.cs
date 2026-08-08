@@ -31,25 +31,53 @@ public sealed class VariableProviderRegistry
 {
     private readonly List<IVariableProvider> _providers;
     private readonly Dictionary<string, IVariableProvider> _byName;
+    private readonly Dictionary<string, string>? _aliases;
     private readonly string? _defaultProviderName;
+    private readonly bool _strict;
     private readonly List<VariableResolution> _trace = [];
     private readonly Dictionary<string, VariableValue?> _cache = new(StringComparer.Ordinal);
 
-    public VariableProviderRegistry(IEnumerable<IVariableProvider> providers, string? defaultProviderName)
+    public VariableProviderRegistry(
+        IEnumerable<IVariableProvider> providers,
+        string? defaultProviderName,
+        IReadOnlyDictionary<string, string>? aliases = null,
+        bool strict = false)
     {
         _providers = [.. providers];
         _byName = _providers.ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
-        _defaultProviderName = defaultProviderName;
+        _aliases = aliases is { Count: > 0 }
+            ? new Dictionary<string, string>(aliases, StringComparer.OrdinalIgnoreCase)
+            : null;
+        // Resolve the default through the alias map once so every downstream consumer
+        // (walk order, DefaultWritableProvider, the UI's DefaultProviderName) sees the
+        // concrete provider the active env actually bound.
+        _defaultProviderName = ResolveAlias(defaultProviderName);
+        _strict = strict;
     }
 
     public IReadOnlyList<IVariableProvider> Providers => _providers;
 
-    /// <summary>The configured default provider name, or <c>null</c> if unset. Surfaced so
-    /// the renderer/UI can tell users which provider a bare <c>{{name}}</c> token will hit
-    /// first.</summary>
+    /// <summary>The effective default provider name (env &gt; workspace &gt; system, aliases
+    /// already resolved), or <c>null</c> if unset. Surfaced so the renderer/UI can tell users
+    /// which provider a bare <c>{{name}}</c> token will hit first.</summary>
     public string? DefaultProviderName => _defaultProviderName;
 
+    /// <summary>Alias → provider-name map contributed by the active env, or <c>null</c> when
+    /// the env declares none. Exposed so the UI can show "kv → kv-prod" style chips.</summary>
+    public IReadOnlyDictionary<string, string>? Aliases => _aliases;
+
+    /// <summary>True when the active env forbids bare-token fall-through past its default
+    /// provider. Only meaningful while <see cref="DefaultProviderName"/> is set.</summary>
+    public bool StrictVariables => _strict;
+
     public IReadOnlyList<VariableResolution> Trace => _trace;
+
+    /// <summary>Maps an alias to its concrete provider name; names that aren't aliases pass
+    /// through unchanged. Null in, null out.</summary>
+    private string? ResolveAlias(string? name)
+        => name is not null && _aliases is not null && _aliases.TryGetValue(name, out var target)
+            ? target
+            : name;
 
     /// <summary>The provider that receives writes when a UI/API action sets a variable without
     /// naming a target provider explicitly. Falls back to the first ReadWrite provider in
@@ -70,21 +98,30 @@ public sealed class VariableProviderRegistry
     }
 
     public IVariableProvider? Get(string providerName)
-        => _byName.TryGetValue(providerName, out var p) ? p : null;
+        => _byName.TryGetValue(ResolveAlias(providerName)!, out var p) ? p : null;
 
-    /// <summary>Resolve <c>{{provider:name}}</c>. Throws if the provider doesn't exist or
-    /// the name isn't present in it.</summary>
+    /// <summary>Resolve <c>{{provider:name}}</c>. <paramref name="providerName"/> may be an
+    /// env alias — it's mapped to the concrete provider first. Throws if the provider (or
+    /// the alias target) doesn't exist or the name isn't present in it.</summary>
     public async ValueTask<VariableValue> ResolveExplicitAsync(string providerName, string name, CancellationToken ct)
     {
-        if (!_byName.TryGetValue(providerName, out var provider))
+        var actualName = ResolveAlias(providerName)!;
+        if (!_byName.TryGetValue(actualName, out var provider))
         {
+            var viaAlias = !string.Equals(actualName, providerName, StringComparison.OrdinalIgnoreCase);
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_UNKNOWN_PROVIDER,
-                $"No variable provider registered with name '{providerName}'. " +
-                $"Registered: [{string.Join(", ", _providers.Select(p => p.Name))}]"));
+                viaAlias
+                    ? $"Alias '{providerName}' points to provider '{actualName}', which is not registered. " +
+                      $"Registered: [{string.Join(", ", _providers.Select(p => p.Name))}]"
+                    : $"No variable provider registered with name '{providerName}'. " +
+                      $"Registered: [{string.Join(", ", _providers.Select(p => p.Name))}]" +
+                      (_aliases is null ? string.Empty : $" Aliases: [{string.Join(", ", _aliases.Keys)}]")));
         }
 
-        var key = providerName + ":" + name;
+        // Cache/trace under the concrete provider name so `{{kv:x}}` and `{{kv-prod:x}}`
+        // share one lookup when the alias points there.
+        var key = provider.Name + ":" + name;
         if (_cache.TryGetValue(key, out var cached))
         {
             return cached ?? FailMissing(providerName, name);
@@ -100,19 +137,21 @@ public sealed class VariableProviderRegistry
         {
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_PROVIDER_RESOLUTION_FAILED,
-                $"Provider '{providerName}' threw resolving '{name}': {ex.Message}"));
+                $"Provider '{provider.Name}' threw resolving '{name}': {ex.Message}"));
         }
         sw.Stop();
 
         _cache[key] = value;
-        _trace.Add(new VariableResolution(providerName, name, value is not null, value?.IsSecret ?? false, sw.Elapsed));
+        _trace.Add(new VariableResolution(provider.Name, name, value is not null, value?.IsSecret ?? false, sw.Elapsed));
 
         return value ?? FailMissing(providerName, name);
     }
 
-    /// <summary>Resolve <c>{{name}}</c>. Tries the workspace's default provider first when
-    /// one is configured, then walks the rest in registration order; the first non-null hit
-    /// wins. Returns <c>null</c> when no provider supplies the name (the caller — usually
+    /// <summary>Resolve <c>{{name}}</c>. Tries the effective default provider first when one
+    /// is configured, then walks the rest in registration order; the first non-null hit
+    /// wins. In strict mode (env binding with <c>strictVariables: true</c>) the walk stops
+    /// after the default provider — a miss there is a miss, never another provider's value.
+    /// Returns <c>null</c> when nothing supplies the name (the caller — usually
     /// <see cref="Rendering.Interpolation"/> — chooses whether that's fatal).</summary>
     public async ValueTask<VariableValue?> ResolveAnyAsync(string name, CancellationToken ct)
     {
@@ -126,6 +165,9 @@ public sealed class VariableProviderRegistry
         {
             var hit = await TryGetFromAsync(defaultProvider, name, ct).ConfigureAwait(false);
             if (hit is not null) return hit;
+            // Strict env binding: never read a same-named value from another provider —
+            // with one vault per environment that would silently cross environments.
+            if (_strict) return null;
         }
 
         foreach (var provider in _providers)

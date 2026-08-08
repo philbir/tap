@@ -35,3 +35,12 @@ public interface IVariableProvider
     /// otherwise treat the value as sensitive.</summary>
     ValueTask SetAsync(string name, string value, bool isSecret, CancellationToken ct);
 }
+
+/// <summary>Optional capability for providers whose <see cref="IVariableProvider.ListAsync"/>
+/// result is cached for the instance's lifetime (azkv). The Studio's browse endpoint calls
+/// <see cref="InvalidateListCache"/> on an explicit refresh so a long-lived cached instance
+/// can pick up secrets added since the first listing.</summary>
+public interface IRefreshableVariableProvider
+{
+    void InvalidateListCache();
+}

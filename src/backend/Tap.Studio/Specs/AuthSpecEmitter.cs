@@ -94,10 +94,10 @@ public static class AuthSpecEmitter
                 }
 
             case "jwt":
+                // No issuer/audience/subject keys: those are claims like any other and live
+                // in `payload`. Files still carrying them keep working (the runner reads them),
+                // but a save from Studio rewrites them into the payload JSON.
                 fm.SetIfNotEmpty("algorithm", spec.JwtAlgorithm);
-                fm.SetIfNotEmpty("issuer", spec.JwtIssuer);
-                fm.SetIfNotEmpty("audience", spec.JwtAudience);
-                fm.SetIfNotEmpty("subject", spec.JwtSubject);
                 fm.SetIfNotEmpty("keyId", spec.JwtKeyId);
                 fm.SetIfNotEmpty("key", spec.JwtKey);
                 if (spec.JwtExpiresIn is { } secs) fm.Set("expiresIn", secs.ToString());

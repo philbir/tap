@@ -64,18 +64,44 @@ public sealed class WorkspaceService : IDisposable
 
     /// <summary>Builds a fresh <see cref="VariableProviderRegistry"/> for the current
     /// workspace. Each call returns an independent instance with its own resolution cache
-    /// and trace — appropriate for one render / one /api/variables request.</summary>
-    public VariableProviderRegistry CreateRegistry()
+    /// and trace — appropriate for one render / one /api/variables request.
+    ///
+    /// <para><paramref name="envPath"/> selects the environment whose provider binding
+    /// (default provider, aliases, strict flag) applies; <c>null</c> falls back to the
+    /// manifest's default env — the same fallback the renderer uses for the vars cascade,
+    /// so bare-token resolution and the cascade always agree on the active env.</para></summary>
+    public VariableProviderRegistry CreateRegistry(string? envPath = null)
     {
         lock (_gate)
         {
-            return _registryBuilder.Build(
-                _workspace,
-                _root,
-                _systemSettings.GetProviderConfigs(),
-                _systemSettings.DefaultVariableProvider);
+            EnvFile? env = null;
+            if (envPath is not null)
+                env = _workspace.FindByPath(envPath) as EnvFile;
+            else if (_workspace.Manifest?.DefaultEnv is { } defaultRef)
+                env = _workspace.Resolve(defaultRef) as EnvFile;
+            return CreateRegistryLocked(env);
         }
     }
+
+    /// <summary>Overload for callers that already resolved the <see cref="EnvFile"/> (the
+    /// render path). Passing <c>null</c> here means "no env binding" — unlike the path
+    /// overload it does not fall back to the manifest default, because the caller already
+    /// applied that fallback itself.</summary>
+    public VariableProviderRegistry CreateRegistry(EnvFile? env)
+    {
+        lock (_gate)
+        {
+            return CreateRegistryLocked(env);
+        }
+    }
+
+    private VariableProviderRegistry CreateRegistryLocked(EnvFile? env)
+        => _registryBuilder.Build(
+            _workspace,
+            _root,
+            _systemSettings.GetProviderConfigs(),
+            _systemSettings.DefaultVariableProvider,
+            env);
 
     public event Action? Changed;
 
@@ -133,7 +159,7 @@ public sealed class WorkspaceService : IDisposable
             env = ws.Resolve(defaultRef) as EnvFile;
         }
 
-        var registry = CreateRegistry();
+        var registry = CreateRegistry(env);
         var renderer = new WorkspaceRenderer(ws, registry);
         var rendered = await renderer.RenderAsync(req, env, overrides, ct, stageName).ConfigureAwait(false);
         rendered = ResolveBinaryRef(req, rendered);

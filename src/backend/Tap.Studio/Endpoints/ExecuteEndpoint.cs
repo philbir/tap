@@ -34,6 +34,7 @@ public static class ExecuteEndpoint
             {
                 var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
+                rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
 
                 // WebSocket path: open the connection, optionally send the body as the first
                 // frame, then close. The synchronous /api/execute shape isn't well suited to

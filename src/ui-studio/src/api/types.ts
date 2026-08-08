@@ -146,6 +146,13 @@ export interface EnvSpec {
   secrets?: string[]
   tags?: string[]
   body?: string
+  /** Provider bare `{{name}}` tokens hit first while this env is active (may be an alias).
+   *  Omitted/empty = inherit the workspace/system default. */
+  defaultVariableProvider?: string | null
+  /** Alias → provider-name bindings (e.g. `kv → kv-prod`) active with this env. */
+  providerAliases?: Record<string, string>
+  /** Forbid bare-token fall-through past the default provider. */
+  strictVariables?: boolean
 }
 
 export interface WorkspaceSpec {
@@ -241,10 +248,8 @@ export interface AuthSpec {
   jwtAlgorithm?: string
   jwtKey?: string
   jwtKeyId?: string
-  jwtIssuer?: string
-  jwtAudience?: string
-  jwtSubject?: string
   jwtExpiresIn?: number
+  /** JSON object of claims, including iss / aud / sub. */
   jwtPayload?: string
 
   githubMode?: 'pat' | 'gh-cli' | 'app' | 'oauth'
@@ -267,6 +272,9 @@ export interface EnvDetail extends EnvSummary {
   tags: string[]
   body: string
   source: string
+  defaultVariableProvider: string | null
+  providerAliases: Record<string, string>
+  strictVariables: boolean
 }
 
 export interface ProviderConfig {
@@ -281,6 +289,7 @@ export function modeForProviderType(type: string): 'read' | 'readwrite' {
     case 'env': return 'read'
     case 'file': return 'readwrite'
     case 'azkv': return 'readwrite'
+    case '1password': return 'read'
     default: return 'read'
   }
 }
@@ -290,16 +299,121 @@ export interface SetVariablePayload {
   value: string
   isSecret: boolean
   variableProvider: string | null
+  /** Active env path — its provider binding decides where an untargeted write lands. */
+  envPath?: string | null
 }
 
 export interface ProviderSummary {
   name: string
   type: string
+  /** Display name of the provider *type* (e.g. "Azure Key Vault"); null for unknown types. */
+  typeDisplayName: string | null
+  /** Semantic icon key (azure/terminal/file/settings); null for unknown types. */
+  icon: string | null
   mode: string
   origin: string
   settings: Record<string, string | null>
   variableCount: number | null
   error: string | null
+}
+
+/** Static metadata for one provider type — drives the picker + generated settings form. */
+export interface ProviderTypeDescriptor {
+  type: string
+  displayName: string
+  icon: string
+  description: string
+  mode: 'read' | 'readwrite'
+  fields: ProviderSettingField[]
+}
+
+export interface ProviderSettingField {
+  key: string
+  label: string
+  description: string | null
+  kind: 'text' | 'secret' | 'select'
+  required: boolean
+  placeholder: string | null
+  /** Optional picker attached to this field ('azure-keyvault' opens the vault browser). */
+  picker: string | null
+  /** Choices for a 'select' field; empty for every other kind. */
+  options: ProviderFieldOption[]
+  /** Shown when the settings bag has no entry for this key. Never written on its own. */
+  defaultValue: string | null
+  /** Render this field only while another setting holds one of these values. */
+  visibleWhen: ProviderFieldVisibility | null
+  /** Guidance rendered under the input, optionally carrying one link. */
+  note: ProviderFieldNote | null
+}
+
+export interface ProviderFieldOption {
+  value: string
+  label: string
+  description: string | null
+}
+
+export interface ProviderFieldVisibility {
+  key: string
+  values: string[]
+}
+
+export interface ProviderFieldNote {
+  text: string
+  url: string | null
+  urlLabel: string | null
+}
+
+/** One Azure subscription visible to the CLI credential (vault picker). */
+export interface AzureSubscription {
+  subscriptionId: string
+  displayName: string
+  tenantId: string | null
+  state: string | null
+}
+
+/** One Key Vault row in the picker. */
+export interface AzureKeyVault {
+  name: string
+  resourceGroup: string
+  location: string | null
+}
+
+/** One vault row in the 1Password picker. `items` is a count, not contents. */
+export interface OnePasswordVault {
+  id: string
+  name: string
+  items: number
+}
+
+/** Result of POST /api/onepassword/detect — same shape as the AI CLI detect endpoints. */
+export interface OnePasswordDetect {
+  ok: boolean
+  path: string | null
+  source: string
+  version: string | null
+  error: string | null
+}
+
+/** Result of POST /api/variable-providers/test. */
+export interface TestProviderResult {
+  ok: boolean
+  message: string
+  durationMs: number
+  variableCount: number | null
+}
+
+/** One row of the provider browse listing; `value` is null for secrets. */
+export interface ProviderVariable {
+  name: string
+  isSecret: boolean
+  value: string | null
+}
+
+/** Clear-text reveal of one provider variable (explicit per-key request only). */
+export interface ProviderVariableValue {
+  name: string
+  value: string
+  isSecret: boolean
 }
 
 // --- System settings -----------------------------------------------------------------
@@ -321,7 +435,6 @@ export interface SystemSettings {
   defaultVariableProvider: string | null
   variableProviders: SystemProvider[]
   variables: SystemVariable[]
-  availableProviderTypes: string[]
 }
 
 export interface SaveSystemSettings {
@@ -515,12 +628,21 @@ export interface VariableSet {
   count: number
   providerName: string | null
   variables: Variable[]
+  /** Provider sets only: 'system' | 'workspace' — where the provider was declared. */
+  origin: string | null
+  /** Provider sets only: display name of the provider type ("Azure Key Vault"). */
+  typeDisplayName: string | null
+  /** Provider sets only: semantic icon key (azure/terminal/file/settings). */
+  icon: string | null
 }
 
 export interface VariableView {
   sets: VariableSet[]
   result: Variable[]
+  /** Effective default provider (env > workspace > system, aliases resolved). */
   defaultProvider: string | null
+  /** Alias → provider-name bindings from the active env, or null. */
+  aliases: Record<string, string> | null
 }
 
 export interface VariableContext {

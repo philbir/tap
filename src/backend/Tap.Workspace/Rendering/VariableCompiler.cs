@@ -23,7 +23,14 @@ public static partial class VariableCompiler
     public static CompileResult Compile(string template, IReadOnlyDictionary<string, Variable> scope)
         => Compile(template, scope, sets: null);
 
-    public static CompileResult Compile(string template, IReadOnlyDictionary<string, Variable> scope, IReadOnlyList<VariableSet>? sets)
+    /// <param name="aliases">Env alias → provider-name bindings. A token's provider prefix
+    /// is alias-resolved before matching sets, mirroring the registry's behaviour at render
+    /// time — so <c>{{kv:secret}}</c> previews against the vault the active env bound.</param>
+    public static CompileResult Compile(
+        string template,
+        IReadOnlyDictionary<string, Variable> scope,
+        IReadOnlyList<VariableSet>? sets,
+        IReadOnlyDictionary<string, string>? aliases = null)
     {
         var replacements = new List<Replacement>();
         var sb = new StringBuilder(template.Length);
@@ -33,6 +40,11 @@ public static partial class VariableCompiler
         {
             sb.Append(template, cursor, m.Index - cursor);
             var providerName = m.Groups["provider"].Success ? m.Groups["provider"].Value : null;
+            if (providerName is not null && aliases is not null
+                && aliases.TryGetValue(providerName, out var aliasTarget))
+            {
+                providerName = aliasTarget;
+            }
             var name = m.Groups["name"].Value.Trim();
 
             Variable? v = null;

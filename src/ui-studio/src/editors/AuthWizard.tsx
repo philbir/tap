@@ -277,8 +277,9 @@ const TEMPLATES: AuthTemplate[] = [
     build: (name, path, f) => ({
       path, id: null, name, type: 'jwt',
       jwtAlgorithm: 'HS256',
-      jwtIssuer: (f.jwtIssuer as string) || undefined,
-      jwtAudience: (f.jwtAudience as string) || undefined,
+      // iss/aud are plain claims — seed the payload with whatever was filled in, then the
+      // editor's JSON payload pane owns them from here on.
+      jwtPayload: jsonClaims({ iss: f.jwtIssuer as string | undefined, aud: f.jwtAudience as string | undefined }),
       jwtKey: (f.jwtKey as string) || undefined,
     }),
   },
@@ -315,6 +316,12 @@ const TEMPLATES: AuthTemplate[] = [
     }),
   },
 ]
+
+/** Build a JWT payload JSON object from the claims the user actually filled in. */
+function jsonClaims(claims: Record<string, string | undefined>): string | undefined {
+  const entries = Object.entries(claims).filter(([, v]) => v && v.trim().length > 0)
+  return entries.length > 0 ? JSON.stringify(Object.fromEntries(entries), null, 2) : undefined
+}
 
 interface Props {
   open: boolean

@@ -30,7 +30,10 @@ namespace Tap.Workspace.Variables.Providers;
 /// </summary>
 public sealed class FileVariableProvider : IVariableProvider
 {
-    private const string EnvelopePrefix = "enc:v1:";
+    /// <summary>On-disk marker for encrypted values. Public so the Studio's provider-test
+    /// endpoint can detect secrets that failed to decrypt (ListAsync surfaces the raw
+    /// envelope on decrypt failure instead of throwing).</summary>
+    public const string EnvelopePrefix = "enc:v1:";
     private const int Pbkdf2Iterations = 200_000;
     private const int KeyBytes = 32;
     private const int IvBytes = 12;
@@ -258,6 +261,26 @@ public sealed class FileVariableProvider : IVariableProvider
 public sealed class FileVariableProviderFactory : IVariableProviderFactory
 {
     public string Type => "file";
+
+    public ProviderTypeDescriptor Descriptor { get; } = new()
+    {
+        Type = "file",
+        DisplayName = "Encrypted file",
+        Icon = "file",
+        Description = "Stores variables in a YAML file under the workspace; secret values are encrypted with a passphrase.",
+        Mode = ProviderMode.ReadWrite,
+        Fields =
+        [
+            new ProviderSettingField
+            {
+                Key = "encryptionKey",
+                Label = "Encryption passphrase",
+                Description = "Used to derive the AES key for secret values. Plain values work without it; storing a secret requires it.",
+                Kind = ProviderFieldKind.Secret,
+            },
+        ],
+    };
+
     public IVariableProvider Create(VariableProviderConfig config, ProviderFactoryContext context)
         => new FileVariableProvider(config, context.WorkspaceRoot);
 }

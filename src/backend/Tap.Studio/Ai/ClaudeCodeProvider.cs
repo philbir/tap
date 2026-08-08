@@ -15,13 +15,19 @@ public sealed class ClaudeCodeProvider : IAiProvider
     public const string ProviderName = "claude-code";
     private const string EnvOverride = "TAP_CLAUDE_CLI";
 
+    /// <summary>The Claude Code CLI has no model-listing command (unlike Copilot, which we
+    /// probe over ACP — see <see cref="CopilotAcp"/>), so this list is maintained by hand.
+    /// The aliases come first and are the safe picks: they always resolve to the current
+    /// generation, so they don't rot when a pinned id is retired.</summary>
     private static readonly IReadOnlyList<AiModelOption> BuiltInModels = new[]
     {
         new AiModelOption("sonnet", "Claude Sonnet (latest)"),
         new AiModelOption("opus", "Claude Opus (latest)"),
         new AiModelOption("haiku", "Claude Haiku (latest)"),
-        new AiModelOption("claude-sonnet-4-6", "Claude Sonnet 4.6"),
-        new AiModelOption("claude-opus-4-6", "Claude Opus 4.6"),
+        new AiModelOption("fable", "Claude Fable (latest)"),
+        new AiModelOption("claude-sonnet-5", "Claude Sonnet 5"),
+        new AiModelOption("claude-opus-5", "Claude Opus 5"),
+        new AiModelOption("claude-fable-5", "Claude Fable 5"),
         new AiModelOption("claude-haiku-4-5", "Claude Haiku 4.5"),
     };
 

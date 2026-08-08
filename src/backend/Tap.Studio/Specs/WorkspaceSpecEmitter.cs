@@ -9,18 +9,14 @@ namespace Tap.Studio.Specs;
 /// not on disk — it's a static property of the provider type. The manifest also carries an
 /// optional <c>defaultVariableProvider:</c> string at the root.
 ///
-/// <para>Sensitive settings: when an incoming <see cref="ProviderConfigDto.Settings"/> entry
-/// contains a placeholder value (the <c>"***"</c> mask produced by the providers endpoint), we
-/// preserve whatever's already on disk by skipping the masked field. That keeps round-trips
-/// non-destructive when the UI re-submits a provider it pulled without ever seeing the secret.</para>
+/// <para>Sensitive settings: the manifest PUT endpoint restores masked (<c>"***"</c>) values
+/// from the on-disk config before calling this emitter (see <c>ProviderSettingsMask</c>).
+/// Any mask that still reaches us — a masked secret with no stored counterpart — is dropped
+/// rather than written to disk as the literal placeholder.</para>
 /// </summary>
 public static class WorkspaceSpecEmitter
 {
     private const string MaskPlaceholder = "***";
-    private static readonly HashSet<string> SensitiveSettingKeys = new(StringComparer.OrdinalIgnoreCase)
-    {
-        "encryptionKey",
-    };
 
     public static string ToFileSource(WorkspaceSpecDto spec)
     {
@@ -44,7 +40,7 @@ public static class WorkspaceSpecEmitter
                 foreach (var (k, v) in p.Settings)
                 {
                     if (string.IsNullOrEmpty(v)) continue;
-                    if (SensitiveSettingKeys.Contains(k) && v == MaskPlaceholder) continue;
+                    if (v == MaskPlaceholder) continue;
                     settings.Add(k, new YamlScalarNode(v));
                 }
                 if (settings.Children.Count > 0)

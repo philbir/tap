@@ -162,7 +162,14 @@ public sealed record EnvDetailDto(
     IReadOnlyDictionary<string, VarSpec> Vars,
     IReadOnlyList<string> Tags,
     string Body,
-    string Source);
+    string Source,
+    /// <summary>Provider bare tokens hit first while this env is active (may be an alias).
+    /// Null = inherit the workspace/system default.</summary>
+    string? DefaultVariableProvider,
+    /// <summary>Alias → provider-name bindings active with this env.</summary>
+    IReadOnlyDictionary<string, string> ProviderAliases,
+    /// <summary>True when bare tokens must not fall through past the default provider.</summary>
+    bool StrictVariables);
 
 /// <summary>Listing-row representation of a collection. <see cref="Exists"/> is false when
 /// the directory <c>collections/&lt;slug&gt;/</c> is present on disk but has no
@@ -414,14 +421,14 @@ public sealed record AuthSpecDto
     public string? UserResource { get; init; }
     public string? UserScope { get; init; }
 
-    // jwt
+    // jwt. iss / aud / sub are ordinary payload claims — no dedicated fields. The runner
+    // still honours the legacy `issuer:` / `audience:` / `subject:` front-matter keys for
+    // hand-authored files; Studio folds them into the payload when the profile is opened.
     public string? JwtAlgorithm { get; init; }
     public string? JwtKey { get; init; }
     public string? JwtKeyId { get; init; }
-    public string? JwtIssuer { get; init; }
-    public string? JwtAudience { get; init; }
-    public string? JwtSubject { get; init; }
     public int? JwtExpiresIn { get; init; }
+    /// <summary>JSON object of claims. Merged over the auto-filled <c>exp/iat/jti</c>.</summary>
     public string? JwtPayload { get; init; }
 
     // github
@@ -444,6 +451,16 @@ public sealed record EnvSpecDto
     public IReadOnlyList<string>? Secrets { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
     public string? Body { get; init; }
+
+    /// <summary>Provider bare tokens hit first while this env is active. May name a
+    /// provider directly or via <see cref="ProviderAliases"/>. Null/empty = inherit.</summary>
+    public string? DefaultVariableProvider { get; init; }
+
+    /// <summary>Alias → provider-name bindings (e.g. <c>kv → kv-prod</c>).</summary>
+    public IReadOnlyDictionary<string, string>? ProviderAliases { get; init; }
+
+    /// <summary>Forbid bare-token fall-through past the default provider.</summary>
+    public bool? StrictVariables { get; init; }
 }
 
 public sealed record WorkspaceSpecDto
@@ -544,7 +561,10 @@ public sealed record VariableContextDto(string? RequestPath, string? CollectionP
 public sealed record VariableViewDto(
     IReadOnlyList<VariableSetDto> Sets,
     IReadOnlyList<VariableDto> Result,
-    string? DefaultProvider);
+    /// <summary>Effective default provider (env &gt; workspace &gt; system, aliases resolved).</summary>
+    string? DefaultProvider,
+    /// <summary>Alias → provider-name bindings from the active env, or null.</summary>
+    IReadOnlyDictionary<string, string>? Aliases);
 
 public sealed record VariableSetDto(
     string Scope,
@@ -552,7 +572,14 @@ public sealed record VariableSetDto(
     string Label,
     int Count,
     string? ProviderName,
-    IReadOnlyList<VariableDto> Variables);
+    IReadOnlyList<VariableDto> Variables,
+    /// <summary>Provider sets only: <c>"system"</c> or <c>"workspace"</c> — where the
+    /// provider was declared. Null for cascade sets.</summary>
+    string? Origin,
+    /// <summary>Provider sets only: display name of the provider type ("Azure Key Vault").</summary>
+    string? TypeDisplayName,
+    /// <summary>Provider sets only: semantic icon key (azure/terminal/file/settings).</summary>
+    string? Icon);
 
 public sealed record VariableDto(
     string Name,
@@ -583,15 +610,120 @@ public sealed record SetVariableDto(
     string Name,
     string Value,
     bool IsSecret,
-    string? VariableProvider);
+    string? VariableProvider,
+    /// <summary>Active env path — selects whose provider binding applies when
+    /// <see cref="VariableProvider"/> is null. Null falls back to the default env.</summary>
+    string? EnvPath = null);
 
 public sealed record ProviderSummaryDto(
     string Name,
     string Type,
+    /// <summary>Display name of the provider <b>type</b> (e.g. "Azure Key Vault"), from the
+    /// type descriptor. Null when the type has no registered factory.</summary>
+    string? TypeDisplayName,
+    /// <summary>Semantic icon key from the type descriptor (azure/terminal/file/settings).</summary>
+    string? Icon,
     string Mode,
     string Origin,
     IReadOnlyDictionary<string, string?> Settings,
     int? VariableCount,
+    string? Error);
+
+/// <summary>Static metadata for one provider type, served from the factory's
+/// <c>ProviderTypeDescriptor</c>. Drives the Studio's provider picker and its generated
+/// settings form.</summary>
+public sealed record ProviderTypeDescriptorDto(
+    string Type,
+    string DisplayName,
+    string Icon,
+    string Description,
+    /// <summary><c>"read"</c> or <c>"readwrite"</c>.</summary>
+    string Mode,
+    IReadOnlyList<ProviderSettingFieldDto> Fields);
+
+public sealed record ProviderSettingFieldDto(
+    string Key,
+    string Label,
+    string? Description,
+    /// <summary><c>"text"</c>, <c>"secret"</c>, or <c>"select"</c>.</summary>
+    string Kind,
+    bool Required,
+    string? Placeholder,
+    /// <summary>Optional picker the UI can attach to this field (e.g.
+    /// <c>"azure-keyvault"</c> opens the subscription → vault browser). Null = plain input.</summary>
+    string? Picker,
+    /// <summary>Choices for a <c>"select"</c> field; empty for every other kind.</summary>
+    IReadOnlyList<ProviderFieldOptionDto> Options,
+    /// <summary>Value the form shows when the settings bag has no entry for this key.</summary>
+    string? DefaultValue,
+    /// <summary>Render this field only while another setting holds one of these values.</summary>
+    ProviderFieldVisibilityDto? VisibleWhen,
+    /// <summary>Guidance rendered under the input, optionally carrying one link.</summary>
+    ProviderFieldNoteDto? Note);
+
+public sealed record ProviderFieldOptionDto(string Value, string Label, string? Description);
+
+public sealed record ProviderFieldVisibilityDto(string Key, IReadOnlyList<string> Values);
+
+public sealed record ProviderFieldNoteDto(string Text, string? Url, string? UrlLabel);
+
+/// <summary>Body for <c>POST /api/variable-providers/test</c> — a <b>draft</b> provider
+/// config, so the Settings UI can test before saving. When <see cref="Name"/> matches a
+/// stored provider, masked (<c>***</c>) setting values are replaced server-side with the
+/// stored values, so testing never requires retyping a secret.</summary>
+public sealed record TestProviderRequestDto(
+    string? Name,
+    string Type,
+    IReadOnlyDictionary<string, string?>? Settings);
+
+public sealed record TestProviderResultDto(
+    bool Ok,
+    string Message,
+    double DurationMs,
+    int? VariableCount);
+
+/// <summary>One row in the provider browse listing. <see cref="Value"/> is null for secret
+/// entries — the UI reveals them per-row via the value endpoint.</summary>
+public sealed record ProviderVariableDto(string Name, bool IsSecret, string? Value);
+
+/// <summary>Clear-text reveal of a single provider variable. Only returned on the explicit
+/// per-key endpoint, never in bulk listings.</summary>
+public sealed record ProviderVariableValueDto(string Name, string Value, bool IsSecret);
+
+/// <summary>One Azure subscription visible to the CLI credential (vault picker dialog).</summary>
+public sealed record AzureSubscriptionDto(
+    string SubscriptionId,
+    string DisplayName,
+    string? TenantId,
+    string? State);
+
+/// <summary>One Key Vault row in the picker: name + resource group (+ location).</summary>
+public sealed record AzureKeyVaultDto(
+    string Name,
+    string ResourceGroup,
+    string? Location);
+
+/// <summary>Draft 1Password settings for the picker/detect endpoints. Carries the whole
+/// settings bag (plus the provider <see cref="Name"/>, when it has one) so masked secrets can
+/// be restored from the stored config exactly the way <c>/api/variable-providers/test</c>
+/// does — the dialog works without making the user retype a service-account token.</summary>
+public sealed record OnePasswordProbeRequestDto(
+    string? Name,
+    IReadOnlyDictionary<string, string?>? Settings);
+
+/// <summary>One vault row in the 1Password picker: name, ID, and how many items it holds.</summary>
+public sealed record OnePasswordVaultDto(
+    string Id,
+    string Name,
+    int Items);
+
+/// <summary>Result of probing for the <c>op</c> binary — same shape the AI CLI detect
+/// endpoints return, so the settings form's "Detect" button is one component.</summary>
+public sealed record OnePasswordDetectResponseDto(
+    bool Ok,
+    string? Path,
+    string Source,
+    string? Version,
     string? Error);
 
 // -----------------------------------------------------------------------------------------
@@ -609,8 +741,7 @@ public sealed record SystemSettingsDto(
     string SystemDir,
     string? DefaultVariableProvider,
     IReadOnlyList<SystemProviderDto> VariableProviders,
-    IReadOnlyList<SystemVariableDto> Variables,
-    IReadOnlyList<string> AvailableProviderTypes);
+    IReadOnlyList<SystemVariableDto> Variables);
 
 public sealed record SaveSystemSettingsDto(
     string? DefaultVariableProvider,
@@ -835,6 +966,27 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(SetVariableDto))]
 [JsonSerializable(typeof(ProviderSummaryDto))]
 [JsonSerializable(typeof(IReadOnlyList<ProviderSummaryDto>))]
+[JsonSerializable(typeof(ProviderTypeDescriptorDto))]
+[JsonSerializable(typeof(IReadOnlyList<ProviderTypeDescriptorDto>))]
+[JsonSerializable(typeof(ProviderSettingFieldDto))]
+[JsonSerializable(typeof(IReadOnlyList<ProviderSettingFieldDto>))]
+[JsonSerializable(typeof(ProviderFieldOptionDto))]
+[JsonSerializable(typeof(IReadOnlyList<ProviderFieldOptionDto>))]
+[JsonSerializable(typeof(ProviderFieldVisibilityDto))]
+[JsonSerializable(typeof(ProviderFieldNoteDto))]
+[JsonSerializable(typeof(TestProviderRequestDto))]
+[JsonSerializable(typeof(TestProviderResultDto))]
+[JsonSerializable(typeof(ProviderVariableDto))]
+[JsonSerializable(typeof(IReadOnlyList<ProviderVariableDto>))]
+[JsonSerializable(typeof(ProviderVariableValueDto))]
+[JsonSerializable(typeof(AzureSubscriptionDto))]
+[JsonSerializable(typeof(AzureSubscriptionDto[]))]
+[JsonSerializable(typeof(AzureKeyVaultDto))]
+[JsonSerializable(typeof(AzureKeyVaultDto[]))]
+[JsonSerializable(typeof(OnePasswordProbeRequestDto))]
+[JsonSerializable(typeof(OnePasswordVaultDto))]
+[JsonSerializable(typeof(OnePasswordVaultDto[]))]
+[JsonSerializable(typeof(OnePasswordDetectResponseDto))]
 [JsonSerializable(typeof(SystemSettingsDto))]
 [JsonSerializable(typeof(SaveSystemSettingsDto))]
 [JsonSerializable(typeof(SystemProviderDto))]

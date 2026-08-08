@@ -115,7 +115,7 @@ const studioFeatures: Feature[] = [
   },
   {
     title: "Variables and secrets",
-    text: "A six-level cascade over pluggable providers: process env behind allowlists, an encrypted workspace file, Azure Key Vault, and machine-local system variables.",
+    text: "A six-level cascade over pluggable providers: allow-listed host environment, an encrypted file in the repo, Azure Key Vault, 1Password, and machine-local system variables. Files hold references; values arrive at execute time.",
     glyph: "X",
   },
   {
@@ -230,6 +230,13 @@ const docs: DocSection[] = [
     eyebrow: "Values",
     title: "Variables and secrets",
     body: "A cascade of scopes over pluggable providers, so a workspace file only ever contains a reference — never a secret value.",
+  },
+  {
+    id: "studio-providers",
+    product: "studio",
+    eyebrow: "Providers",
+    title: "Variable providers",
+    body: "Five backends behind the same {{token}} syntax: the allow-listed host environment, an encrypted file in the repo, Azure Key Vault, 1Password, and Studio's machine-local store.",
   },
   {
     id: "studio-install",
@@ -411,8 +418,104 @@ vars:
   api.baseUrl: https://api.stripe.com
   STRIPE_KEY: '{{vault:stripe-live-key}}'
 ---`,
-  studioAllowlist: `export TAP_VARS_ALLOWED="DEMO_*,ASPNETCORE_ENVIRONMENT"
-export TAP_SECRETS_ALLOWED="ACME_*_TOKEN,AZURE_*"`,
+  studioAllowlist: `# Names whose values the UI may show in clear text
+export TAP_VARS_ALLOWED="DEMO_*,ASPNETCORE_ENVIRONMENT"
+
+# Names that resolve at execute time but stay masked everywhere
+export TAP_SECRETS_ALLOWED="ACME_*_TOKEN,AZURE_*"
+
+# Neither set? The env provider exposes nothing at all.`,
+  studioProviders: `---
+kind: workspace
+name: acme-billing
+defaultEnv: environments/local.env.md
+defaultVariableProvider: kv-dev
+variableProviders:
+- name: env
+  type: env
+- name: local
+  type: file
+- name: kv-dev
+  type: azkv
+  settings:
+    vaultName: acme-dev
+- name: kv-prod
+  type: azkv
+  settings:
+    vaultName: acme-prod
+- name: 1p
+  type: 1password
+  settings:
+    mode: vault
+    vault: Acme Dev
+---`,
+  studioFileStore: `# .vars/local.yml — written by Studio; commit it
+variables:
+  api.baseUrl: https://localhost:5001
+  STRIPE_KEY:
+    value: 'enc:v1:<iv>:<ciphertext>:<tag>'
+    secret: true`,
+  studioAzkv: `- name: kv-prod
+  type: azkv
+  settings:
+    # -> https://acme-prod.vault.azure.net/
+    vaultName: acme-prod
+    # optional: pin one tenant
+    tenantId: <tenant-guid>
+    # optional: tokens keep the unprefixed name
+    prefix: billing-`,
+  studioAzkvLogin: `az login
+az account set --subscription "<subscription>"
+
+# DefaultAzureCredential also accepts environment
+# credentials, workload and managed identity, and
+# your IDE's Azure sign-in — nothing about the
+# credential lives in the workspace file.`,
+  studio1pEnvironment: `- name: 1p
+  type: 1password
+  settings:
+    mode: environment
+    # 1Password app: Developer
+    #   -> View Environments
+    #   -> Manage environment
+    #   -> Copy environment ID
+    environment: <environment-id>`,
+  studio1pVault: `- name: 1p
+  type: 1password
+  settings:
+    mode: vault
+    # every item title becomes a variable name
+    vault: Acme Dev
+    # default: password, then credential, then
+    # the first populated concealed field
+    field: credential`,
+  studio1pItem: `- name: acme-api
+  type: 1password
+  settings:
+    mode: item
+    vault: Acme Dev
+    # this item's fields become the variables:
+    # {{acme-api:username}}, {{acme-api:api-key}}
+    item: Acme API`,
+  studio1pCli: `# Nothing to configure on a normal desktop: op
+# reuses the 1Password app integration or your
+# existing "op signin" session.
+
+# Environments need op 2.38.2-beta.01 or later:
+op --version
+
+# Only when op is not on PATH:
+export TAP_OP_CLI=/opt/homebrew/bin/op`,
+  studioEnvBinding: `---
+kind: env
+name: Production
+defaultVariableProvider: kv-prod
+strictVariables: true
+providerAliases:
+  kv: kv-prod
+vars:
+  api.baseUrl: https://api.acme.com
+---`,
   studioRun: `cd samples
 aspire run
 
@@ -453,6 +556,7 @@ const SiteNav = () => (
       <a href="#tailscale">Tailscale</a>
       <a href="#studio">Studio</a>
       <a href="#studio-auth">Auth flows</a>
+      <a href="#studio-providers">Variables</a>
       <a href="#studio-ai">AI</a>
       <a className="nav-cta" href={repoUrl}>
         GitHub
@@ -552,6 +656,8 @@ const ProductSplit = () => (
           <span>Entra</span>
           <span>AWS SigV4</span>
           <span>GraphQL</span>
+          <span>Key Vault</span>
+          <span>1Password</span>
           <span>AI</span>
         </div>
         <a className="button primary" href="#studio">
@@ -1359,9 +1465,10 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
         <div className="callout">
           <strong>Two token shapes</strong>
           <p>
-            `{"{{name}}"}` resolves from the scope cascade first, then across providers in
-            registration order. `{"{{provider:name}}"}` resolves only against that provider. Write
-            a backslash before the braces for a literal.
+            `{"{{name}}"}` resolves from the scope cascade first, then the default provider, then
+            the remaining providers in registration order — first hit wins.{" "}
+            `{"{{provider:name}}"}` resolves only against that provider, with no fall-through.
+            Write a backslash before the braces for a literal.
           </p>
         </div>
         <div className="flow section-gap" aria-label="Variable cascade">
@@ -1372,12 +1479,226 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             </React.Fragment>
           ))}
         </div>
-        <div className="config-table section-gap" role="table" aria-label="Variable providers">
+        <div className="mode-grid section-gap">
           {[
-            ["env", "Process environment, gated by TAP_VARS_ALLOWED (values may be shown) and TAP_SECRETS_ALLOWED (values stay masked but resolve at execute time). Unset means deny everything."],
-            ["file", "A YAML file under the workspace. Values marked secret are encrypted at rest with AES-256-GCM under a passphrase-derived key."],
-            ["azkv", "Azure Key Vault, through DefaultAzureCredential."],
-            ["system", "Machine-local variables stored in Studio's own settings, edited from the Settings screen and kept outside the repo."],
+            ["Scopes carry the boring values", "Base URLs, tenant names, page sizes — the things that differ per environment and are fine to read in a diff. They live in the vars block of the workspace, collection, stage, env, or request file."],
+            ["Providers carry everything else", "A provider is a named, typed connection to somewhere values actually live. The workspace file records the name and the type; the value is fetched when the request runs."],
+            ["Declared in two places", "Workspace providers live in tap.md and travel with the repo. System providers live in ~/.tap/system.json and follow the machine. A workspace provider shadows a system one with the same name."],
+            ["Every read is recorded", "Each execution logs which provider answered which name and whether it was secret, so the response's Secrets tab can show what a request depends on without surfacing a value."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="code-grid">
+          <CodeBlock title="tap.md — declaring providers" code={commands.studioProviders} />
+          <CodeBlock title="environments/prod.env.md" code={commands.studioEnv} />
+        </div>
+        <p className="doc-note">
+          Providers are read on demand and cached per render, so one variables panel doesn't spawn
+          a vault round trip per row. Each type is covered below in{" "}
+          <a href="#studio-providers">Variable providers</a>.
+        </p>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-providers") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="config-table" role="table" aria-label="Provider types">
+          {[
+            ["env", "Read", "Allow-listed variables from the process Studio runs in."],
+            ["file", "Read / write", "An encrypted YAML file inside the workspace."],
+            ["azkv", "Read / write", "Azure Key Vault via DefaultAzureCredential."],
+            ["1password", "Read / write", "A 1Password Environment, vault, or item via the op CLI."],
+            ["system", "Read / write", "Studio's own machine-local variable list."],
+          ].map(([key, mode, value]) => (
+            <div className="config-row wide" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span className="provider-chip mode" role="cell">
+                {mode}
+              </span>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="step-list section-gap">
+          <MiniPanel title="Pick a scope">
+            Add a provider from Settings → Variable providers when it belongs to the machine, or
+            from the workspace editor when it belongs to the repo. Same shape either way: a name,
+            a type, and a settings bag.
+          </MiniPanel>
+          <MiniPanel title="The form comes from the provider">
+            Each type publishes its own field list, so the dialog shows exactly the settings that
+            type understands — with vault pickers, CLI auto-detection, and fields that appear only
+            when the mode they belong to is selected.
+          </MiniPanel>
+          <MiniPanel title="Test before you save">
+            Test runs a real listing against the draft settings — bounded to 20 seconds so a stalled
+            credential probe fails loudly — and reports how many variables came back. A file
+            provider whose passphrase is wrong is reported as a failure, not an empty vault.
+          </MiniPanel>
+          <MiniPanel title="Then browse it">
+            Saved providers list their variable names in the Variables panel with a secret badge and
+            a count. Values stay masked until you ask for one explicitly, and Refresh drops the
+            provider's cached listing.
+          </MiniPanel>
+        </div>
+
+        <ProviderDetail
+          id="provider-env"
+          name="Host environment"
+          type="env"
+          mode="Read-only"
+          blurb={
+            <>
+              Exposes variables from the process Studio runs in — the natural fit for values your
+              shell, CI job, or `direnv` setup already exports. Membership is decided by two host
+              environment variables rather than by the workspace, so no file in the repo can widen
+              what a provider can reach. Both take comma-separated globs, and a name on both lists
+              is treated as secret. Set neither and the provider exposes nothing.
+            </>
+          }
+          settings={[
+            ["TAP_VARS_ALLOWED", "Names exposed as plain variables — values may be displayed."],
+            ["TAP_SECRETS_ALLOWED", "Names that resolve at execute time but stay masked in every UI surface."],
+          ]}
+        >
+          <CodeBlock title="Allowlisting host environment variables" code={commands.studioAllowlist} />
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-file"
+          name="Encrypted file"
+          type="file"
+          mode="Read / write"
+          blurb={
+            <>
+              A YAML store at `.vars/&lt;provider&gt;.yml` inside the workspace, written by Studio
+              rather than by hand. Values marked secret are encrypted at rest with AES-256-GCM under
+              a key derived from a passphrase (PBKDF2-HMAC-SHA256, 200k iterations), so the file
+              itself is safe to commit. Plain values work without a passphrase; storing a secret
+              requires one. Keep the passphrase on a system-scope provider so it stays in
+              `~/.tap/system.json` instead of the repo.
+            </>
+          }
+          settings={[
+            ["encryptionKey", "Passphrase the AES key is derived from. Required before any secret value can be stored."],
+          ]}
+        >
+          <CodeBlock title=".vars/local.yml" code={commands.studioFileStore} />
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-azkv"
+          name="Azure Key Vault"
+          type="azkv"
+          mode="Read / write"
+          blurb={
+            <>
+              Reads and writes secrets in an Azure Key Vault through `DefaultAzureCredential`, so it
+              picks up `az login`, environment credentials, workload and managed identity, or your
+              IDE's Azure sign-in — no client secret in the workspace file. Listing returns names
+              and metadata only; a value is fetched when a token actually references it. Names Key
+              Vault cannot hold (anything outside `A-Z a-z 0-9 -`) count as a miss rather than an
+              error, so a bare token keeps falling through to the next provider.
+            </>
+          }
+          settings={[
+            ["vaultName", "Required. Short vault name; expands to https://<name>.vault.azure.net/. The settings form can pick from the vaults you can see."],
+            ["tenantId", "Pins authentication to one tenant when your account can reach several."],
+            ["prefix", "Prepended to every Key Vault lookup. Tokens keep using the unprefixed name."],
+          ]}
+        >
+          <div className="code-grid">
+            <CodeBlock title="tap.md entry" code={commands.studioAzkv} />
+            <CodeBlock title="Signing in" code={commands.studioAzkvLogin} />
+          </div>
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-1password"
+          name="1Password"
+          type="1password"
+          mode="Read / write"
+          blurb={
+            <>
+              Backed by the local `op` CLI, which is already authenticated on your machine — through
+              the 1Password desktop app integration and biometric unlock, or an existing `op signin`
+              session. Like Key Vault, the provider carries no credentials of its own. Three shapes,
+              chosen by the mode: an Environment, a whole vault, or a single item.
+            </>
+          }
+          settings={[
+            ["mode", "environment, vault, or item. Decides which of the fields below apply."],
+            ["environment", "Environment mode. The Environment ID copied from the 1Password app."],
+            ["vault", "Vault mode and item mode. Vault name or ID; every lookup is scoped to it."],
+            ["item", "Item mode. The item whose fields become this provider's variables."],
+            ["field", "Vault mode. Which field holds the value. Empty falls back to password, then credential, then the first concealed field."],
+            ["account", "Account shorthand or sign-in address — only needed when op is signed in to several."],
+            ["serviceAccountToken", "For headless hosts. Empty uses whatever session op already has."],
+            ["cliPath", "Override when op isn't on PATH. Otherwise TAP_OP_CLI, then the usual install locations, then PATH."],
+          ]}
+        >
+          <div className="mode-grid section-gap">
+            {[
+              ["Environment mode", "A 1Password Environment is already a flat name-to-value namespace, which is exactly what a variable provider is — so its variables become the provider's, in one call. Read-only: the CLI can't write an Environment back. Environments are still beta and need op 2.38.2-beta.01 or later."],
+              ["Vault mode", "Every item in the vault becomes one variable, named after the item's title and valued by its field. This mirrors the Key Vault model: vault, name, value. Writing a name that isn't there yet creates the item."],
+              ["Item mode", "One item's fields become the variables — username, password, and any custom field you added. Section-scoped fields are addressed as section.field, the same spelling op's own assignment syntax uses."],
+              ["Set-up help built in", "The settings form detects the op binary for you and can browse the vaults your session can see, so the vault field is a picker rather than a string you have to spell correctly."],
+            ].map(([name, body]) => (
+              <article className="mode-card" key={name}>
+                <strong>{name}</strong>
+                <p>{body}</p>
+              </article>
+            ))}
+          </div>
+          <div className="code-grid">
+            <CodeBlock title="Environment mode" code={commands.studio1pEnvironment} />
+            <CodeBlock title="Vault mode" code={commands.studio1pVault} />
+            <CodeBlock title="Item mode" code={commands.studio1pItem} />
+            <CodeBlock title="The op CLI" code={commands.studio1pCli} />
+          </div>
+          <p className="doc-note">
+            1Password docs: <a href="https://developer.1password.com/docs/cli/get-started/">get started with the CLI</a>
+            {" "}and <a href="https://developer.1password.com/docs/environments/">Environments</a>.
+          </p>
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-system"
+          name="System variables"
+          type="system"
+          mode="Read / write"
+          blurb={
+            <>
+              Always registered, and backed by the same `~/.tap/system.json` the Settings screen
+              edits — so a value you type into Settings is a variable every workspace on this machine
+              can resolve. This is where a personal token belongs when it should never travel with
+              the repo. Point `TAP_SYSTEM_DIR` somewhere else to relocate the file.
+            </>
+          }
+          settings={[]}
+        />
+
+        <div className="section-heading section-gap">
+          <span className="kicker">Per environment</span>
+          <h2>One vault per environment, one token in the request.</h2>
+          <p>
+            A request shouldn't have to know whether it is running against dev or prod. An
+            environment can bind provider names, so the same token reads from a different vault
+            depending on which environment is active.
+          </p>
+        </div>
+        <div className="config-table" role="table" aria-label="Environment provider binding">
+          {[
+            ["defaultVariableProvider", "The provider bare {{name}} tokens hit first, and the one that receives writes made without naming a target. Precedence: environment, then workspace, then system."],
+            ["providerAliases", "Alias-to-provider bindings. Requests use a stable prefix like {{kv:stripe-key}}; each environment points kv at its own provider."],
+            ["strictVariables", "With a default provider set, a bare token that misses it fails instead of falling through — so a prod run can never silently pick up a dev value."],
           ].map(([key, value]) => (
             <div className="config-row" role="row" key={key}>
               <code role="cell">{key}</code>
@@ -1385,12 +1706,21 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             </div>
           ))}
         </div>
-        <CodeBlock title="Allowlisting host environment variables" code={commands.studioAllowlist} />
-        <p className="doc-note">
-          Every execution records which variables and secrets were touched — provider, name, and
-          whether it was secret — so the Secrets tab can show what a request depends on without
-          ever surfacing a value.
-        </p>
+        <div className="code-grid section-gap">
+          <CodeBlock title="environments/prod.env.md" code={commands.studioEnvBinding} />
+          <CodeBlock title="tap.md — both vaults registered" code={commands.studioProviders} />
+        </div>
+        <div className="callout">
+          <strong>What never reaches a file</strong>
+          <p>
+            Workspace files hold provider names and references, not values. Settings the provider
+            marks sensitive leave the API as `***` and are only ever sent back as that same mask,
+            so the browser never receives one. Secret values are masked in every listing until you
+            ask for a specific one, and the execution trace records provider, name, and secret flag
+            — never the value. Keep secret-bearing settings on system-scope providers; workspace
+            providers are written into `tap.md` verbatim.
+          </p>
+        </div>
       </section>
     );
   }
@@ -1452,6 +1782,44 @@ const DocHeader = ({ doc }: { doc: DocSection }) => (
     <h2>{doc.title}</h2>
     <p>{doc.body}</p>
   </div>
+);
+
+const ProviderDetail = ({
+  id,
+  name,
+  type,
+  mode,
+  blurb,
+  settings,
+  children,
+}: {
+  id: string;
+  name: string;
+  type: string;
+  mode: string;
+  blurb: React.ReactNode;
+  settings: string[][];
+  children?: React.ReactNode;
+}) => (
+  <article className="provider-block" id={id}>
+    <header className="provider-block-head">
+      <h3>{name}</h3>
+      <code className="provider-chip">{type}</code>
+      <span className="provider-chip mode">{mode}</span>
+    </header>
+    <p>{blurb}</p>
+    {settings.length > 0 ? (
+      <div className="config-table" role="table" aria-label={`${name} settings`}>
+        {settings.map(([key, value]) => (
+          <div className="config-row" role="row" key={key}>
+            <code role="cell">{key}</code>
+            <span role="cell">{value}</span>
+          </div>
+        ))}
+      </div>
+    ) : null}
+    {children}
+  </article>
 );
 
 const MiniPanel = ({ title, children }: { title: string; children: React.ReactNode }) => (

@@ -31,7 +31,15 @@ import type {
   RequestSummary,
   TaggedItem,
   VariableTrace,
+  AzureKeyVault,
+  AzureSubscription,
+  OnePasswordVault,
+  OnePasswordDetect,
   ProviderSummary,
+  ProviderTypeDescriptor,
+  ProviderVariable,
+  ProviderVariableValue,
+  TestProviderResult,
   SaveSystemSettings,
   SetVariablePayload,
   SseEvent,
@@ -315,8 +323,54 @@ export const api = {
   // --- Providers ---------------------------------------------------------------------
 
   /** Lists the active variable providers (system + workspace). Sensitive setting values
-   *  are already masked server-side. */
-  listVariableProviders: () => get<ProviderSummary[]>('/api/variable-providers'),
+   *  are already masked server-side. Pass the active env path so its provider binding
+   *  (default + aliases) is reflected. */
+  listVariableProviders: (env?: string | null) =>
+    get<ProviderSummary[]>(`/api/variable-providers${env ? `?env=${encodeURIComponent(env)}` : ''}`),
+
+  /** Provider type descriptors: display name, icon key, and the typed settings schema.
+   *  Source of the provider picker and the generated settings forms. */
+  providerTypes: () => get<ProviderTypeDescriptor[]>('/api/variable-providers/types'),
+
+  /** Test a draft provider config without saving it. Masked (`***`) settings are
+   *  restored server-side from the stored provider with the same name. */
+  testVariableProvider: (body: { name: string | null; type: string; settings: Record<string, string | null> }) =>
+    post<TestProviderResult>('/api/variable-providers/test', body),
+
+  /** Browse a provider's variables (values masked for secrets). `refresh` busts any
+   *  server-side listing cache (azkv). */
+  providerVariables: (name: string, refresh = false, env?: string | null) => {
+    const q = new URLSearchParams({ refresh: String(refresh) })
+    if (env) q.set('env', env)
+    return get<ProviderVariable[]>(`/api/variable-providers/${encodeURIComponent(name)}/variables?${q}`)
+  },
+
+  /** Reveal one provider variable's clear-text value (explicit per-row action). */
+  providerVariableValue: (name: string, key: string, env?: string | null) => {
+    const q = env ? `?env=${encodeURIComponent(env)}` : ''
+    return get<ProviderVariableValue>(
+      `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}${q}`)
+  },
+
+  // --- Azure discovery (Key Vault picker) ----------------------------------------------
+
+  /** Subscriptions visible to the Azure CLI credential (`az login`). */
+  azureSubscriptions: () => get<AzureSubscription[]>('/api/azure/subscriptions'),
+
+  /** Key Vaults inside one subscription (name + resource group + location). */
+  azureKeyVaults: (subscriptionId: string) =>
+    get<AzureKeyVault[]>(`/api/azure/subscriptions/${encodeURIComponent(subscriptionId)}/keyvaults`),
+
+  // --- 1Password discovery (vault picker + op CLI detect) ------------------------------
+
+  /** Vaults visible to the current `op` sign-in. POST so the draft service-account token
+   *  never rides in a URL; `***` values are restored server-side from the stored config. */
+  onePasswordVaults: (name: string | null, settings: Record<string, string | null>) =>
+    post<OnePasswordVault[]>('/api/onepassword/vaults', { name, settings }),
+
+  /** Locate the `op` binary and read its version, for the cliPath field's Detect button. */
+  detectOnePasswordCli: (name: string | null, settings: Record<string, string | null>) =>
+    post<OnePasswordDetect>('/api/onepassword/detect', { name, settings }),
 
   // --- Git ---------------------------------------------------------------------------
 
@@ -377,8 +431,16 @@ export const api = {
   detectClaudeCli: (path: string | null) => post<AiCliDetect>('/api/ai/claude-cli/detect', { path }),
   /** Validate draft AI settings without persisting them. */
   testAiConfig: (body: SaveAiConfig) => post<AiTestResult>('/api/ai/test', body),
-  /** List models exposed by the active provider. */
-  aiModels: () => get<AiModels>('/api/ai/models'),
+  /** List models exposed by a provider. Pass draft settings to preview a provider the user
+   *  has selected but not saved yet; omit them to use the persisted config. */
+  aiModels: (draft?: { provider?: string; copilotCliPath?: string | null; claudeCliPath?: string | null }) => {
+    const q = new URLSearchParams()
+    if (draft?.provider) q.set('provider', draft.provider)
+    if (draft?.copilotCliPath) q.set('copilotCliPath', draft.copilotCliPath)
+    if (draft?.claudeCliPath) q.set('claudeCliPath', draft.claudeCliPath)
+    const qs = q.toString()
+    return get<AiModels>(`/api/ai/models${qs ? `?${qs}` : ''}`)
+  },
   /** Ask the assistant to craft/edit a request. Returns a reply + optional applyable spec. */
   aiAssist: (body: AiAssistRequest) => post<AiAssistResponse>('/api/ai/assist', body),
 }

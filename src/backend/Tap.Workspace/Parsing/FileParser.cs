@@ -181,6 +181,13 @@ public static class FileParser
             // Env vars use the same VarSpec shape as workspace/collection/request vars
             // so the `secret: true` flag is uniformly available across every scope.
             Vars = fm.VarSpecMap("vars"),
+            // Per-env provider binding: the env can pick which provider bare tokens hit
+            // (defaultVariableProvider), re-point stable alias prefixes at concrete
+            // providers (providerAliases), and forbid fall-through past its default
+            // (strictVariables). Providers themselves are declared at workspace/system scope.
+            DefaultVariableProvider = fm.String("defaultVariableProvider"),
+            ProviderAliases = fm.StringMap("providerAliases"),
+            StrictVariables = fm.Bool("strictVariables"),
         };
     }
 

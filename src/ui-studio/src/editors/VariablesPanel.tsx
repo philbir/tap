@@ -7,18 +7,19 @@ import {
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api } from '../api/client'
-import type { CompileResult, VariableContext, VariableScope, VariableView } from '../api/types'
+import type { CompileResult, Variable, VariableContext, VariableScope, VariableView } from '../api/types'
 import { useTapStore } from '../store'
 import { useVariableView } from '../workspace/useVariables'
+import { ProviderTypeIcon } from './providerMeta'
 
 const SCOPE_ORDER: VariableScope[] = ['provider', 'workspace', 'collection', 'stage', 'env', 'request']
 
-// The first cascade stage is the system / configured-provider layer (system.json,
-// azkv, file, env, …). The server's scope enum keeps the name "provider" for
-// historical reasons; the UI label is SYSTEM because that's what users recognize from
-// the Settings screen.
+// The first cascade stage is the configured-provider layer (system.json, azkv, file,
+// env, …). Providers can be declared at system OR workspace scope, so the tier is
+// labelled PROVIDERS and its detail view groups variables per provider with an origin
+// badge — a flat "SYSTEM" pile hid which vault a value came from.
 const SCOPE_LABEL: Record<VariableScope, string> = {
-  provider: 'SYSTEM',
+  provider: 'PROVIDERS',
   workspace: 'WORKSPACE',
   collection: 'COLLECTION',
   stage: 'STAGE',
@@ -49,12 +50,32 @@ interface Props {
  * Layout matches dreamr's VariableViewer but uses Tap's scope names.
  */
 export function VariablesPanel({ opened, onClose, context }: Props) {
-  const view = useVariableView(opened ? context : null)
+  // Fetch only while open (the view can hit slow providers like Azure Key Vault), but
+  // RETAIN the last loaded view: the hook clears its state the instant `opened` flips
+  // false, while Mantine keeps the content mounted through the exit fade — without the
+  // retained copy every close flashes the "Open a request or env…" fallback (all counts
+  // 0) over the populated panel, and a quick reopen starts empty. Keyed by context so a
+  // different editor's panel never shows this one's cascade.
+  const liveView = useVariableView(opened ? context : null)
+  const contextKey = context ? JSON.stringify(context) : null
+  const [retained, setRetained] = useState<{ key: string; view: VariableView } | null>(null)
+  useEffect(() => {
+    if (liveView && contextKey) setRetained({ key: contextKey, view: liveView })
+  }, [liveView, contextKey])
+  const view = liveView ?? (retained && retained.key === contextKey ? retained.view : null)
   const [selectedScope, setSelectedScope] = useState<VariableScope | 'result'>('result')
   const loading = opened && !!context && view === null
 
   // Reset to 'result' when the context changes so we always land somewhere meaningful.
   useEffect(() => { setSelectedScope('result') }, [context?.requestPath, context?.collectionPath])
+
+  // Every mounted editor renders one of these panels, and a Mantine Modal portals an
+  // (empty) root into <body> even while closed. Skip the portal entirely until the panel
+  // is first opened — fewer stray portals, and the open panel's portal is appended last,
+  // so it always paints above older ones.
+  const [everOpened, setEverOpened] = useState(opened)
+  useEffect(() => { if (opened) setEverOpened(true) }, [opened])
+  if (!everOpened && !opened) return null
 
   return (
     <Modal
@@ -74,6 +95,22 @@ export function VariablesPanel({ opened, onClose, context }: Props) {
             <Text size="xs">Resolving variables — first call after a restart can take a few seconds.</Text>
           </Group>
         </Stack>
+      )}
+      {/* Active provider binding — which provider bare tokens hit first, and any env
+          alias → provider bindings (kv → kv-prod). Only shown when a binding exists. */}
+      {view && (view.defaultProvider || (view.aliases && Object.keys(view.aliases).length > 0)) && (
+        <Group gap={6} mb="sm">
+          {view.defaultProvider && (
+            <Tooltip label="Bare {{name}} tokens resolve against this provider first." withArrow>
+              <Badge size="sm" variant="light" color="blue">default · {view.defaultProvider}</Badge>
+            </Tooltip>
+          )}
+          {view.aliases && Object.entries(view.aliases).map(([alias, target]) => (
+            <Tooltip key={alias} label={`{{${alias}:name}} resolves against '${target}' in the active env.`} withArrow>
+              <Badge size="sm" variant="light" color="grape">{alias} → {target}</Badge>
+            </Tooltip>
+          ))}
+        </Group>
       )}
       <Box style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 24 }}>
         {/* Cascade renders immediately. While loading, counts are zero (we don't know
@@ -207,45 +244,109 @@ function SelectedScopeTable({ view, scope }: { view: VariableView; scope: Variab
         </Tooltip>
       </Group>
 
-      {variables.length === 0 ? (
+      {scope === 'provider' ? (
+        <ProviderSetGroups view={view} />
+      ) : variables.length === 0 ? (
         <Text size="sm" c="dimmed" ta="center" py="md">No variables in this scope.</Text>
       ) : (
         <Paper withBorder radius="md" p="xs">
-          <Table verticalSpacing={6} horizontalSpacing="md" withRowBorders={false}>
-            <Table.Tbody>
-              {variables.map((v) => {
-                const Icon: TablerIcon = v.isSensitive ? IconKey : IconCode
-                return (
-                  <Table.Tr key={v.name + '-' + v.sourcePath}>
-                    <Table.Td style={{ width: '40%' }}>
-                      <Group gap={6} wrap="nowrap">
-                        <Icon size={12} color={v.isSensitive ? 'var(--mantine-color-yellow-6)' : 'var(--mantine-color-tap-6)'} />
-                        <Text ff="var(--mono)" size="sm" truncate>{v.name}</Text>
-                      </Group>
-                    </Table.Td>
-                    <Table.Td>
-                      {v.isSensitive ? (
-                        <Group gap={6} wrap="nowrap">
-                          <IconKey size={11} color="var(--mantine-color-yellow-6)" />
-                          <Text ff="var(--mono)" size="sm" c="dimmed">***</Text>
-                        </Group>
-                      ) : (
-                        <Text ff="var(--mono)" size="sm">{v.value ?? <Text component="em" c="dimmed">(empty)</Text>}</Text>
-                      )}
-                    </Table.Td>
-                    {scope === 'result' && (
-                      <Table.Td style={{ width: 90 }}>
-                        <Badge size="xs" color={SCOPE_COLOR[v.scope]} variant="light">{SCOPE_LABEL[v.scope]}</Badge>
-                      </Table.Td>
-                    )}
-                  </Table.Tr>
-                )
-              })}
-            </Table.Tbody>
-          </Table>
+          <VariableRows variables={variables} showScope={scope === 'result'} />
         </Paper>
       )}
     </Box>
+  )
+}
+
+/**
+ * The PROVIDERS tier, one labelled group per configured provider: type icon, instance
+ * name, type display name, declaration origin, plus the active env's binding — a
+ * `default` badge on the provider bare tokens hit first and `alias → name` chips for
+ * every alias pointing at it. This is where "which vault is this env using?" is answered.
+ */
+function ProviderSetGroups({ view }: { view: VariableView }) {
+  const sets = view.sets.filter((s) => s.scope === 'provider')
+  if (sets.length === 0) {
+    return <Text size="sm" c="dimmed" ta="center" py="md">No variable providers configured.</Text>
+  }
+  const eq = (a: string | null | undefined, b: string | null | undefined) =>
+    !!a && !!b && a.toLowerCase() === b.toLowerCase()
+
+  return (
+    <Stack gap="sm">
+      {sets.map((s) => {
+        const isDefault = eq(view.defaultProvider, s.providerName)
+        const aliases = Object.entries(view.aliases ?? {}).filter(([, target]) => eq(target, s.providerName))
+        return (
+          <Paper withBorder radius="md" p="xs" key={s.sourcePath}>
+            <Group gap={6} mb={4} wrap="wrap">
+              <ProviderTypeIcon icon={s.icon} size={15} />
+              <Text size="sm" fw={600} ff="var(--mono)">{s.label}</Text>
+              {s.typeDisplayName && <Text size="xs" c="dimmed">{s.typeDisplayName}</Text>}
+              {s.origin && (
+                <Badge size="xs" variant="light" color={s.origin === 'system' ? 'blue' : 'tap'}>{s.origin}</Badge>
+              )}
+              {isDefault && (
+                <Tooltip label="Bare {{name}} tokens resolve against this provider first in the active env." withArrow>
+                  <Badge size="xs" variant="light" color="blue">default</Badge>
+                </Tooltip>
+              )}
+              {aliases.map(([alias]) => (
+                <Tooltip key={alias} label={`{{${alias}:name}} targets this provider in the active env.`} withArrow>
+                  <Badge size="xs" variant="light" color="grape">{alias} → {s.providerName}</Badge>
+                </Tooltip>
+              ))}
+              <Badge size="xs" variant="light" color="gray" ml="auto">{s.count}</Badge>
+            </Group>
+            {s.variables.length === 0 ? (
+              <Text size="xs" c="dimmed" pl={4}>No variables visible right now.</Text>
+            ) : (
+              <VariableRows variables={s.variables} showScope={false} />
+            )}
+          </Paper>
+        )
+      })}
+    </Stack>
+  )
+}
+
+function VariableRows({ variables, showScope }: { variables: Variable[]; showScope: boolean }) {
+  return (
+    <Table verticalSpacing={6} horizontalSpacing="md" withRowBorders={false}>
+      <Table.Tbody>
+        {variables.map((v) => {
+          const Icon: TablerIcon = v.isSensitive ? IconKey : IconCode
+          return (
+            <Table.Tr key={v.name + '-' + v.sourcePath}>
+              <Table.Td style={{ width: '40%' }}>
+                <Group gap={6} wrap="nowrap">
+                  <Icon size={12} color={v.isSensitive ? 'var(--mantine-color-yellow-6)' : 'var(--mantine-color-tap-6)'} />
+                  <Text ff="var(--mono)" size="sm" truncate>{v.name}</Text>
+                </Group>
+              </Table.Td>
+              <Table.Td>
+                {v.isSensitive ? (
+                  <Group gap={6} wrap="nowrap">
+                    <IconKey size={11} color="var(--mantine-color-yellow-6)" />
+                    <Text ff="var(--mono)" size="sm" c="dimmed">***</Text>
+                  </Group>
+                ) : (
+                  <Text ff="var(--mono)" size="sm">{v.value ?? <Text component="em" c="dimmed">(empty)</Text>}</Text>
+                )}
+              </Table.Td>
+              {showScope && (
+                <Table.Td style={{ width: 110 }}>
+                  {/* Provider-scope rows name the actual provider — "kv-dev" says more
+                      than a generic tier label ever could. */}
+                  <Badge size="xs" color={SCOPE_COLOR[v.scope]} variant="light" style={{ textTransform: 'none' }}>
+                    {v.scope === 'provider' && v.providerName ? v.providerName : SCOPE_LABEL[v.scope]}
+                  </Badge>
+                </Table.Td>
+              )}
+            </Table.Tr>
+          )
+        })}
+      </Table.Tbody>
+    </Table>
   )
 }
 

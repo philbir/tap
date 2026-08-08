@@ -9,6 +9,9 @@ obj/
 node_modules/
 dist/
 .vite/
+# Both UIs are Yarn 4 (Berry) — an npm lockfile here is a stray `npm install`, and
+# committing one would point contributors and CI at the wrong package manager.
+package-lock.json
 **/.yarn/*
 !**/.yarn/patches
 !**/.yarn/plugins

@@ -54,6 +54,7 @@ public static class ExecuteStreamEndpoint
             {
                 var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
+                rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
                 stage = rendered.Metadata.StageName;
                 variables = rendered.Metadata.VariablesUsed
                     .Select(s => new VariableTraceDto(s.ProviderName, s.Name, s.Resolved, s.IsSecret, s.Duration.TotalMilliseconds))

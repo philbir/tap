@@ -31,6 +31,10 @@ export function WorkspaceEditor() {
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
   const { types: providerTypes } = useProviderTypes()
+  // Which provider rows are expanded, by position in `spec.variableProviders`. This lives
+  // here rather than inside ProviderRow so renaming a provider can't reset it: the row is
+  // keyed by index, and index survives an edit to the name.
+  const [expandedRows, setExpandedRows] = useState<ReadonlySet<number>>(new Set())
 
   useEffect(() => {
     let cancelled = false
@@ -40,6 +44,7 @@ export function WorkspaceEditor() {
       setDetail(d)
       const initial = specFromDetail(d)
       setSpec(initial); setSavedSpec(initial)
+      setExpandedRows(initialExpandedRows(initial))
     }).catch((e: Error) => !cancelled && setError(e.message))
     return () => { cancelled = true }
   }, [generation])
@@ -59,6 +64,23 @@ export function WorkspaceEditor() {
   function removeProvider(idx: number) {
     const list = (spec?.variableProviders ?? []).filter((_, i) => i !== idx)
     update('variableProviders', list.length > 0 ? list : undefined)
+    // Rows below the removed one shift up by one — carry their expanded state with them.
+    setExpandedRows((cur) => {
+      const next = new Set<number>()
+      for (const i of cur) {
+        if (i < idx) next.add(i)
+        else if (i > idx) next.add(i - 1)
+      }
+      return next
+    })
+  }
+
+  function toggleProviderRow(idx: number) {
+    setExpandedRows((cur) => {
+      const next = new Set(cur)
+      if (next.has(idx)) next.delete(idx); else next.add(idx)
+      return next
+    })
   }
 
   async function save() {
@@ -101,7 +123,9 @@ export function WorkspaceEditor() {
       title={spec.name} kindLabel="Workspace"
       dirty={dirty} saving={saving} errorMessage={errorMessage}
       onSave={save}
-      onDiscard={() => setSpec(savedSpec)}
+      // Discard can change the row count, so the index-keyed expansion state has to be
+      // rebuilt for the restored list rather than left pointing at whatever was open.
+      onDiscard={() => { setSpec(savedSpec); setExpandedRows(initialExpandedRows(savedSpec)) }}
       onTitleChange={(n) => update('name', n)}
     >
       <Tabs value={tab} onChange={setTab}>
@@ -153,10 +177,12 @@ export function WorkspaceEditor() {
             <Stack gap="xs">
               {providers.map((p, i) => (
                 <ProviderRow
-                  key={`${p.origin}:${p.name}`}
+                  key={i}
                   provider={p}
                   types={providerTypes}
                   readOnly={p.origin === 'system'}
+                  expanded={expandedRows.has(i)}
+                  onToggle={() => toggleProviderRow(i)}
                   onChange={(next) => updateProvider(i, next)}
                   onRemove={() => removeProvider(i)}
                 />
@@ -176,6 +202,8 @@ export function WorkspaceEditor() {
                   const name = uniqueName(v, providers)
                   const next: ProviderConfig = { name, type: v, settings: {}, origin: 'workspace' }
                   update('variableProviders', [...providers, next])
+                  // Open the new row so its settings are right there to fill in.
+                  setExpandedRows((cur) => new Set(cur).add(providers.length))
                 }}
                 w={360}
               />
@@ -349,18 +377,20 @@ function isHttpUrl(url: string): boolean {
   return url.startsWith('http://') || url.startsWith('https://')
 }
 
+/** One provider row: a collapsed summary line that expands to the name + settings form.
+ *  `expanded` is owned by the parent — keeping it local would tie it to the row's mount,
+ *  and any re-key (a rename) would silently collapse the row mid-edit. */
 function ProviderRow({
-  provider, types, readOnly, onChange, onRemove,
+  provider, types, readOnly, expanded, onToggle, onChange, onRemove,
 }: {
   provider: ProviderConfig
   types: ProviderTypeDescriptor[]
   readOnly: boolean
+  expanded: boolean
+  onToggle: () => void
   onChange: (next: ProviderConfig) => void
   onRemove: () => void
 }) {
-  // Rows list collapsed; expanding reveals the name + settings form. An unnamed row
-  // (would be dropped on save) starts expanded so its required-name error is visible.
-  const [expanded, setExpanded] = useState(provider.name.trim() === '')
   const descriptor = descriptorFor(types, provider.type)
   const mode = descriptor?.mode ?? modeForProviderType(provider.type)
   const summary = descriptor?.fields
@@ -377,7 +407,7 @@ function ProviderRow({
     >
       <Group justify="space-between" wrap="nowrap" p="sm">
         <UnstyledButton
-          onClick={() => setExpanded((e) => !e)}
+          onClick={onToggle}
           style={{ flex: 1, minWidth: 0 }}
           aria-expanded={expanded}
           aria-label={`${expanded ? 'Collapse' : 'Expand'} provider ${provider.name || '(unnamed)'}`}
@@ -440,6 +470,13 @@ function ProviderRow({
       </Collapse>
     </Box>
   )
+}
+
+/** Provider rows to open when a spec is (re)loaded: only the unnamed ones. An unnamed row
+ *  would be dropped by the parser on the next load, so its required-name error should be
+ *  visible without hunting for it. */
+function initialExpandedRows(spec: WorkspaceSpec | null): ReadonlySet<number> {
+  return new Set((spec?.variableProviders ?? []).flatMap((p, i) => (p.name.trim() === '' ? [i] : [])))
 }
 
 function uniqueName(type: string, existing: ProviderConfig[]): string {

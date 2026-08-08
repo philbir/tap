@@ -18,7 +18,9 @@ public static class ExecuteEndpoint
 {
     private static readonly HttpClient HttpClient = new(new HttpClientHandler
     {
-        AllowAutoRedirect = true,
+        // Redirects are followed by HttpExecutionHelpers.SendFollowingRedirectsAsync instead, so
+        // every hop past the first one gets re-validated before we reconnect.
+        AllowAutoRedirect = false,
         UseCookies = false,
         // No timeout cap at the HttpClient level — we apply a soft cancellation per-request.
     })
@@ -98,7 +100,8 @@ public static class ExecuteEndpoint
                 using var req = HttpExecutionHelpers.BuildRequest(rendered);
 
                 var sw = Stopwatch.StartNew();
-                using var resp = await HttpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                using var resp = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
+                    HttpClient, req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
 
                 using var ms = new MemoryStream();

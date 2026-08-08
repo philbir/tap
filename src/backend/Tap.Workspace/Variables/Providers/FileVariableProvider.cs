@@ -15,7 +15,11 @@ namespace Tap.Workspace.Variables.Providers;
 /// <list type="bullet">
 ///   <item><c>encryptionKey</c> — passphrase used to derive the AES key. Required when storing
 ///     any <c>secret: true</c> variable; if absent and a secret write is attempted, the
-///     provider throws. Plain (non-secret) values are still stored when the key is absent.</item>
+///     provider throws. Plain (non-secret) values are still stored when the key is absent.
+///     Belongs at system scope or in the environment — see
+///     <see cref="FileVariableProvider.PassphraseEnvVar"/>. Declaring it in workspace config
+///     puts the passphrase in Git right beside the ciphertext it unlocks, which is no
+///     encryption at all; that still works this release but is flagged.</item>
 /// </list>
 ///
 /// <para>On-disk envelope for secret values: <c>enc:v1:&lt;iv-b64&gt;:&lt;ciphertext-b64&gt;:&lt;tag-b64&gt;</c>.
@@ -34,10 +38,22 @@ public sealed class FileVariableProvider : IVariableProvider
     /// endpoint can detect secrets that failed to decrypt (ListAsync surfaces the raw
     /// envelope on decrypt failure instead of throwing).</summary>
     public const string EnvelopePrefix = "enc:v1:";
+
+    /// <summary>Environment variable holding the AES passphrase. The per-provider form
+    /// <c>TAP_FILE_PROVIDER_KEY_&lt;NAME&gt;</c> (name upper-cased, non-alphanumerics replaced
+    /// by <c>_</c>) wins over the bare variable, and both win over configured settings. This is
+    /// the only place a passphrase can live that isn't committed next to the ciphertext.</summary>
+    public const string PassphraseEnvVar = "TAP_FILE_PROVIDER_KEY";
+
     private const int Pbkdf2Iterations = 200_000;
     private const int KeyBytes = 32;
     private const int IvBytes = 12;
     private const int TagBytes = 16;
+
+    private const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    private const UnixFileMode OwnerOnlyDirectory =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     private readonly string _storePath;
     private readonly byte[]? _key;
@@ -51,11 +67,47 @@ public sealed class FileVariableProvider : IVariableProvider
 
         // Encryption key is optional at construction — it's only required if a write touches
         // a secret. Reads return ciphertext-on-failure so the operator can fix the key.
-        if (config.Settings.TryGetValue("encryptionKey", out var passphrase) && !string.IsNullOrEmpty(passphrase))
+        var passphrase = ResolvePassphrase(config, out var fromWorkspaceConfig);
+        EncryptionKeyFromWorkspaceConfig = fromWorkspaceConfig;
+        if (!string.IsNullOrEmpty(passphrase))
         {
             var salt = Encoding.UTF8.GetBytes("tap-file-provider:" + config.Name);
             _key = Rfc2898DeriveBytes.Pbkdf2(passphrase, salt, Pbkdf2Iterations, HashAlgorithmName.SHA256, KeyBytes);
         }
+    }
+
+    /// <summary>True when the passphrase came from workspace-scope config rather than system
+    /// scope or the environment — i.e. the key is committed to Git alongside the ciphertext it
+    /// unlocks. Surfaced (rather than rejected) so existing setups keep working; the written
+    /// store file carries the same warning in its header.</summary>
+    public bool EncryptionKeyFromWorkspaceConfig { get; }
+
+    /// <summary>Resolves the passphrase, preferring sources that don't live in the workspace.
+    /// Order: per-provider env var, bare env var, then the configured <c>encryptionKey</c>.</summary>
+    private static string? ResolvePassphrase(VariableProviderConfig config, out bool fromWorkspaceConfig)
+    {
+        fromWorkspaceConfig = false;
+
+        var scoped = Environment.GetEnvironmentVariable($"{PassphraseEnvVar}_{EnvSuffix(config.Name)}");
+        if (!string.IsNullOrEmpty(scoped)) return scoped;
+        var shared = Environment.GetEnvironmentVariable(PassphraseEnvVar);
+        if (!string.IsNullOrEmpty(shared)) return shared;
+
+        if (!config.Settings.TryGetValue("encryptionKey", out var configured) || string.IsNullOrEmpty(configured))
+            return null;
+
+        fromWorkspaceConfig = config.Origin is ProviderOrigin.Workspace;
+        return configured;
+    }
+
+    private static string EnvSuffix(string name)
+    {
+        var chars = name.ToUpperInvariant().ToCharArray();
+        for (var i = 0; i < chars.Length; i++)
+        {
+            if (!char.IsAsciiLetterOrDigit(chars[i])) chars[i] = '_';
+        }
+        return new string(chars);
     }
 
     public string Name => _config.Name;
@@ -142,7 +194,9 @@ public sealed class FileVariableProvider : IVariableProvider
 
     private void SaveStore(IReadOnlyDictionary<string, Entry> store)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_storePath)!);
+        var dir = Path.GetDirectoryName(_storePath)!;
+        if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dir);
+        else Directory.CreateDirectory(dir, OwnerOnlyDirectory);
 
         var root = new YamlMappingNode();
         var varsNode = new YamlMappingNode();
@@ -168,6 +222,12 @@ public sealed class FileVariableProvider : IVariableProvider
         sb.Append("# Tap file provider store — written by the Studio UI / API.\n");
         sb.Append("# Secret values use the envelope: enc:v1:<iv-b64>:<ciphertext-b64>:<tag-b64>\n");
         sb.Append("# Do NOT hand-edit secret values; rotate the passphrase via the provider settings.\n");
+        if (EncryptionKeyFromWorkspaceConfig)
+        {
+            sb.Append("# WARNING: this provider's encryptionKey is declared in workspace config, which is\n");
+            sb.Append("#          committed alongside this file — the passphrase travels with the ciphertext.\n");
+            sb.Append($"#          Move it to system scope or the {PassphraseEnvVar} environment variable.\n");
+        }
 
         var doc = new YamlDocument(root);
         var stream = new YamlStream(doc);
@@ -177,7 +237,46 @@ public sealed class FileVariableProvider : IVariableProvider
         var dotIdx = text.IndexOf("\n...", StringComparison.Ordinal);
         if (dotIdx > 0) text = text[..dotIdx] + "\n";
 
-        File.WriteAllText(_storePath, text);
+        WriteAtomicOwnerOnly(_storePath, text);
+    }
+
+    /// <summary>Writes the store crash-safely and owner-only. <c>File.WriteAllText</c>
+    /// truncates the real file first, so a crash mid-write loses every variable in it; and the
+    /// default creation mode is world-readable on Linux, which matters for the plain values
+    /// stored here and hands an offline attacker the ciphertext for free. The temp file is
+    /// created 0600 up front and renamed over the target, so neither window exists.</summary>
+    private static void WriteAtomicOwnerOnly(string path, string text)
+    {
+        var tmp = $"{path}.{Environment.ProcessId}.tmp";
+        try
+        {
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+            };
+            if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerOnlyFile;
+
+            using (var fs = new FileStream(tmp, options))
+            {
+                fs.Write(Encoding.UTF8.GetBytes(text));
+                fs.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { }
+            throw;
+        }
+
+        if (OperatingSystem.IsWindows()) return;
+        try { File.SetUnixFileMode(path, OwnerOnlyFile); }
+        catch
+        {
+            // ignore — the file is still owned by the current user
+        }
     }
 
     private string Encrypt(string clear)
@@ -275,7 +374,9 @@ public sealed class FileVariableProviderFactory : IVariableProviderFactory
             {
                 Key = "encryptionKey",
                 Label = "Encryption passphrase",
-                Description = "Used to derive the AES key for secret values. Plain values work without it; storing a secret requires it.",
+                Description = "Used to derive the AES key for secret values. Plain values work without it; storing a secret requires it. "
+                    + "Set it at system scope or via the TAP_FILE_PROVIDER_KEY environment variable — in workspace config it is committed "
+                    + "to Git next to the encrypted values it unlocks.",
                 Kind = ProviderFieldKind.Secret,
             },
         ],

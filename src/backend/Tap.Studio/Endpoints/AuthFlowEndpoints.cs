@@ -99,7 +99,7 @@ public static class AuthFlowEndpoints
             return Results.Ok(new AuthExecuteResponseDto(
                 Status: f.Status switch
                 {
-                    AuthFlowStatus.Pending => "pending",
+                    AuthFlowStatus.Pending or AuthFlowStatus.Exchanging => "pending",
                     AuthFlowStatus.Completed => "completed",
                     AuthFlowStatus.Failed => "failed",
                     _ => "pending",

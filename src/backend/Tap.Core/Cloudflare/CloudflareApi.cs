@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Tap.Core.IO;
 
 namespace Tap.Core.Cloudflare;
 
@@ -70,13 +71,29 @@ public sealed class CloudflareApi(HttpClient http, string apiToken)
         await SendAsync<CfSingleResponse<CfTunnel>>(req, ct);
     }
 
+    /// <summary>
+    /// Where a tunnel's credentials file lives. <c>TunnelProvisioner</c> and the AppHost's
+    /// <c>CloudflaredLifecycleHook</c> still open-code the same expression to decide whether a
+    /// named tunnel can be reused; they should call this instead, because all three have to
+    /// agree — a mismatch silently deletes and recreates the tunnel on every start.
+    ///
+    /// <para>Still the shared temp dir, which is not where a credential belongs. The file is
+    /// now written 0600 so other local accounts can no longer read the tunnel secret; relocating
+    /// it under the user profile has to land in the same change as those two callers.</para>
+    /// </summary>
+    public static string CredentialsPathFor(string tunnelName, string tunnelId)
+        => Path.Combine(Path.GetTempPath(), $"cloudflared-{tunnelName}-{tunnelId}.json");
+
     public async Task<string> WriteCredentialsFileAsync(
         string accountId, CfTunnel tunnel, string tunnelSecret, CancellationToken ct)
     {
         var creds = new CfTunnelCredentials(accountId, tunnel.Id, tunnel.Name, tunnelSecret);
-        var path = Path.Combine(Path.GetTempPath(), $"cloudflared-{tunnel.Name}-{tunnel.Id}.json");
-        await using var fs = File.Create(path);
-        await JsonSerializer.SerializeAsync(fs, creds, CloudflareApiJson.Default.CfTunnelCredentials, ct);
+        var path = CredentialsPathFor(tunnel.Name, tunnel.Id);
+        // TunnelSecret is the connector's credential — anyone who can read it can serve the
+        // hostname. Owner-only, and committed by rename so a torn write can't leave a partial
+        // file that cloudflared then refuses to authenticate with.
+        await AtomicFile.WriteAllTextAsync(
+            path, JsonSerializer.Serialize(creds, CloudflareApiJson.Default.CfTunnelCredentials), ct);
         return path;
     }
 
@@ -149,6 +166,18 @@ public sealed class CloudflareApi(HttpClient http, string apiToken)
                     return;
                 }
 
+                // Only ever re-point a record Tap itself could have created. Anything else at this
+                // hostname belongs to the user — an A record for a live site, a CNAME to a SaaS
+                // vendor — and silently converting it to a tunnel CNAME takes that hostname down
+                // with no way to tell what it used to be. Make them delete it deliberately.
+                if (!IsTapManagedCname(match))
+                {
+                    throw new InvalidOperationException(
+                        $"DNS record '{fqdn}' already exists as {match.Type} -> '{match.Content}', which Tap did not " +
+                        "create. Refusing to overwrite it. Remove the record in the Cloudflare dashboard (or pick a " +
+                        "different hostname) and run again.");
+                }
+
                 using var patch = NewRequest(HttpMethod.Patch, $"{ApiBase}/zones/{zoneId}/dns_records/{match.Id}");
                 patch.Content = WriteJsonContent(new CfDnsRecordRequest("CNAME", fqdn, targetCname, true));
                 await SendAsync<CfSingleResponse<CfDnsRecord>>(patch, ct);
@@ -160,6 +189,15 @@ public sealed class CloudflareApi(HttpClient http, string apiToken)
         create.Content = WriteJsonContent(new CfDnsRecordRequest("CNAME", fqdn, targetCname, true));
         await SendAsync<CfSingleResponse<CfDnsRecord>>(create, ct);
     }
+
+    /// <summary>
+    /// True when the record looks like one Tap created: a proxied CNAME pointing at a
+    /// <c>*.cfargotunnel.com</c> target. Re-pointing one of those from an old tunnel id to a new
+    /// one is the normal reprovision path; touching anything else is destroying user data.
+    /// </summary>
+    private static bool IsTapManagedCname(CfDnsRecord record) =>
+        string.Equals(record.Type, "CNAME", StringComparison.OrdinalIgnoreCase) &&
+        record.Content.EndsWith(".cfargotunnel.com", StringComparison.OrdinalIgnoreCase);
 
     private HttpRequestMessage NewRequest(HttpMethod method, string url)
     {

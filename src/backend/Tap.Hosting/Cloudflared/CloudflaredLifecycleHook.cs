@@ -127,13 +127,24 @@ internal sealed class CloudflaredLifecycleHook(
                 credsPath = existingPath;
                 logger.LogInformation("Reusing Cloudflare tunnel '{Name}' ({Id}).", cfTunnel.Name, cfTunnel.Id);
             }
-            else
+            else if (!tunnel.HasAnnotationOfType<CloudflaredRecreateOnMissingCredentialsAnnotation>())
             {
                 // The remote tunnel exists but we have no local TunnelSecret to authenticate
                 // cloudflared with (the API never returns the secret for existing tunnels).
-                // Auto-recover: delete the remote tunnel and recreate it with fresh creds.
+                // The only automatic recovery is destructive — deleting a tunnel that may be
+                // shared with other machines, CI, or a colleague's dashboard config — so we
+                // refuse and let the operator decide, exactly as the CLI does.
+                throw new InvalidOperationException(
+                    $"Cloudflare tunnel '{existing.Name}' ({existing.Id}) already exists but no local credentials "
+                    + $"file was found at '{existingPath}'. Cloudflare never returns an existing tunnel's secret, so "
+                    + "Tap cannot connect to it. Delete the tunnel in the Cloudflare dashboard (or `cloudflared tunnel "
+                    + $"delete {existing.Name}`) and re-run, use a different tunnel name, or opt in to automatic "
+                    + "recreation with .WithApiManagedTunnel(..., recreateOnMissingCredentials: true).");
+            }
+            else
+            {
                 logger.LogWarning(
-                    "Cloudflare tunnel '{Name}' ({Id}) exists remotely but no local credentials file at '{Path}'. Deleting and recreating to recover.",
+                    "Cloudflare tunnel '{Name}' ({Id}) exists remotely but no local credentials file at '{Path}'. Deleting and recreating (recreateOnMissingCredentials was opted in).",
                     existing.Name, existing.Id, existingPath);
                 await api.DeleteTunnelAsync(tunnel.AccountId!, existing.Id, ct);
 
@@ -218,14 +229,19 @@ internal sealed class CloudflaredLifecycleHook(
 
                 var zoneId = zoneIdForDns ?? await ResolveZoneIdForFqdnAsync(api, entry.Hostname, ct);
                 var target = $"{cfTunnel.Id}.cfargotunnel.com";
+                // EnsureDnsCnameAsync refuses to convert a record Tap did not create, so a
+                // pre-existing A record or a CNAME to somewhere else surfaces as an error here
+                // rather than quietly taking the user's hostname over.
                 await api.EnsureDnsCnameAsync(zoneId, entry.Hostname, target, ct);
                 logger.LogInformation("DNS CNAME ensured: {Host} -> {Target} (proxied).", entry.Hostname, target);
             }
         }
     }
 
+    // Must agree with CloudflareApi.WriteCredentialsFileAsync: if the two ever disagree, a named
+    // tunnel looks credential-less on every start and gets deleted and recreated.
     private static string LocalCredentialsPath(CfTunnel cfTunnel) =>
-        Path.Combine(Path.GetTempPath(), $"cloudflared-{cfTunnel.Name}-{cfTunnel.Id}.json");
+        CloudflareApi.CredentialsPathFor(cfTunnel.Name, cfTunnel.Id);
 
     private static async Task<string> ResolveZoneIdForFqdnAsync(CloudflareApi api, string fqdn, CancellationToken ct)
     {

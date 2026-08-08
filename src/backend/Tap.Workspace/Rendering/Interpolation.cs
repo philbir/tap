@@ -27,7 +27,13 @@ public static partial class Interpolation
 {
     // Either `{{name}}` or `{{provider:name}}`. Provider must match the same shape as a
     // configured provider name (letters/digits/_-).
-    [GeneratedRegex(@"(?<!\\)\{\{\s*(?:(?<provider>[a-zA-Z][a-zA-Z0-9_-]*)\s*:\s*)?(?<name>[^}\s][^}]*?)\s*\}\}")]
+    //
+    // The lazy `[^}]*?` next to `\s*` backtracks quadratically on a long unterminated `{{`, and the
+    // text being scanned comes out of a workspace file — so the match is bounded by a 2 s timeout
+    // rather than left to run for as long as the input allows. The pattern itself is unchanged:
+    // rewriting it to remove the nested quantifier would change which spans it captures.
+    [GeneratedRegex(@"(?<!\\)\{\{\s*(?:(?<provider>[a-zA-Z][a-zA-Z0-9_-]*)\s*:\s*)?(?<name>[^}\s][^}]*?)\s*\}\}",
+        RegexOptions.None, 2000)]
     private static partial Regex TokenRegex();
 
     public static async ValueTask<string> ExpandAsync(
@@ -36,8 +42,21 @@ public static partial class Interpolation
         VariableProviderRegistry registry,
         CancellationToken ct)
     {
-        var matches = TokenRegex().Matches(input);
-        if (matches.Count == 0) return input.Replace(@"\{{", "{{");
+        List<Match> matches;
+        try
+        {
+            // MatchCollection is lazy — materialize inside the try so a timeout surfaces here and
+            // not from some later enumeration.
+            matches = TokenRegex().Matches(input).ToList();
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_HTTP_BLOCK_SYNTAX,
+                "Timed out scanning for {{variable}} tokens. The text is too large or contains an unterminated '{{'."));
+        }
+
+        if (matches.Count == 0) return Unescape(input);
 
         // Resolve each unique token once.
         var resolved = new Dictionary<string, string>(matches.Count, StringComparer.Ordinal);
@@ -72,15 +91,21 @@ public static partial class Interpolation
             }
         }
 
+        // Unescape the literal segments individually rather than the finished string: a resolved
+        // value is emitted verbatim and never re-read, so nothing a provider returns can influence
+        // the escaping of the text around it.
         var sb = new StringBuilder(input.Length);
         var cursor = 0;
         foreach (Match m in matches)
         {
-            sb.Append(input, cursor, m.Index - cursor);
+            sb.Append(Unescape(input[cursor..m.Index]));
             sb.Append(resolved[m.Value]);
             cursor = m.Index + m.Length;
         }
-        sb.Append(input, cursor, input.Length - cursor);
-        return sb.ToString().Replace(@"\{{", "{{");
+        sb.Append(Unescape(input[cursor..]));
+        return sb.ToString();
     }
+
+    /// <summary><c>\{{</c> is the escape for a literal <c>{{</c>.</summary>
+    private static string Unescape(string literal) => literal.Replace(@"\{{", "{{");
 }

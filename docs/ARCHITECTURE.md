@@ -281,7 +281,7 @@ The server itself does not care whether options came from a terminal command or 
 
 ## Auth Boundary
 
-The inspector UI port is local control-plane traffic and is not gated by Tap auth. The proxy port can enforce `Inspector:Auth` checks before requests reach the upstream:
+The inspector UI port is local control-plane traffic and is not gated by Tap auth. It is instead confined to the local machine: it binds to `localhost`, answers only to a loopback `Host` header (or one listed in `Inspector:UiAllowedHosts`) so DNS rebinding cannot reach it, rejects cross-site browser requests via `Sec-Fetch-Site`, and redacts credentials from `/api/profiles`. The proxy port can enforce `Inspector:Auth` checks before requests reach the upstream:
 
 | Mechanism | Source |
 |---|---|

@@ -81,6 +81,18 @@ internal sealed class WebSocketExecutor
             return 0;
         }
 
+        // The renderer rewrites http/https to ws/wss for a websocket block, so anything else here
+        // is an exotic scheme that slipped through — report it as a frame rather than letting
+        // ClientWebSocket throw an opaque ArgumentException at connect time.
+        if (uri.Scheme is not ("ws" or "wss"))
+        {
+            var message = $"WebSocket requests must use ws:// or wss:// — got '{uri.Scheme}://'.";
+            await emitMeta(0, message, new Dictionary<string, string>(), null, ct).ConfigureAwait(false);
+            await emitFrame(new ExecuteStreamWsDto(seq++, "system", "error", message, null, 0, null, null,
+                sw.Elapsed.TotalMilliseconds), ct).ConfigureAwait(false);
+            return 0;
+        }
+
         try
         {
             await ws.ConnectAsync(uri, ct).ConfigureAwait(false);

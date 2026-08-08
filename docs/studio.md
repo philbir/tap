@@ -340,11 +340,20 @@ The Tauri shell spawns the `Tap.Studio` sidecar, reads a one-line JSON handshake
 stdout to learn the bound URL, and points the webview at it. The SPA is served by the sidecar
 itself, so the UI and the API are same-origin and `fetch('/api/...')` needs no plumbing.
 
-Two things the desktop build changes:
+Three things the desktop build changes:
 
 - **OAuth callbacks** use the registered `tap-studio://` URL scheme, so identity providers get
   a stable redirect URI to register instead of a random loopback port.
 - **Updates** are signed and delivered through Tauri's updater.
+- **The boot workspace** defaults to `<system dir>/workspace` (created and scaffolded on first
+  run) rather than the process's working directory. An app launched from Finder or the Dock
+  inherits `/` as its working directory, and treating that as a workspace root means scanning
+  the whole disk before the window can open.
+
+If the window is still on the splash after a few seconds it names the phase it is waiting on;
+after 45s (`TAP_STUDIO_STARTUP_TIMEOUT_SECS`) it explains itself, with the tail of the
+backend's output, the path to `~/Library/Logs/dev.philbir.tap-studio/studio.log`, and a retry
+button. The backend keeps starting behind that screen, so a slow first scan still lands.
 
 Full build, signing, and release details: [src/desktop/README.md](../src/desktop/README.md).
 
@@ -354,7 +363,7 @@ Full build, signing, and release details: [src/desktop/README.md](../src/desktop
 
 | Key | Purpose |
 |---|---|
-| `Studio:WorkspaceRoot` | Workspace to open on boot. The active workspace is then remembered in `workspaces.json`. |
+| `Studio:WorkspaceRoot` | Workspace to open on boot. The active workspace is then remembered in `workspaces.json`. Defaults to the working directory, or to `<system dir>/workspace` under the desktop shell. The folder walk is bounded (20s / 25 000 folders, skipping `node_modules`, `.git`, `bin`, `obj`, …) — a root that is too broad loads partially and says so instead of hanging. |
 | `Studio:Port` / `Studio:Host` | Where Kestrel binds. Default `localhost:5298`. |
 | `Studio:StatePath` | State database path. Default `<system dir>/state.db`. |
 | `Studio:VariableProviders:[]` | System-level variable providers, same shape as workspace ones (`name`, `type`, `mode`, `settings`). |
@@ -362,4 +371,5 @@ Full build, signing, and release details: [src/desktop/README.md](../src/desktop
 | `TAP_VARS_ALLOWED` | Comma-separated globs of environment variable names the `env` provider may expose in cleartext. |
 | `TAP_SECRETS_ALLOWED` | Comma-separated globs of environment variable names the `env` provider may resolve while keeping them masked. |
 | `TAP_STUDIO_DESKTOP` | Set by the desktop shell; switches the OAuth callback to `tap-studio://callback`. |
-| `TAP_STUDIO_EMIT_READY` | Makes the sidecar print its `studio.ready` handshake line on stdout. |
+| `TAP_STUDIO_EMIT_READY` | Makes the sidecar narrate startup on stdout as JSON (`studio.progress` / `studio.error` / `studio.ready`) for the desktop shell to render. |
+| `TAP_STUDIO_STARTUP_TIMEOUT_SECS` | Read by the desktop shell: how long to wait for `studio.ready` before the splash explains itself. Default 45; `0` waits forever. |

@@ -58,9 +58,12 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         {
             if (collection is null || string.IsNullOrWhiteSpace(collection.BaseUrl) && string.IsNullOrWhiteSpace(stage?.BaseUrl))
             {
+                // The URL has already been through interpolation, so it can carry a resolved secret
+                // — name the request instead of echoing it.
                 throw new WorkspaceParseException(new WorkspaceError(
                     WorkspaceErrorCode.E_HTTP_BLOCK_SYNTAX,
-                    $"URL '{url}' is not absolute and the owning collection has no baseUrl to fall back on."));
+                    "The request URL is not absolute and the owning collection has no baseUrl to fall back on.",
+                    request.RelativePath));
             }
             var baseUrlSource = !string.IsNullOrWhiteSpace(stage?.BaseUrl) ? stage!.BaseUrl! : collection.BaseUrl;
             var baseUrl = await Interpolation.ExpandAsync(baseUrlSource, cascade, registry, ct).ConfigureAwait(false);
@@ -73,24 +76,39 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         }
 
         // Headers: collection.defaultHeaders < block headers < auth-derived.
-        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (collection is not null) foreach (var (k, v) in collection.DefaultHeaders) headers[k] = v;
-        foreach (var (k, v) in parsed.Headers) headers[k] = v;
-        ApplyAuthHeaders(auth, headers);
+        //
+        // Each source is interpolated exactly once. The block's own headers and body were expanded
+        // as part of `expandedBlock` above and are carried through verbatim; running them through a
+        // second pass would let a resolved value that happens to contain `{{…}}` kick off another
+        // round of provider lookups — second-order injection straight out of a workspace file.
+        var resolvedHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (collection is not null)
+        {
+            foreach (var (k, v) in collection.DefaultHeaders)
+                resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct).ConfigureAwait(false);
+        }
+        foreach (var (k, v) in parsed.Headers) resolvedHeaders[k] = v;
 
-        var resolvedHeaders = new Dictionary<string, string>(headers.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var (k, v) in headers)
+        var authHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        ApplyAuthHeaders(auth, authHeaders);
+        foreach (var (k, v) in authHeaders)
             resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct).ConfigureAwait(false);
-        var resolvedBody = parsed.Body is null
-            ? null
-            : await Interpolation.ExpandAsync(parsed.Body, cascade, registry, ct).ConfigureAwait(false);
+
+        // Re-check the fully assembled request line and headers: the baseUrl, the collection
+        // defaults and the auth-derived values never passed through HttpBlockParser's own guard.
+        HttpBlockParser.EnsureNoLineBreaks("The request URL", url);
+        foreach (var (k, v) in resolvedHeaders)
+        {
+            HttpBlockParser.EnsureNoLineBreaks("A header name", k);
+            HttpBlockParser.EnsureNoLineBreaks($"The '{k}' header value", v);
+        }
 
         return new ResolvedRequest
         {
             Method = parsed.Method,
             Url = url,
             Headers = resolvedHeaders,
-            Body = resolvedBody,
+            Body = parsed.Body,
             Protocol = request.Protocol,
             Metadata = new ResolvedRequestMetadata
             {

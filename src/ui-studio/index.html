@@ -2,6 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!--
+      Studio renders response bodies and headers from whatever host the user pointed a request
+      at, so treat the workbench origin as hostile-adjacent: no remote or inline script.
+      `'unsafe-inline'` is needed on style-src only — Mantine and CodeMirror both inject
+      <style> elements at runtime. `ipc:`/`http://ipc.localhost` keep Tauri's IPC bridge
+      working when the desktop shell loads this page from the local sidecar (the shell's own
+      CSP lives in src-tauri/tauri.conf.json). The sha256 is the Fast Refresh preamble
+      @vitejs/plugin-react injects inline during `yarn dev` only — regenerate it if that
+      plugin's preamble changes, or dev white-screens.
+      `worker-src 'self' blob:` is for Monaco's language services. Vite emits the workers as
+      same-origin chunks, which `'self'` alone would cover, but Monaco keeps a blob-URL
+      fallback in its worker loader and a blocked worker takes the editor down rather than
+      degrading. Allowing it costs little: a blob worker can only be minted by script that is
+      already running on this origin, which `script-src` still governs.
+      `frame-ancestors` is ignored in a meta tag; Tap.Studio must send it as a header.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
+    />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/svg+xml" href="/tap-studio-icon.svg" />
     <link rel="alternate icon" type="image/png" href="/tap-studio-icon-512.png" />

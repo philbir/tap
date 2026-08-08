@@ -385,8 +385,11 @@ public sealed class OnePasswordVariableProviderFactory : IVariableProviderFactor
             {
                 Key = "cliPath",
                 Label = "op CLI path",
-                Description = "Leave empty to auto-detect: TAP_OP_CLI, then the usual install locations, then PATH.",
+                Description = "Leave empty to auto-detect: TAP_OP_CLI, then the usual install locations, then PATH. "
+                    + "System-scope providers only — a workspace file cannot choose which binary Tap runs.",
                 Picker = "1password-cli",
+                // This setting names an executable, and tap.md travels with a cloned repo.
+                SystemScopeOnly = true,
                 Note = new ProviderFieldNote
                 {
                     Text = "This provider shells out to the 1Password CLI, so `op` must be installed on this machine.",

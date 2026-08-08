@@ -198,6 +198,9 @@ public static class TailscaleExtensions
                 TunnelMode = tunnel.Resource.UseEphemeralDaemon ? "tailscale-ephemeral" : "tailscale-system",
                 TunnelName = tunnel.Resource.Name,
                 PublicUrl = null,
+                // Without this a `tailscale funnel` — live on the public internet — is labelled
+                // "tailnet-only" everywhere the inspector reads the ingress array.
+                PublicExpose = tunnel.Resource.PublicExpose,
             });
         }
 
@@ -249,6 +252,15 @@ public static class TailscaleExtensions
                 ctx.EnvironmentVariables["Inspector__Tunnel__Hostname"] = tunnelResource.MagicDnsName!;
             }
             ctx.EnvironmentVariables["Inspector__Tunnel__Port"] = tunnelResource.FunnelPort.ToString();
+
+            // A Docker-mode daemon reaches the tap through host.docker.internal, which lands on
+            // the host's LAN address and never on its loopback interface. The proxy host defaults
+            // to loopback, so widen it for this configuration only — the tunnel is the intended
+            // path into that port either way.
+            if (tunnelResource.HostMode == TailscaleHostMode.Docker)
+            {
+                ctx.EnvironmentVariables["Inspector__ProxyHost"] = "0.0.0.0";
+            }
 
             // Ephemeral mode: pass the per-resource socket path so Tap.Server can query
             // the right tailscaled instance (system mode leaves this null → CLI default).

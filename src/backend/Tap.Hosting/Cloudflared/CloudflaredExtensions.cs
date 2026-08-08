@@ -7,6 +7,14 @@ using Tap.Core.Cloudflared;
 
 namespace Aspire.Hosting;
 
+/// <summary>
+/// Opt-in marker: the lifecycle hook may DELETE and recreate the remote named tunnel when the
+/// local credentials file is missing. Absent this, that situation is a hard error — recreating
+/// drops every connector and dashboard ingress rule on a tunnel the account may share with
+/// other machines.
+/// </summary>
+internal sealed class CloudflaredRecreateOnMissingCredentialsAnnotation : IResourceAnnotation;
+
 public static class CloudflaredExtensions
 {
     /// <summary>
@@ -145,14 +153,27 @@ public static class CloudflaredExtensions
     /// local-ingress mode. Requires an API token with Account:Cloudflare Tunnel:Edit, plus DNS:Edit
     /// on the target zone if any ingress entry is publicly exposed.
     /// </summary>
+    /// <param name="recreateOnMissingCredentials">
+    /// When the named tunnel already exists remotely but its credentials file is gone from this
+    /// machine, delete the remote tunnel and recreate it. Off by default: Cloudflare never hands
+    /// back an existing tunnel's secret, so the only automatic recovery destroys a tunnel that
+    /// other machines or dashboard ingress rules may depend on. Left off, the mismatch is a
+    /// startup error telling you to delete it yourself.
+    /// </param>
     public static IResourceBuilder<CloudflaredTunnelResource> WithApiManagedTunnel(
         this IResourceBuilder<CloudflaredTunnelResource> builder,
         string apiToken,
         string accountId,
-        string? tunnelName = null)
+        string? tunnelName = null,
+        bool recreateOnMissingCredentials = false)
     {
         if (string.IsNullOrWhiteSpace(apiToken)) throw new ArgumentException("API token required.", nameof(apiToken));
         if (string.IsNullOrWhiteSpace(accountId)) throw new ArgumentException("Account ID required.", nameof(accountId));
+
+        if (recreateOnMissingCredentials)
+        {
+            builder.Resource.Annotations.Add(new CloudflaredRecreateOnMissingCredentialsAnnotation());
+        }
 
         builder.Resource.UseLocalIngress = true;
         builder.Resource.ApiToken = apiToken;

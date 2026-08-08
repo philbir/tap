@@ -82,6 +82,7 @@ public sealed class CopilotCliProvider : IAiProvider
     {
         if (!cli.Found)
         {
+            if (cli.Rejection is { } rejected) return rejected;
             return cli.Source is CliSource.Override or CliSource.Env
                 ? $"Copilot CLI path \"{cli.Command}\" does not exist. Set the full path in AI settings or {EnvOverride}."
                 : "Install the GitHub Copilot CLI (https://docs.github.com/copilot/github-copilot-cli) and sign in once. "
@@ -98,10 +99,20 @@ public sealed class CopilotCliProvider : IAiProvider
     private static string IsolatedConfigDir()
     {
         if (s_isolatedConfigDir is not null) return s_isolatedConfigDir;
-        var dir = Path.Combine(Path.GetTempPath(), "tap-copilot-cfg");
+        // Per-user, not shared temp: a fixed /tmp path can be pre-created by another local user,
+        // who would then own the config the CLI loads. Temp is only the last resort, and the
+        // 0700 below narrows that case as far as it can.
+        var root = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        if (string.IsNullOrEmpty(root)) root = Path.GetTempPath();
+        var dir = Path.Combine(root, "tap", "copilot-home");
         try
         {
             Directory.CreateDirectory(dir);
+            if (!OperatingSystem.IsWindows())
+            {
+                try { File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute); }
+                catch { /* not ours to chmod, or a filesystem without modes — the path is still per-user */ }
+            }
             var mcp = Path.Combine(dir, "mcp-config.json");
             if (!File.Exists(mcp)) File.WriteAllText(mcp, "{}\n");
         }
@@ -164,18 +175,27 @@ public sealed class CopilotCliProvider : IAiProvider
         var userPrompt = FlattenConversation(input.Messages);
         var combined = $"## Instructions\n\n{input.SystemPrompt}\n\n## Request\n\n{userPrompt}";
 
+        // The assistant's whole contract is to return a tap-request block, so it gets no tools —
+        // which matters because the prompt splices in collection/variable text read off disk,
+        // and a cloned workspace must not be able to talk the agent into running a shell command.
+        // `--available-tools` is a filter (unlike --deny-tool, which only governs the approval
+        // prompt): naming a tool that doesn't exist leaves the model with an empty tool set, so
+        // there is nothing left to confirm and no need for the old --allow-all-tools.
         var args = new List<string>
         {
             "-p", combined,
             "--output-format", "json",
             "--no-color",
-            "--allow-all-tools",
+            "--available-tools=none",
+            "--disable-builtin-mcps",
         };
         if (!string.IsNullOrWhiteSpace(useModel)) { args.Add("--model"); args.Add(useModel); }
 
         var env = new Dictionary<string, string> { ["COPILOT_HOME"] = IsolatedConfigDir() };
+        // Empty stdin rather than null: it closes the pipe, so a CLI that ever does decide to
+        // ask something gets EOF and gives up instead of blocking until our 3-minute timeout.
         var (code, stdout, stderr) = await CliLocator
-            .RunAsync(_cli.Command, args, stdin: null, TimeSpan.FromMinutes(3), ct, env)
+            .RunAsync(_cli.Command, args, stdin: "", TimeSpan.FromMinutes(3), ct, env)
             .ConfigureAwait(false);
 
         string assistant = "";
@@ -272,9 +292,9 @@ public sealed class CopilotCliProvider : IAiProvider
         if (!cli.Found)
         {
             return new CliDetection(false, cli.Source == CliSource.Fallback ? null : cli.Command, cli.Source, null,
-                cli.Source == CliSource.Fallback
+                cli.Rejection ?? (cli.Source == CliSource.Fallback
                     ? "Could not find Copilot CLI in common install paths or PATH."
-                    : $"Copilot CLI path \"{cli.Command}\" does not exist or is not executable.");
+                    : $"Copilot CLI path \"{cli.Command}\" does not exist or is not executable."));
         }
         try
         {

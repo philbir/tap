@@ -71,6 +71,14 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
             return 2;
         }
 
+        // Validate the auth flags before anything is provisioned: a misconfigured gate has to stop
+        // the run, not start a public tunnel and then discover it has nothing to enforce.
+        if (!TryBuildAuthOptions(merged, out var auth, out var authError))
+        {
+            AnsiConsole.MarkupLine($"[red]✘[/]  [grey]{Markup.Escape(authError!)}[/]");
+            return 2;
+        }
+
         using var loggerFactory = LoggerFactory.Create(b => b.SetMinimumLevel(LogLevel.Information).AddSpectreConsoleLogger());
         // 1) Resolve tunnel mode + provision (if any) — show one spinner per phase.
         var tunnelMode = merged.ResolveMode();
@@ -278,7 +286,6 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
                 PublicExpose = publicExpose,
             },
         };
-        var auth = BuildAuthOptions(merged);
 
         var inspectorOptions = new TapInspectorOptions
         {
@@ -534,26 +541,43 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         }
     });
 
-    private static TapAuthOptions? BuildAuthOptions(MergedSettings s)
+    /// <summary>
+    /// Builds the auth gate from the merged flags, or fails with a message. Nothing here is allowed
+    /// to produce a blank credential: <c>--auth-header "X-Tap-Key=$TAP_KEY"</c> with an unset
+    /// <c>$TAP_KEY</c> would otherwise register a gate with nothing to compare against.
+    /// </summary>
+    private static bool TryBuildAuthOptions(MergedSettings s, out TapAuthOptions? auth, out string? error)
     {
-        var auth = new TapAuthOptions();
+        auth = null;
+        error = null;
+
+        var built = new TapAuthOptions();
         if (!string.IsNullOrWhiteSpace(s.AuthHeader))
         {
             var parts = s.AuthHeader.Split('=', 2);
-            if (parts.Length == 2) auth.Header = new HeaderAuthOptions { Name = parts[0], Value = parts[1] };
+            if (parts.Length != 2 || string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1]))
+            {
+                error = "--auth-header must be NAME=VALUE with a non-empty value " +
+                    $"(got '{parts[0]}=…'). An empty value would register the auth gate with nothing to check " +
+                    "— if $TAP_KEY is unset in your shell, that is what happened.";
+                return false;
+            }
+            built.Header = new HeaderAuthOptions { Name = parts[0], Value = parts[1] };
         }
-        if (s.AuthCidrs is { Length: > 0 }) auth.AllowedCidrs = [.. s.AuthCidrs];
-        if (s.AuthCountries is { Length: > 0 }) auth.AllowedCountries = [.. s.AuthCountries.Select(c => c.ToUpperInvariant())];
+        if (s.AuthCidrs is { Length: > 0 }) built.AllowedCidrs = [.. s.AuthCidrs];
+        if (s.AuthCountries is { Length: > 0 }) built.AllowedCountries = [.. s.AuthCountries.Select(c => c.ToUpperInvariant())];
         if (!string.IsNullOrWhiteSpace(s.OidcAuthority) && !string.IsNullOrWhiteSpace(s.OidcClientId))
         {
-            auth.Oidc = new OidcAuthOptions
+            built.Oidc = new OidcAuthOptions
             {
                 Authority = s.OidcAuthority,
                 ClientId = s.OidcClientId,
                 ClientSecret = s.OidcClientSecret,
             };
         }
-        return auth.AnyConfigured ? auth : null;
+
+        auth = built.AnyConfigured ? built : null;
+        return true;
     }
 
     private static void PrintBanner(MergedSettings s, TapInspectorOptions opts, InspectorIngressEntry ingress)
@@ -571,14 +595,17 @@ public sealed class RunCommand : AsyncCommand<RunCommand.Settings>
         if (!string.IsNullOrEmpty(ingress.PublicUrl))
             Row("Open on phone", $"[link=http://localhost:{opts.UiPort}/#qr]http://localhost:{opts.UiPort}/#qr[/]  [grey](QR code)[/]");
         if (!string.IsNullOrEmpty(opts.TunnelMode)) Row("Tunnel", opts.TunnelMode!);
-        if (opts.Auth is not null)
+        if (opts.Auth is { } auth)
         {
+            // Only the checks that will actually execute. Deriving this from non-nullness is how a
+            // blank credential ended up being announced as enforced auth.
             var bits = new List<string>();
-            if (opts.Auth.Header is not null) bits.Add($"header({opts.Auth.Header.Name})");
-            if (opts.Auth.AllowedCidrs is { Count: > 0 }) bits.Add($"cidr×{opts.Auth.AllowedCidrs.Count}");
-            if (opts.Auth.AllowedCountries is { Count: > 0 }) bits.Add($"country×{opts.Auth.AllowedCountries.Count}");
-            if (opts.Auth.Oidc is not null) bits.Add("oidc");
-            Row("Auth", string.Join(" + ", bits));
+            if (auth.HeaderConfigured) bits.Add($"header({auth.Header!.Name})");
+            if (auth.JwtConfigured) bits.Add("jwt");
+            if (auth.AllowedCidrs is { Count: > 0 }) bits.Add($"cidr×{auth.AllowedCidrs.Count}");
+            if (auth.AllowedCountries is { Count: > 0 }) bits.Add($"country×{auth.AllowedCountries.Count}");
+            if (auth.Oidc is not null) bits.Add("oidc");
+            Row("Auth", bits.Count > 0 ? string.Join(" + ", bits) : "[red]none enforced[/]");
         }
         var panel = new Panel(grid)
             .Header("[bold] tap [/]", Justify.Left)

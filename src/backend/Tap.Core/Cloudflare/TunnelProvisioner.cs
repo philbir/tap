@@ -1,4 +1,6 @@
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
+using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
 namespace Tap.Core.Cloudflare;
@@ -197,7 +199,7 @@ public sealed class TunnelProvisioner(ILogger<TunnelProvisioner> logger)
 
     private static string ExistingCredentialsPathOrThrow(CfTunnel cfTunnel)
     {
-        var path = Path.Combine(Path.GetTempPath(), $"cloudflared-{cfTunnel.Name}-{cfTunnel.Id}.json");
+        var path = CloudflareApi.CredentialsPathFor(cfTunnel.Name, cfTunnel.Id);
         if (File.Exists(path)) return path;
 
         throw new InvalidOperationException(

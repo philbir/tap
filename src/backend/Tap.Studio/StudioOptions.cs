@@ -13,8 +13,24 @@ public sealed class StudioOptions
 
     public string Host { get; init; } = "localhost";
 
+    /// <summary>
+    /// Host header values the API will answer to, on top of the loopback literals and
+    /// <see cref="Host"/>. Bound from <c>Studio:AllowedHosts</c> as a comma-separated list.
+    /// Only needed when Studio is deliberately bound to a wildcard or non-loopback address —
+    /// otherwise the defaults already cover every way you can reach it.
+    /// </summary>
+    public string[] AllowedHosts { get; init; } = [];
+
     /// <summary>Absolute path to the workspace root (the folder containing <c>.tap/</c>).</summary>
     public required string WorkspaceRoot { get; init; }
+
+    /// <summary>
+    /// True when Studio is hosted by the Tauri desktop shell (<c>TAP_STUDIO_DESKTOP=1</c>).
+    /// Changes two things: the OAuth callback becomes the <c>tap-studio://</c> deep link, and
+    /// the boot workspace defaults to <c>&lt;system dir&gt;/workspace</c> instead of the process's
+    /// working directory (see <see cref="FromConfiguration"/>).
+    /// </summary>
+    public required bool DesktopShell { get; init; }
 
     /// <summary>
     /// Path to the local SQLite DB for history / UI state. Lives under the user profile, not in
@@ -40,8 +56,8 @@ public sealed class StudioOptions
     {
         var port = config.GetValue<int?>("Studio:Port") ?? 5298;
         var host = config["Studio:Host"] ?? "localhost";
-        var workspace = config["Studio:WorkspaceRoot"]
-            ?? Environment.CurrentDirectory;
+        var desktop = string.Equals(
+            Environment.GetEnvironmentVariable("TAP_STUDIO_DESKTOP"), "1", StringComparison.Ordinal);
         var systemDir = Environment.GetEnvironmentVariable("TAP_SYSTEM_DIR");
         if (string.IsNullOrWhiteSpace(systemDir))
         {
@@ -51,6 +67,18 @@ public sealed class StudioOptions
         }
         systemDir = Path.GetFullPath(systemDir);
 
+        // The CLI is run *from* a workspace, so the working directory is the right default
+        // there. A desktop app has no such thing: an .app launched from Finder or the Dock
+        // inherits "/" as its working directory, and taking that as a workspace root means
+        // the first thing Studio does on a fresh machine is walk the entire disk looking for
+        // *.md — which is a startup that never finishes. Give the shell its own folder
+        // instead; the user switches from there and the choice is remembered.
+        var workspace = config["Studio:WorkspaceRoot"];
+        if (string.IsNullOrWhiteSpace(workspace))
+        {
+            workspace = desktop ? Path.Combine(systemDir, "workspace") : Environment.CurrentDirectory;
+        }
+
         var state = config["Studio:StatePath"]
             ?? Path.Combine(systemDir, "state.db");
 
@@ -58,6 +86,9 @@ public sealed class StudioOptions
         {
             Port = port,
             Host = host,
+            DesktopShell = desktop,
+            AllowedHosts = (config["Studio:AllowedHosts"] ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             WorkspaceRoot = Path.GetFullPath(workspace),
             StatePath = Path.GetFullPath(state),
             SystemDir = systemDir,

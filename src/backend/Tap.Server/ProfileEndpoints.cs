@@ -7,18 +7,30 @@ namespace Tap.Server;
 /// <summary>
 /// REST endpoints over <see cref="TunnelProfileStore"/> so the inspector UI can list,
 /// edit, and delete the named tunnel profiles consumed by the <c>tap</c> CLI.
-/// Bound to the UI port (local control plane), so values are returned as-is — including
-/// credentials that already live on disk in plaintext under the profiles directory.
+///
+/// <para>Bound to the UI port (local control plane), but "local" is not an authorization
+/// boundary: a browser will happily talk to loopback on behalf of any page, so these
+/// responses are treated as if they could reach a hostile reader. Credentials
+/// (<see cref="TunnelProfile.SecretFieldNames"/>) are therefore replaced with
+/// <see cref="RedactedValue"/> on the way out, and only <c>POST /api/profiles/{name}/reveal</c>
+/// returns them in the clear.</para>
 /// </summary>
 internal static class ProfileEndpoints
 {
+    /// <summary>
+    /// Placeholder substituted for a stored credential. A PUT that echoes it back keeps
+    /// whatever is already on disk, so the editor can round-trip a profile it was never shown
+    /// the secrets for — without the mask overwriting the real value.
+    /// </summary>
+    internal const string RedactedValue = "__tap_redacted__";
+
     public static void Map(IEndpointRouteBuilder ep)
     {
         var store = new TunnelProfileStore();
 
         ep.MapGet("/api/profiles", () =>
         {
-            var profiles = store.ListAll().ToArray();
+            var profiles = store.ListAll().Select(Redact).ToArray();
             return Results.Json(profiles, TunnelProfileJson.Default.TunnelProfileArray);
         });
 
@@ -30,7 +42,29 @@ internal static class ProfileEndpoints
             var p = store.Load(name);
             return p is null
                 ? Results.NotFound(new { error = $"profile '{name}' not found" })
-                : Results.Json(p, TunnelProfileJson.Default.TunnelProfile);
+                : Results.Json(Redact(p), TunnelProfileJson.Default.TunnelProfile);
+        });
+
+        // Deliberately POST, not GET. This is the one route that emits cleartext credentials,
+        // so it should also be covered by the unsafe-method Origin/Referer check in
+        // TapInspectorHost — and never be reachable by a bare <img>/<script>/EventSource.
+        ep.MapPost("/api/profiles/{name}/reveal", (string name) =>
+        {
+            TunnelProfile? p;
+            try
+            {
+                p = store.Load(name);
+            }
+            catch (ArgumentException ex)
+            {
+                return Results.BadRequest(new { error = ex.Message });
+            }
+
+            return p is null
+                ? Results.NotFound(new { error = $"profile '{name}' not found" })
+                : Results.Json(
+                    new ProfileSecrets(p.Token, p.ApiToken, p.TailscaleAuthKey, p.OidcClientSecret),
+                    ProfileEndpointsJsonContext.Default.ProfileSecrets);
         });
 
         ep.MapPut("/api/profiles/{name}", async (string name, HttpRequest req) =>
@@ -50,30 +84,19 @@ internal static class ProfileEndpoints
 
             try
             {
-                var profile = new TunnelProfile
-                {
-                    Name = name,
-                    Upstream = body.Upstream,
-                    ProxyPort = body.ProxyPort,
-                    UiPort = body.UiPort,
-                    TunnelMode = body.TunnelMode,
-                    Token = body.Token,
-                    ApiToken = body.ApiToken,
-                    AccountId = body.AccountId,
-                    ApiManagedTunnelName = body.ApiManagedTunnelName,
-                    DynamicZone = body.DynamicZone,
-                    Hostname = body.Hostname,
-                    Docker = body.Docker,
-                    AutoInstall = body.AutoInstall,
-                    AuthHeader = body.AuthHeader,
-                    AuthCidrs = body.AuthCidrs,
-                    AuthCountries = body.AuthCountries,
-                    OidcAuthority = body.OidcAuthority,
-                    OidcClientId = body.OidcClientId,
-                    OidcClientSecret = body.OidcClientSecret,
-                };
+                // A field left at the redaction placeholder means "unchanged" — resolve it
+                // against what is already on disk rather than writing the mask over the secret.
+                var existing = store.Load(name);
+                var profile = body
+                    .WithName(name)
+                    .WithSecrets(
+                        Unmask(body.Token, existing?.Token),
+                        Unmask(body.ApiToken, existing?.ApiToken),
+                        Unmask(body.TailscaleAuthKey, existing?.TailscaleAuthKey),
+                        Unmask(body.OidcClientSecret, existing?.OidcClientSecret));
+
                 store.Save(profile);
-                return Results.Json(profile, TunnelProfileJson.Default.TunnelProfile);
+                return Results.Json(Redact(profile), TunnelProfileJson.Default.TunnelProfile);
             }
             catch (ArgumentException ex)
             {
@@ -93,10 +116,26 @@ internal static class ProfileEndpoints
             }
         });
     }
+
+    /// <summary>
+    /// Swaps every credential for <see cref="RedactedValue"/>. Absent stays absent, so the UI
+    /// can still tell "no token configured" from "a token is set but hidden".
+    /// </summary>
+    private static TunnelProfile Redact(TunnelProfile p) => p.WithSecrets(
+        Mask(p.Token), Mask(p.ApiToken), Mask(p.TailscaleAuthKey), Mask(p.OidcClientSecret));
+
+    private static string? Mask(string? value) => string.IsNullOrEmpty(value) ? value : RedactedValue;
+
+    private static string? Unmask(string? incoming, string? stored) =>
+        string.Equals(incoming, RedactedValue, StringComparison.Ordinal) ? stored : incoming;
 }
 
 internal sealed record ProfileDirInfo(string root);
 
+internal sealed record ProfileSecrets(
+    string? Token, string? ApiToken, string? TailscaleAuthKey, string? OidcClientSecret);
+
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(ProfileDirInfo))]
+[JsonSerializable(typeof(ProfileSecrets))]
 internal sealed partial class ProfileEndpointsJsonContext : JsonSerializerContext;

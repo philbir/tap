@@ -137,13 +137,44 @@ public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory
         }
         try
         {
-            return factory.Create(cfg, context);
+            return factory.Create(StripSystemScopeOnly(cfg, factory.Descriptor), context);
         }
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Failed to instantiate variable provider '{Name}' (type {Type}).", cfg.Name, cfg.Type);
             return null;
         }
+    }
+
+    /// <summary>
+    /// Drops settings the descriptor marks system-scope-only when the config came out of the
+    /// workspace. <c>tap.md</c> is cloned along with a repository, so a field like 1Password's
+    /// <c>cliPath</c> — which decides what binary gets spawned, on a code path as innocuous as
+    /// rendering the variables panel — must never be honoured from there. The drop is logged so
+    /// the setting doesn't just silently do nothing.
+    /// </summary>
+    private VariableProviderConfig StripSystemScopeOnly(VariableProviderConfig cfg, ProviderTypeDescriptor descriptor)
+    {
+        if (cfg.Origin != ProviderOrigin.Workspace) return cfg;
+
+        var blocked = new HashSet<string>(descriptor.SystemScopeOnlyFieldKeys, StringComparer.OrdinalIgnoreCase);
+        if (blocked.Count == 0) return cfg;
+
+        var dropped = cfg.Settings
+            .Where(kv => blocked.Contains(kv.Key) && !string.IsNullOrWhiteSpace(kv.Value))
+            .Select(kv => kv.Key)
+            .ToArray();
+        if (dropped.Length == 0) return cfg;
+
+        logger.LogWarning(
+            "Provider '{Name}' (type {Type}) sets {Keys} in workspace frontmatter — ignored. "
+            + "These settings are only read from system-scope provider configuration.",
+            cfg.Name, cfg.Type, string.Join(", ", dropped));
+
+        var settings = cfg.Settings
+            .Where(kv => !blocked.Contains(kv.Key))
+            .ToDictionary(kv => kv.Key, kv => kv.Value, StringComparer.OrdinalIgnoreCase);
+        return cfg with { Settings = settings };
     }
 
     private static string HashConfig(VariableProviderConfig cfg)

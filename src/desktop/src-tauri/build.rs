@@ -8,7 +8,13 @@ fn main() {
     tauri_build::try_build(
         tauri_build::Attributes::new().app_manifest(
             tauri_build::AppManifest::new()
-                .commands(&["check_for_update", "install_update", "open_external"]),
+                .commands(&[
+                    "check_for_update",
+                    "install_update",
+                    "open_external",
+                    "studio_retry",
+                    "studio_open_log",
+                ]),
         ),
     )
     .expect("failed to run tauri-build");

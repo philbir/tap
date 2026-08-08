@@ -18,6 +18,12 @@ public static class BrowserEndpoints
         {
             if (string.IsNullOrWhiteSpace(body.Url))
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-url", "URL is required.", null, null));
+            // The string becomes an operand of a real browser binary, so anything that isn't an
+            // absolute http(s) URL — a leading-dash Chromium switch, a file:// path, a bare
+            // executable path — is refused before it reaches a launcher.
+            if (!BrowserLauncher.IsLaunchableUrl(body.Url))
+                return Results.BadRequest(new WorkspaceErrorDto(
+                    "invalid-url", "Only absolute http:// or https:// URLs can be opened in a browser.", null, null));
             try
             {
                 BrowserLauncher.Open(body.Url, body.Browser, body.Profile);

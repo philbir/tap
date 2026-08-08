@@ -30,7 +30,7 @@ public sealed class WorkspaceService : IDisposable
     private readonly ProviderRegistryBuilder _registryBuilder;
     private readonly SystemSettingsStore _systemSettings;
     private readonly AuthTokenStore _tokens;
-    private FileSystemWatcher _watcher;
+    private FileSystemWatcher? _watcher;
     private string _root;
     private LoadedWorkspace _workspace;
     private Timer? _debounce;
@@ -48,7 +48,7 @@ public sealed class WorkspaceService : IDisposable
         _systemSettings = systemSettings;
         _tokens = tokens;
         _root = knownWorkspaces.ActivePath;
-        _workspace = _loader.Load(_root);
+        _workspace = Load(_root);
         _watcher = StartWatcher(_root);
     }
 
@@ -110,34 +110,68 @@ public sealed class WorkspaceService : IDisposable
     public void SwitchTo(string newRoot)
     {
         var canonical = Path.GetFullPath(newRoot);
-        FileSystemWatcher oldWatcher;
+        FileSystemWatcher? oldWatcher;
         lock (_gate)
         {
             if (string.Equals(_root, canonical, StringComparison.Ordinal)) return;
             oldWatcher = _watcher;
             _root = canonical;
-            _workspace = _loader.Load(canonical);
+            _workspace = Load(canonical);
             _watcher = StartWatcher(canonical);
             _knownWorkspaces.Activate(canonical);
         }
-        oldWatcher.Dispose();
+        oldWatcher?.Dispose();
         Changed?.Invoke();
     }
 
-    private FileSystemWatcher StartWatcher(string root)
+    /// <summary>
+    /// Reads the workspace, degrading a failure into an empty workspace that carries the reason.
+    /// The alternative — letting it throw — kills the process during boot (this runs from
+    /// <see cref="StudioHost.Build"/>), and a desktop shell then has nothing to show but an exit
+    /// code. An empty-with-errors workspace still renders, and the user can switch roots from the
+    /// UI, which is the fix for every case that lands here.
+    /// </summary>
+    private LoadedWorkspace Load(string root)
     {
-        var tapDir = root;
-        var w = new FileSystemWatcher(tapDir, "*.md")
+        try
         {
-            IncludeSubdirectories = true,
-            NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName,
-            EnableRaisingEvents = true,
-        };
-        w.Changed += OnFsChange;
-        w.Created += OnFsChange;
-        w.Deleted += OnFsChange;
-        w.Renamed += OnFsChange;
-        return w;
+            return _loader.Load(root);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Could not load the workspace at {Root}", root);
+            return new LoadedWorkspace(root, root, [], [
+                new WorkspaceError(
+                    WorkspaceErrorCode.E_WORKSPACE_LOAD_FAILED,
+                    $"Could not read the workspace at '{root}': {ex.Message}")
+            ]);
+        }
+    }
+
+    /// <summary>Starts the reload watcher, or returns null when the OS won't give us one —
+    /// a root on a filesystem without change notifications, or past the per-user watch limit.
+    /// Losing live reload is a papercut; failing the boot over it is not.</summary>
+    private FileSystemWatcher? StartWatcher(string root)
+    {
+        try
+        {
+            var w = new FileSystemWatcher(root, "*.md")
+            {
+                IncludeSubdirectories = true,
+                NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName,
+                EnableRaisingEvents = true,
+            };
+            w.Changed += OnFsChange;
+            w.Created += OnFsChange;
+            w.Deleted += OnFsChange;
+            w.Renamed += OnFsChange;
+            return w;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "File watching is unavailable for {Root}; edits will not auto-reload", root);
+            return null;
+        }
     }
 
     public async ValueTask<ResolvedRequest> RenderAsync(string requestPath, string? envPath,
@@ -408,7 +442,7 @@ public sealed class WorkspaceService : IDisposable
     /// Doesn't fire <see cref="Changed"/>; the watcher still does that once it catches up.</summary>
     public void ReloadNow()
     {
-        var fresh = _loader.Load(RootDirectory);
+        var fresh = Load(RootDirectory);
         lock (_gate) _workspace = fresh;
     }
 
@@ -437,6 +471,6 @@ public sealed class WorkspaceService : IDisposable
     public void Dispose()
     {
         _debounce?.Dispose();
-        _watcher.Dispose();
+        _watcher?.Dispose();
     }
 }

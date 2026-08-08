@@ -41,6 +41,12 @@ public sealed record ProviderTypeDescriptor
     /// leaves the server. Derived from <see cref="ProviderFieldKind.Secret"/> fields.</summary>
     public IEnumerable<string> SecretFieldKeys =>
         Fields.Where(f => f.Kind == ProviderFieldKind.Secret).Select(f => f.Key);
+
+    /// <summary>Keys that are only honoured from system-scope configuration. Derived from
+    /// <see cref="ProviderSettingField.SystemScopeOnly"/>; the registry drops them from
+    /// <see cref="ProviderOrigin.Workspace"/> configs.</summary>
+    public IEnumerable<string> SystemScopeOnlyFieldKeys =>
+        Fields.Where(f => f.SystemScopeOnly).Select(f => f.Key);
 }
 
 /// <summary>One typed setting on a provider type. <see cref="Key"/> is the key stored in
@@ -57,6 +63,12 @@ public sealed record ProviderSettingField
     public bool Required { get; init; }
 
     public string? Placeholder { get; init; }
+
+    /// <summary>Marks a setting the workspace is not allowed to supply. A <c>tap.md</c> arrives
+    /// with a cloned repository, so anything that decides which binary gets spawned (a
+    /// <c>cliPath</c>) must come from system-scope config only — the registry drops these keys
+    /// when the config's origin is <see cref="ProviderOrigin.Workspace"/>.</summary>
+    public bool SystemScopeOnly { get; init; }
 
     /// <summary>Optional picker key the UI attaches to this field — e.g.
     /// <c>"azure-keyvault"</c> renders a browse button that opens the subscription → vault

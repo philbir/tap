@@ -4,6 +4,21 @@ import { TUNNEL_MODES, emptyProfile } from './profileTypes'
 
 type Tab = 'profiles' | 'cloudflare' | 'tailscale'
 
+/**
+ * What the server sends instead of a stored credential. Echoing it back on save means
+ * "unchanged", so a field the user never touched must round-trip this string verbatim —
+ * anything else overwrites the secret on disk.
+ */
+export const REDACTED_PLACEHOLDER = '__tap_redacted__'
+
+/** Cleartext credentials, only ever returned by POST /api/profiles/{name}/reveal. */
+interface ProfileSecrets {
+  token?: string | null
+  apiToken?: string | null
+  tailscaleAuthKey?: string | null
+  oidcClientSecret?: string | null
+}
+
 export function ConfigPage() {
   const [tab, setTab] = useState<Tab>('profiles')
 
@@ -837,10 +852,36 @@ function ProfileEditor({
 }) {
   const [draft, setDraft] = useState<TunnelProfile>({ ...profile })
   const [saving, setSaving] = useState(false)
+  const [revealing, setRevealing] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const set = <K extends keyof TunnelProfile>(key: K, value: TunnelProfile[K]) =>
     setDraft((d) => ({ ...d, [key]: value }))
+
+  // One POST returns every credential at once, so revealing one field unmasks the others
+  // too. Fields the user has already replaced keep what they typed.
+  const revealSecrets = async () => {
+    setRevealing(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(profile.name)}/reveal`, {
+        method: 'POST',
+      })
+      if (!res.ok) throw new Error(`reveal failed: ${res.status}`)
+      const s: ProfileSecrets = await res.json()
+      setDraft((d) => ({
+        ...d,
+        token: unmask(d.token, s.token),
+        apiToken: unmask(d.apiToken, s.apiToken),
+        tailscaleAuthKey: unmask(d.tailscaleAuthKey, s.tailscaleAuthKey),
+        oidcClientSecret: unmask(d.oidcClientSecret, s.oidcClientSecret),
+      }))
+    } catch (e) {
+      setError(`Could not reveal stored secrets: ${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setRevealing(false)
+    }
+  }
 
   const onSave = async () => {
     setError(null)
@@ -959,28 +1000,30 @@ function ProfileEditor({
       </Field>
 
       {mode === 'Token' && (
-        <Field label="Cloudflare tunnel token" hint="From the Zero Trust dashboard tunnel.">
-          <input
-            type="password"
-            value={draft.token ?? ''}
-            onChange={(e) => set('token', e.target.value)}
-            placeholder="ey…"
-            style={{ width: '100%' }}
-          />
-        </Field>
+        <SecretField
+          label="Cloudflare tunnel token"
+          hint="From the Zero Trust dashboard tunnel."
+          placeholder="ey…"
+          value={draft.token ?? ''}
+          onChange={(v) => set('token', v)}
+          onReveal={revealSecrets}
+          revealing={revealing}
+          canReveal={!isNew}
+        />
       )}
 
       {(mode === 'ApiManaged' || mode === 'Dynamic') && (
         <>
-          <Field label="API token" hint="Account · Cloudflare Tunnel: Edit (and Zone · DNS: Edit if hostname/dynamic-zone is set).">
-            <input
-              type="password"
-              value={draft.apiToken ?? ''}
-              onChange={(e) => set('apiToken', e.target.value)}
-              placeholder="cf-api-token"
-              style={{ width: '100%' }}
-            />
-          </Field>
+          <SecretField
+            label="API token"
+            hint="Account · Cloudflare Tunnel: Edit (and Zone · DNS: Edit if hostname/dynamic-zone is set)."
+            placeholder="cf-api-token"
+            value={draft.apiToken ?? ''}
+            onChange={(v) => set('apiToken', v)}
+            onReveal={revealSecrets}
+            revealing={revealing}
+            canReveal={!isNew}
+          />
           <Field label="Account ID">
             <input
               value={draft.accountId ?? ''}
@@ -1086,15 +1129,16 @@ function ProfileEditor({
           </Field>
           {draft.tailscaleDaemonMode === 'ephemeral' && (
             <>
-              <Field label="Auth key" hint="Required for ephemeral mode. Generate at admin.tailscale.com → Settings → Keys.">
-                <input
-                  type="password"
-                  value={draft.tailscaleAuthKey ?? ''}
-                  onChange={(e) => set('tailscaleAuthKey', e.target.value)}
-                  placeholder="tskey-…"
-                  style={{ width: '100%' }}
-                />
-              </Field>
+              <SecretField
+                label="Auth key"
+                hint="Required for ephemeral mode. Generate at admin.tailscale.com → Settings → Keys."
+                placeholder="tskey-…"
+                value={draft.tailscaleAuthKey ?? ''}
+                onChange={(v) => set('tailscaleAuthKey', v)}
+                onReveal={revealSecrets}
+                revealing={revealing}
+                canReveal={!isNew}
+              />
               <Field label="Login server (optional)" hint="Override for self-hosted Headscale, etc. Leave blank for the public Tailscale coordination server.">
                 <input
                   value={draft.tailscaleLoginServer ?? ''}
@@ -1182,14 +1226,14 @@ function ProfileEditor({
               style={{ width: '100%' }}
             />
           </Field>
-          <Field label="OIDC client secret">
-            <input
-              type="password"
-              value={draft.oidcClientSecret ?? ''}
-              onChange={(e) => set('oidcClientSecret', e.target.value)}
-              style={{ width: '100%' }}
-            />
-          </Field>
+          <SecretField
+            label="OIDC client secret"
+            value={draft.oidcClientSecret ?? ''}
+            onChange={(v) => set('oidcClientSecret', v)}
+            onReveal={revealSecrets}
+            revealing={revealing}
+            canReveal={!isNew}
+          />
         </Row>
       </details>
 
@@ -1211,6 +1255,71 @@ function ProfileEditor({
         </button>
       </div>
     </div>
+  )
+}
+
+/** Only swap in the cleartext where the field is still showing the mask. */
+function unmask(current: string | null | undefined, revealed: string | null | undefined) {
+  return current === REDACTED_PLACEHOLDER ? revealed ?? '' : current
+}
+
+const SMALL_BUTTON: React.CSSProperties = { fontSize: 11, padding: '2px 8px' }
+
+/**
+ * Password input that understands the redaction placeholder. While the field still holds the
+ * mask the dots on screen are not the secret, so typing into them would write a mangled
+ * credential to disk on save — the input stays read-only until the user picks Reveal (fetch
+ * the real values) or Replace (clear it and enter a new one). Left alone, the placeholder is
+ * PUT back unchanged and the server keeps what it already has.
+ */
+function SecretField({
+  label,
+  hint,
+  placeholder,
+  value,
+  onChange,
+  onReveal,
+  revealing,
+  canReveal,
+}: {
+  label: string
+  hint?: string
+  placeholder?: string
+  value: string
+  onChange: (v: string) => void
+  onReveal: () => void
+  revealing: boolean
+  canReveal: boolean
+}) {
+  const stored = value === REDACTED_PLACEHOLDER
+  return (
+    <>
+      <Field label={label} hint={hint}>
+        <input
+          type="password"
+          value={value}
+          readOnly={stored}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
+          style={{ width: '100%' }}
+        />
+      </Field>
+      {stored && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 5 }}>
+          <span style={{ flex: 1, fontSize: 11, color: 'var(--text-muted)' }}>
+            Stored — leave unchanged to keep it.
+          </span>
+          {canReveal && (
+            <button type="button" onClick={onReveal} disabled={revealing} style={SMALL_BUTTON}>
+              {revealing ? 'Revealing…' : 'Reveal'}
+            </button>
+          )}
+          <button type="button" onClick={() => onChange('')} style={SMALL_BUTTON}>
+            Replace
+          </button>
+        </div>
+      )}
+    </>
   )
 }
 

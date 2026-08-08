@@ -16,6 +16,40 @@ public sealed class WorkspaceLoader
     public const string TapDirectoryName = ".tap";
     public const string ManifestFileName = "tap.md";
 
+    /// <summary>
+    /// Ceiling on the size of a single workspace file. A workspace is whatever the developer
+    /// cloned, so every <c>*.md</c> in it is untrusted input; without a cap a multi-gigabyte file
+    /// would be pulled into memory whole by the <c>ReadAllText</c> below.
+    /// </summary>
+    public const long MaxFileBytes = 8L * 1024 * 1024;
+
+    /// <summary>
+    /// Folder count at which the walk stops and reports a truncated workspace. See
+    /// <see cref="ScanBudget"/> for why there is a ceiling at all; this one covers the case
+    /// where the tree is enormous but every directory read is fast.
+    /// </summary>
+    public const int MaxDirectories = 25_000;
+
+    /// <summary>
+    /// Wall-clock ceiling on the folder walk. A workspace root is just a folder the user
+    /// picked — or, in the desktop app before it knows better, whatever the process's working
+    /// directory happened to be, which for a Finder-launched <c>.app</c> is <c>/</c>. Walking
+    /// that means walking the whole disk (network mounts and iCloud placeholders included),
+    /// which reads as "Tap Studio hangs on startup". A truncated workspace with an error the
+    /// UI can show beats an unbounded scan every time.
+    /// </summary>
+    public static readonly TimeSpan ScanBudget = TimeSpan.FromSeconds(20);
+
+    /// <summary>
+    /// Folders never worth descending into: package caches and VCS metadata hold no Tap files
+    /// but plenty of the deepest trees on the machine. Everything else — dotfolders included,
+    /// since <c>.tap/</c> is a supported layout — is walked normally.
+    /// </summary>
+    private static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "node_modules", ".git", ".hg", ".svn", ".venv", "__pycache__", "bin", "obj", "target",
+    };
+
     /// <summary>Loads the workspace rooted at <paramref name="rootDirectory"/>.</summary>
     public LoadedWorkspace Load(string rootDirectory)
     {
@@ -26,7 +60,17 @@ public sealed class WorkspaceLoader
         var files = new List<WorkspaceFile>();
         var errors = new List<WorkspaceError>();
 
-        foreach (var path in Directory.EnumerateFiles(tapDir, "*.md", SearchOption.AllDirectories))
+        var scan = ScanMarkdown(tapDir);
+        if (scan.Truncated)
+        {
+            errors.Add(new WorkspaceError(
+                WorkspaceErrorCode.E_WORKSPACE_SCAN_TRUNCATED,
+                $"Stopped scanning after {scan.Directories} folders / {scan.Elapsed.TotalSeconds:F1}s — " +
+                $"'{tapDir}' is too large to be a workspace root, so it was only partially loaded. " +
+                "Switch to the folder that actually holds your Tap files."));
+        }
+
+        foreach (var path in scan.Files)
         {
             var fileName = Path.GetFileName(path);
             if (KindResolver.FromFileName(fileName) is null)
@@ -35,6 +79,16 @@ public sealed class WorkspaceLoader
             var relative = Path.GetRelativePath(tapDir, path).Replace('\\', '/');
             try
             {
+                var length = new FileInfo(path).Length;
+                if (length > MaxFileBytes)
+                {
+                    errors.Add(new WorkspaceError(
+                        WorkspaceErrorCode.E_FRONTMATTER_MALFORMED_YAML,
+                        $"File is {length} bytes; workspace files are capped at {MaxFileBytes} bytes and this one was not read.",
+                        relative));
+                    continue;
+                }
+
                 var content = File.ReadAllText(path);
                 files.Add(FileParser.Parse(relative, content));
             }
@@ -42,9 +96,74 @@ public sealed class WorkspaceLoader
             {
                 errors.Add(ex.Error);
             }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A file that vanished mid-walk or that we can't read is a bad file, not a bad
+                // workspace — the loader must still return the rest of it.
+                errors.Add(new WorkspaceError(
+                    WorkspaceErrorCode.E_FRONTMATTER_MALFORMED_YAML,
+                    $"Could not read file: {ex.Message}",
+                    relative));
+            }
         }
 
         return new LoadedWorkspace(rootDirectory, tapDir, files, errors);
+    }
+
+    /// <summary>Result of the bounded folder walk: the <c>*.md</c> paths found, and whether we
+    /// ran out of budget before covering the tree.</summary>
+    private readonly record struct ScanResult(
+        IReadOnlyList<string> Files,
+        int Directories,
+        TimeSpan Elapsed,
+        bool Truncated);
+
+    /// <summary>
+    /// Walks <paramref name="root"/> for <c>*.md</c> files under <see cref="ScanBudget"/> /
+    /// <see cref="MaxDirectories"/>.
+    ///
+    /// <para>Hand-rolled rather than <c>EnumerateFiles(…, SearchOption.AllDirectories)</c> for
+    /// three reasons: the budget has to be checked between directories, <see cref="SkippedDirectories"/>
+    /// has to be honoured before descending, and symlinked directories have to be left alone —
+    /// a link that points at an ancestor (or at <c>/</c>) turns one wrong root into a walk that
+    /// never ends. Unreadable folders are skipped: a permission-denied subtree is not a reason
+    /// to fail the whole workspace.</para>
+    /// </summary>
+    private static ScanResult ScanMarkdown(string root)
+    {
+        var clock = System.Diagnostics.Stopwatch.StartNew();
+        var files = new List<string>();
+        var pending = new Stack<string>();
+        pending.Push(root);
+        var directories = 0;
+
+        while (pending.Count > 0)
+        {
+            if (directories >= MaxDirectories || clock.Elapsed > ScanBudget)
+                return new ScanResult(files, directories, clock.Elapsed, Truncated: true);
+
+            var current = pending.Pop();
+            directories++;
+            try
+            {
+                files.AddRange(Directory.EnumerateFiles(current, "*.md"));
+
+                foreach (var child in Directory.EnumerateDirectories(current))
+                {
+                    if (SkippedDirectories.Contains(Path.GetFileName(child)))
+                        continue;
+                    if (new DirectoryInfo(child).LinkTarget is not null)
+                        continue;
+                    pending.Push(child);
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // Vanished mid-walk, or not ours to read.
+            }
+        }
+
+        return new ScanResult(files, directories, clock.Elapsed, Truncated: false);
     }
 }
 
@@ -63,9 +182,33 @@ public sealed class LoadedWorkspace
         RootDirectory = rootDirectory;
         TapDirectory = tapDirectory;
         Files = files;
-        Errors = errors;
-        _byPath = files.ToDictionary(f => f.RelativePath, StringComparer.OrdinalIgnoreCase);
-        _byId = files.Where(f => f.Id is not null).ToDictionary(f => f.Id!, StringComparer.OrdinalIgnoreCase);
+
+        // Both indexes are case-insensitive, so two files whose paths differ only in case — or two
+        // files declaring the same id — used to make ToDictionary throw straight out of the
+        // constructor. A workspace is untrusted input; a collision has to degrade to "loaded with
+        // errors", never take the host down. First one wins, the rest are reported.
+        var allErrors = new List<WorkspaceError>(errors);
+        _byPath = new Dictionary<string, WorkspaceFile>(files.Count, StringComparer.OrdinalIgnoreCase);
+        _byId = new Dictionary<string, WorkspaceFile>(StringComparer.OrdinalIgnoreCase);
+        foreach (var f in files)
+        {
+            if (!_byPath.TryAdd(f.RelativePath, f))
+            {
+                allErrors.Add(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"Path collides with '{_byPath[f.RelativePath].RelativePath}' (paths are matched case-insensitively). This file is not reachable by path.",
+                    f.RelativePath));
+            }
+
+            if (f.Id is { } id && !_byId.TryAdd(id, f))
+            {
+                allErrors.Add(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"Duplicate id '{id}' — already declared by '{_byId[id].RelativePath}'. This file is not reachable by id.",
+                    f.RelativePath));
+            }
+        }
+        Errors = allErrors;
 
         Manifest = files.OfType<WorkspaceManifestFile>().FirstOrDefault();
         Requests = files.OfType<RequestFile>().ToArray();

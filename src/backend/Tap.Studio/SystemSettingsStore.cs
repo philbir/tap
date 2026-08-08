@@ -1,3 +1,4 @@
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Tap.Studio.Variables;
@@ -29,17 +30,39 @@ namespace Tap.Studio;
 public sealed class SystemSettingsStore
 {
     private readonly string _path;
+    private readonly ILogger<SystemSettingsStore> _logger;
     private readonly Lock _gate = new();
     private SystemSettingsFile _state;
     private DateTime _loadedWriteTimeUtc;
 
-    public SystemSettingsStore(StudioOptions options)
+    public SystemSettingsStore(StudioOptions options, ILogger<SystemSettingsStore> logger)
     {
-        Directory.CreateDirectory(options.SystemDir);
+        _logger = logger;
+        AtomicStateFile.CreateDirectory(options.SystemDir);
         _path = Path.Combine(options.SystemDir, "system.json");
         SystemDir = options.SystemDir;
 
-        var loaded = Load(_path);
+        var (outcome, loaded) = TryLoad(_path);
+        if (outcome is LoadOutcome.Corrupt)
+        {
+            // Every system-scope secret lives in this file. Seeding empty state and writing it
+            // back — which is what the old "loaded is null" branch did — turns one truncated
+            // write plus one restart into permanent, silent data loss. Quarantine instead.
+            var quarantined = AtomicStateFile.MoveAsideCorrupt(_path);
+            if (quarantined is not null)
+            {
+                _logger.LogError(
+                    "Could not parse '{Path}'. Moved it to '{Quarantine}' and started from empty settings — "
+                    + "recover any secrets from that copy before deleting it.", _path, quarantined);
+            }
+            else
+            {
+                _logger.LogError(
+                    "Could not parse '{Path}', and could not move it aside either. Running with empty settings; "
+                    + "the file is left untouched so nothing is lost. Fix or remove it and restart.", _path);
+            }
+        }
+
         if (loaded is null)
         {
             _state = new SystemSettingsFile
@@ -47,13 +70,17 @@ public sealed class SystemSettingsStore
                 VariableProviders = [.. options.SystemProviders.Select(StoredProvider.From)],
                 Variables = new Dictionary<string, StoredVariable>(StringComparer.Ordinal),
             };
-            Persist();
+            // Only seed the file when there genuinely wasn't one. After a parse failure the
+            // original may still be sitting there, and startup must never be the thing that
+            // overwrites it.
+            if (outcome is LoadOutcome.Missing) Persist();
         }
         else
         {
             _state = loaded;
-            _loadedWriteTimeUtc = SafeWriteTimeUtc(_path);
         }
+
+        _loadedWriteTimeUtc = SafeWriteTimeUtc(_path);
     }
 
     /// <summary>Re-reads <c>system.json</c> when its on-disk timestamp moved past what we
@@ -65,7 +92,17 @@ public sealed class SystemSettingsStore
     {
         var mtime = SafeWriteTimeUtc(_path);
         if (mtime == _loadedWriteTimeUtc) return;
-        if (Load(_path) is { } fresh)
+        var (outcome, fresh) = TryLoad(_path);
+        if (outcome is LoadOutcome.Corrupt)
+        {
+            // Keep the in-memory copy rather than adopting garbage, and move the watermark so
+            // this warns once per on-disk change instead of once per property read. No
+            // quarantine here — another process may simply be mid-write.
+            _loadedWriteTimeUtc = mtime;
+            _logger.LogWarning("'{Path}' changed on disk but could not be parsed; keeping the in-memory settings.", _path);
+            return;
+        }
+        if (fresh is not null)
         {
             _state = fresh;
             _loadedWriteTimeUtc = mtime;
@@ -252,34 +289,39 @@ public sealed class SystemSettingsStore
 
     private void Persist()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        File.WriteAllText(_path, JsonSerializer.Serialize(_state, SystemSettingsJson.Default.SystemSettingsFile));
+        AtomicStateFile.CreateDirectory(Path.GetDirectoryName(_path)!);
+        AtomicStateFile.WriteAllText(_path, JsonSerializer.Serialize(_state, SystemSettingsJson.Default.SystemSettingsFile));
         _loadedWriteTimeUtc = SafeWriteTimeUtc(_path);
     }
 
-    private static SystemSettingsFile? Load(string path)
+    private enum LoadOutcome { Missing, Loaded, Corrupt }
+
+    /// <summary>Reads <c>system.json</c>, keeping "not written yet" and "there but
+    /// unreadable" apart. Collapsing the two is what made a truncated write unrecoverable:
+    /// the caller saw <c>null</c>, seeded empty state, and persisted over the damage.</summary>
+    private static (LoadOutcome Outcome, SystemSettingsFile? Settings) TryLoad(string path)
     {
-        if (!File.Exists(path)) return null;
+        if (!File.Exists(path)) return (LoadOutcome.Missing, null);
         try
         {
             // Read into the transitional shape so older files using the legacy `providers`
             // key still load. The first subsequent save rewrites under the canonical
             // `variableProviders` key.
             var raw = JsonSerializer.Deserialize(File.ReadAllText(path), SystemSettingsJson.Default.SystemSettingsFileRaw);
-            if (raw is null) return null;
-            return new SystemSettingsFile
+            if (raw is null) return (LoadOutcome.Corrupt, null);
+            return (LoadOutcome.Loaded, new SystemSettingsFile
             {
                 DefaultVariableProvider = string.IsNullOrWhiteSpace(raw.DefaultVariableProvider) ? null : raw.DefaultVariableProvider,
                 VariableProviders = raw.VariableProviders ?? raw.Providers ?? [],
                 Variables = raw.Variables ?? new Dictionary<string, StoredVariable>(StringComparer.Ordinal),
                 Ai = raw.Ai,
-            };
+            });
         }
         catch
         {
-            // Refuse to crash the host over a corrupt user-config file. The Settings page
-            // shows the underlying dir so the user can fix or delete it.
-            return null;
+            // Refuse to crash the host over a corrupt user-config file. The caller logs and
+            // quarantines; the Settings page shows the underlying dir so the user can fix it.
+            return (LoadOutcome.Corrupt, null);
         }
     }
 }
@@ -347,4 +389,115 @@ public sealed record StoredAiSettings
 [JsonSourceGenerationOptions(WriteIndented = true, PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull)]
 internal partial class SystemSettingsJson : JsonSerializerContext
 {
+}
+
+/// <summary>
+/// Crash-safe, owner-private writes for the JSON files Studio keeps under <c>~/.tap</c>
+/// (<c>system.json</c>, <c>auth-tokens.json</c>, <c>workspaces.json</c>). Two failure modes are
+/// being prevented:
+///
+/// <para>Truncation. <c>File.WriteAllText</c> opens the real file with <c>FileMode.Create</c>,
+/// so a crash or a full disk mid-write leaves a zero-length file where a working one used to
+/// be. Everything here lands in a sibling temp file and is renamed over the target, which is
+/// atomic on both NTFS and POSIX filesystems.</para>
+///
+/// <para>Leaked secrets. The default creation mode is 0666 &amp; umask — world-readable on most
+/// Linux boxes — and these files hold plaintext secret-flagged variables and OAuth refresh
+/// tokens. The temp file is created 0600 up front rather than chmod'd afterwards, so the
+/// content never exists on disk under a permissive mode.</para>
+///
+/// <para>This mirrors <c>Tap.Core.IO.AtomicFile</c>. Tap.Studio deliberately does not reference
+/// Tap.Core (that assembly carries the Aspire/OIDC hosting surface), so the handful of lines is
+/// duplicated rather than dragging in the dependency.</para>
+/// </summary>
+internal static class AtomicStateFile
+{
+    private const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+    private const UnixFileMode OwnerOnlyDirectory =
+        UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+
+    /// <summary>Atomically replaces <paramref name="path"/> with <paramref name="contents"/>
+    /// (UTF-8, no BOM), leaving the file readable only by the current user on Unix.</summary>
+    public static void WriteAllText(string path, string contents)
+    {
+        var tmp = $"{path}.{Environment.ProcessId}.tmp";
+        try
+        {
+            var options = new FileStreamOptions
+            {
+                Mode = FileMode.Create,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+            };
+            if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerOnlyFile;
+
+            using (var fs = new FileStream(tmp, options))
+            {
+                fs.Write(Encoding.UTF8.GetBytes(contents));
+                // Flush to the platter before the rename: otherwise a power loss can commit
+                // the directory entry while the data blocks are still in cache, which is
+                // exactly the truncated-file outcome the rename is meant to prevent.
+                fs.Flush(flushToDisk: true);
+            }
+            File.Move(tmp, path, overwrite: true);
+        }
+        catch
+        {
+            try { File.Delete(tmp); } catch { }
+            throw;
+        }
+
+        // The rename carries 0600 across on POSIX; re-applying costs one syscall and covers
+        // filesystems that keep the destination's own mode.
+        RestrictToOwner(path);
+    }
+
+    /// <summary>Creates <paramref name="path"/> and any missing parents, restricting newly
+    /// created directories to the current user (0700 on Unix). Existing directories keep
+    /// whatever mode they already have.</summary>
+    public static void CreateDirectory(string path)
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Directory.CreateDirectory(path);
+            return;
+        }
+        Directory.CreateDirectory(path, OwnerOnlyDirectory);
+    }
+
+    /// <summary>Best-effort tightening of an existing file to owner-only read/write (0600 on
+    /// Unix). No-op on Windows, where the file already sits inside the user profile and ACLs
+    /// are managed differently. Silent on failure — a permissive file beats a crashed
+    /// host.</summary>
+    public static void RestrictToOwner(string path)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        try
+        {
+            File.SetUnixFileMode(path, OwnerOnlyFile);
+        }
+        catch
+        {
+            // ignore — the file is still owned by the current user
+        }
+    }
+
+    /// <summary>Renames an unparseable file to <c>&lt;name&gt;.corrupt-&lt;utc&gt;</c> and
+    /// returns the new path, or <c>null</c> when the move itself failed. Callers use this
+    /// instead of overwriting: a file we cannot read may still hold the only copy of a
+    /// secret.</summary>
+    public static string? MoveAsideCorrupt(string path)
+    {
+        var quarantine = $"{path}.corrupt-{DateTime.UtcNow:yyyyMMddTHHmmssfffZ}";
+        try
+        {
+            File.Move(path, quarantine, overwrite: true);
+            return quarantine;
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }

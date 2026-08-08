@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "splash",
+  "description": "Commands the startup splash needs when a launch fails: restart the sidecar, reveal the session log. Deliberately NOT granted to `remote.urls` — unlike `default`, this capability is local-context only, so the sidecar-origin SPA (and anything that injects script into it) cannot fork extra backend processes or drive the file manager. The splash is served from the bundle itself, which is the only page that can reach these.",
+  "windows": ["main"],
+  "local": true,
+  "permissions": ["allow-studio-retry", "allow-studio-open-log"]
+}

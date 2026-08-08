@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text;
 using Microsoft.AspNetCore.Authentication;
@@ -27,12 +28,11 @@ public static class TapAuthRegistration
     public static IServiceCollection AddTapAuth(this IServiceCollection services, TapAuthOptions options)
     {
         services.AddSingleton(options);
+        services.AddSingleton<TapAuthFailureTracker>();
 
-        if (options.Jwt is { } jwt && (
-                !string.IsNullOrWhiteSpace(jwt.SecretKey) ||
-                !string.IsNullOrWhiteSpace(jwt.WellKnownEndpoint)))
+        if (options.JwtConfigured)
         {
-            services.AddSingleton(new JwtTokenValidator(jwt));
+            services.AddSingleton(new JwtTokenValidator(options.Jwt!));
         }
 
         if (options.Oidc is { } oidc && !string.IsNullOrWhiteSpace(oidc.Authority) && !string.IsNullOrWhiteSpace(oidc.ClientId))
@@ -98,24 +98,38 @@ public sealed class TapAuthMiddleware(
         ? new HashSet<string>(options.AllowedCountries.Select(c => c.Trim().ToUpperInvariant()))
         : null;
     private readonly JwtTokenValidator? _jwt = services.GetService<JwtTokenValidator>();
+    private readonly TapAuthFailureTracker? _failures = services.GetService<TapAuthFailureTracker>();
+
+    /// <summary>
+    /// Key under which the pre-<c>UseForwardedHeaders</c> transport peer is stashed. That middleware
+    /// rewrites <c>Connection.RemoteIpAddress</c> in place, so "did this really arrive over the
+    /// tunnel's loopback hop?" can only be answered from the address we saw before the rewrite.
+    /// </summary>
+    internal const string TransportPeerKey = "tap.auth.transport-peer";
 
     public async Task InvokeAsync(HttpContext ctx)
     {
-        // Let CORS preflights through unauthenticated. Browsers strip Authorization on
-        // preflight, so applying any header/JWT gate here would 401 the preflight and make
-        // the actual request never fire ("Failed to fetch" on the client).
-        if (HttpMethods.IsOptions(ctx.Request.Method) &&
-            ctx.Request.Headers.ContainsKey("Origin") &&
-            ctx.Request.Headers.ContainsKey("Access-Control-Request-Method"))
+        // CORS preflights are answered here instead of being forwarded. A browser strips
+        // Authorization from a preflight, so gating it would 401 and the real request would never
+        // fire ("Failed to fetch" on the client) — but letting an unauthenticated OPTIONS reach the
+        // upstream runs its handler code for free, which is the thing this gate exists to prevent.
+        if (IsCorsPreflight(ctx.Request))
         {
-            await next(ctx);
+            WritePreflightResponse(ctx);
             return;
         }
 
         // Header check — short-circuit BEFORE the request reaches OIDC, since machine-to-machine
         // calls won't have a browser session.
-        if (options.Header is { } h && !string.IsNullOrEmpty(h.Value))
+        if (options.Header is { } h)
         {
+            if (string.IsNullOrEmpty(h.Value))
+            {
+                // A blank credential is a broken gate, not an exemption: refuse rather than proxy.
+                await Reject(ctx, StatusCodes.Status503ServiceUnavailable,
+                    $"Header auth for '{h.Name}' is configured without a value; refusing to proxy.");
+                return;
+            }
             if (!ctx.Request.Headers.TryGetValue(h.Name, out var supplied) || !ConstantTimeEquals(supplied!, h.Value))
             {
                 await Reject(ctx, 401, $"Missing or invalid {h.Name} header.");
@@ -161,10 +175,18 @@ public sealed class TapAuthMiddleware(
         // Country check (CF-IPCountry).
         if (_countries is not null)
         {
-            var country = IsTrustedForwarder(ctx.Connection.RemoteIpAddress)
-                ? ctx.Request.Headers["CF-IPCountry"].ToString().Trim().ToUpperInvariant()
-                : string.Empty;
-            if (string.IsNullOrEmpty(country) || !_countries.Contains(country))
+            var country = ReadTrustedCountry(ctx);
+            if (country is null)
+            {
+                // No trustworthy country header means we cannot evaluate the allowlist at all.
+                // Failing open here would silently disable the check on every non-Cloudflare
+                // deployment, so refuse and say why.
+                await Reject(ctx, 403,
+                    "Country allowlist is configured but no trusted CF-IPCountry header is present " +
+                    "(this check only works behind a Cloudflare tunnel).");
+                return;
+            }
+            if (!_countries.Contains(country))
             {
                 await Reject(ctx, 403, $"Country '{country}' not in allowlist.");
                 return;
@@ -179,6 +201,14 @@ public sealed class TapAuthMiddleware(
         var clientIp = ResolveClientIp(ctx) ?? ctx.Connection.RemoteIpAddress;
         logger.LogWarning("Auth {Status} {Method} {Path} from {Ip}: {Reason}",
             status, ctx.Request.Method, ctx.Request.Path, clientIp, reason);
+
+        // Feed the rate limiter: a client that keeps failing gets a much tighter bucket than
+        // ordinary proxy traffic on the next request.
+        if (status is 401 or 403)
+        {
+            _failures?.RecordFailure(RateLimitPartitionKey(ctx, options));
+        }
+
         ctx.Response.StatusCode = status;
         ctx.Response.Headers.CacheControl = "no-store";
 
@@ -220,28 +250,108 @@ public sealed class TapAuthMiddleware(
         }).ToArray();
     }
 
-    private static IPAddress? ResolveClientIp(HttpContext ctx)
+    private IPAddress? ResolveClientIp(HttpContext ctx) => ResolveClientIp(ctx, options);
+
+    /// <summary>
+    /// The client address the allowlists are evaluated against. <c>CF-Connecting-IP</c> is only
+    /// believed when Cloudflare is the configured provider AND the request really did arrive over
+    /// the tunnel's loopback hop; otherwise anyone — including a local process, or a remote client
+    /// behind a fronting proxy that doesn't rewrite the peer — could name its own source address.
+    /// Everything else defers to whatever <c>UseForwardedHeaders</c> already resolved: it consumes
+    /// the rightmost <c>X-Forwarded-For</c> entry from a known loopback proxy, which is the only
+    /// entry a client cannot append to.
+    /// </summary>
+    private static IPAddress? ResolveClientIp(HttpContext ctx, TapAuthOptions authOptions)
     {
-        if (IsTrustedForwarder(ctx.Connection.RemoteIpAddress))
+        if (TrustsForwardedCloudflareHeaders(ctx, authOptions))
         {
             var cf = ctx.Request.Headers["CF-Connecting-IP"].ToString();
             if (!string.IsNullOrEmpty(cf) && IPAddress.TryParse(cf, out var ip)) return ip;
-
-            var fwd = ctx.Request.Headers["X-Forwarded-For"].ToString();
-            if (!string.IsNullOrEmpty(fwd))
-            {
-                var first = fwd.Split(',')[0].Trim();
-                if (IPAddress.TryParse(first, out ip)) return ip;
-            }
         }
         return ctx.Connection.RemoteIpAddress;
     }
+
+    /// <summary>
+    /// Best-effort per-client key for rate-limit partitioning. It runs <em>before</em>
+    /// <c>UseForwardedHeaders</c>, so it has to read the forwarded headers itself and mirrors that
+    /// middleware's <c>ForwardLimit = 1</c> by taking the rightmost <c>X-Forwarded-For</c> entry.
+    /// Never an authorization input — the worst a wrong key can do is put a caller in the wrong bucket.
+    /// </summary>
+    public static string RateLimitPartitionKey(HttpContext ctx, TapAuthOptions authOptions)
+    {
+        var peer = TransportPeer(ctx);
+        if (IsTrustedForwarder(peer))
+        {
+            if (authOptions.TrustsCloudflareHeaders)
+            {
+                var cf = ctx.Request.Headers["CF-Connecting-IP"].ToString().Trim();
+                if (cf.Length > 0) return cf;
+            }
+
+            var fwd = ctx.Request.Headers["X-Forwarded-For"].ToString();
+            if (fwd.Length > 0)
+            {
+                var last = fwd.AsSpan()[(fwd.LastIndexOf(',') + 1)..].Trim();
+                if (last.Length > 0) return last.ToString();
+            }
+        }
+        return peer?.ToString() ?? "unknown";
+    }
+
+    /// <summary>
+    /// The country Cloudflare reported, or null when there is nothing trustworthy to read.
+    /// </summary>
+    private static string? ReadTrustedCountry(HttpContext ctx, TapAuthOptions authOptions)
+    {
+        if (!TrustsForwardedCloudflareHeaders(ctx, authOptions)) return null;
+        var country = ctx.Request.Headers["CF-IPCountry"].ToString().Trim().ToUpperInvariant();
+        return country.Length == 0 ? null : country;
+    }
+
+    private string? ReadTrustedCountry(HttpContext ctx) => ReadTrustedCountry(ctx, options);
+
+    private static bool TrustsForwardedCloudflareHeaders(HttpContext ctx, TapAuthOptions authOptions) =>
+        authOptions.TrustsCloudflareHeaders && IsTrustedForwarder(TransportPeer(ctx));
+
+    /// <summary>The peer we saw on the socket, before <c>UseForwardedHeaders</c> rewrote it.</summary>
+    private static IPAddress? TransportPeer(HttpContext ctx) =>
+        ctx.Items.TryGetValue(TransportPeerKey, out var stashed) && stashed is IPAddress peer
+            ? peer
+            : ctx.Connection.RemoteIpAddress;
 
     private static bool IsTrustedForwarder(IPAddress? remoteIp)
     {
         if (remoteIp is null) return false;
         if (IPAddress.IsLoopback(remoteIp)) return true;
         return remoteIp.IsIPv4MappedToIPv6 && IPAddress.IsLoopback(remoteIp.MapToIPv4());
+    }
+
+    private static bool IsCorsPreflight(HttpRequest request) =>
+        HttpMethods.IsOptions(request.Method) &&
+        request.Headers.ContainsKey("Origin") &&
+        request.Headers.ContainsKey("Access-Control-Request-Method");
+
+    /// <summary>
+    /// Answers a preflight without consulting the upstream. Tap echoes what the browser asked for
+    /// so an authenticated cross-origin call still works, but never grants
+    /// <c>Access-Control-Allow-Credentials</c>: the actual request is still gated, and its response
+    /// headers still come from the upstream, so nothing here makes a response readable that wasn't.
+    /// </summary>
+    private static void WritePreflightResponse(HttpContext ctx)
+    {
+        var request = ctx.Request;
+        var response = ctx.Response;
+        response.StatusCode = StatusCodes.Status204NoContent;
+        response.Headers["Access-Control-Allow-Origin"] = request.Headers.Origin;
+        response.Headers["Access-Control-Allow-Methods"] = request.Headers["Access-Control-Request-Method"];
+        var requestedHeaders = request.Headers["Access-Control-Request-Headers"];
+        if (requestedHeaders.Count > 0)
+        {
+            response.Headers["Access-Control-Allow-Headers"] = requestedHeaders;
+        }
+        response.Headers["Access-Control-Max-Age"] = "600";
+        response.Headers.Vary = "Origin";
+        response.Headers.CacheControl = "no-store";
     }
 
     private static bool ConstantTimeEquals(ReadOnlySpan<char> a, ReadOnlySpan<char> b)
@@ -260,6 +370,20 @@ public sealed class TapAuthMiddleware(
 /// </summary>
 public sealed class JwtTokenValidator
 {
+    // Pinned so a token can never pick its own verification algorithm — most importantly not
+    // "none", and not an HMAC verified against a public JWKS key.
+    private static readonly string[] SymmetricAlgorithms =
+    [
+        SecurityAlgorithms.HmacSha256, SecurityAlgorithms.HmacSha384, SecurityAlgorithms.HmacSha512,
+    ];
+
+    private static readonly string[] AsymmetricAlgorithms =
+    [
+        SecurityAlgorithms.RsaSha256, SecurityAlgorithms.RsaSha384, SecurityAlgorithms.RsaSha512,
+        SecurityAlgorithms.RsaSsaPssSha256, SecurityAlgorithms.RsaSsaPssSha384, SecurityAlgorithms.RsaSsaPssSha512,
+        SecurityAlgorithms.EcdsaSha256, SecurityAlgorithms.EcdsaSha384, SecurityAlgorithms.EcdsaSha512,
+    ];
+
     private readonly JwtAuthOptions _options;
     private readonly JsonWebTokenHandler _handler = new();
     private readonly SymmetricSecurityKey? _symmetricKey;
@@ -268,12 +392,29 @@ public sealed class JwtTokenValidator
     public JwtTokenValidator(JwtAuthOptions options)
     {
         _options = options;
+
+        if (string.IsNullOrWhiteSpace(options.Audience) && !options.AllowAnyAudience)
+        {
+            throw new InvalidOperationException(
+                "JwtAuthOptions requires an Audience, or AllowAnyAudience = true to say explicitly that " +
+                "any audience is acceptable. Inferring 'no audience configured' as 'don't check the " +
+                "audience' is how a token minted for a different application ends up passing this gate.");
+        }
+
         if (!string.IsNullOrWhiteSpace(options.SecretKey))
         {
             _symmetricKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(options.SecretKey));
         }
         else if (!string.IsNullOrWhiteSpace(options.WellKnownEndpoint))
         {
+            if (string.IsNullOrWhiteSpace(options.Issuer))
+            {
+                throw new InvalidOperationException(
+                    "JwtAuthOptions.WellKnownEndpoint requires an Issuer. A multi-tenant JWKS (for " +
+                    "example login.microsoftonline.com/common) signs tokens for every tenant, so " +
+                    "without an issuer check any of them would validate against this gate.");
+            }
+
             _configManager = new ConfigurationManager<OpenIdConnectConfiguration>(
                 options.WellKnownEndpoint,
                 new OpenIdConnectConfigurationRetriever(),
@@ -294,20 +435,24 @@ public sealed class JwtTokenValidator
             ValidateIssuerSigningKey = true,
             ValidateLifetime = true,
             ClockSkew = TimeSpan.FromSeconds(_options.ClockSkewSeconds),
+            // The JWKS branch cannot get here without an Issuer (the constructor refuses). With a
+            // symmetric secret the key itself pins the issuer, so an explicit one stays optional.
             ValidateIssuer = !string.IsNullOrWhiteSpace(_options.Issuer),
             ValidIssuer = _options.Issuer,
-            ValidateAudience = !string.IsNullOrWhiteSpace(_options.Audience),
+            ValidateAudience = !_options.AllowAnyAudience,
             ValidAudience = _options.Audience,
         };
 
         if (_symmetricKey is not null)
         {
             parameters.IssuerSigningKey = _symmetricKey;
+            parameters.ValidAlgorithms = SymmetricAlgorithms;
         }
         else if (_configManager is not null)
         {
             var config = await _configManager.GetConfigurationAsync(ct);
             parameters.IssuerSigningKeys = config.SigningKeys;
+            parameters.ValidAlgorithms = AsymmetricAlgorithms;
         }
 
         var result = await _handler.ValidateTokenAsync(token, parameters);
@@ -329,6 +474,48 @@ public sealed class JwtTokenValidator
         }
 
         return (true, null);
+    }
+}
+
+/// <summary>
+/// Counts recent auth failures per client so the rate limiter can drop a caller that is guessing
+/// the API key into a much tighter bucket than ordinary proxy traffic. In-process and approximate:
+/// this is a speed bump in front of a dev machine, not an account-lockout system.
+/// </summary>
+public sealed class TapAuthFailureTracker
+{
+    /// <summary>Failures inside <see cref="Window"/> after which a client is treated as suspect.</summary>
+    public const int Threshold = 5;
+
+    /// <summary>How long failures are remembered for.</summary>
+    public static readonly TimeSpan Window = TimeSpan.FromMinutes(5);
+
+    private readonly ConcurrentDictionary<string, (int Count, DateTimeOffset Since)> _failures = new();
+
+    public void RecordFailure(string client)
+    {
+        var now = DateTimeOffset.UtcNow;
+        _failures.AddOrUpdate(
+            client,
+            _ => (1, now),
+            (_, existing) => now - existing.Since > Window ? (1, now) : (existing.Count + 1, existing.Since));
+        Prune(now);
+    }
+
+    public bool IsSuspect(string client) =>
+        _failures.TryGetValue(client, out var entry) &&
+        entry.Count >= Threshold &&
+        DateTimeOffset.UtcNow - entry.Since <= Window;
+
+    // Only sweeps once the map is big enough to be worth sweeping — a busy proxy would otherwise
+    // pay for an enumeration on every rejected request.
+    private void Prune(DateTimeOffset now)
+    {
+        if (_failures.Count < 512) return;
+        foreach (var (client, entry) in _failures)
+        {
+            if (now - entry.Since > Window) _failures.TryRemove(client, out _);
+        }
     }
 }
 
@@ -483,9 +670,21 @@ internal static class AuthErrorPage
 
 public static class TapAuthBuilderExtensions
 {
+    /// <summary>The one <c>/tap-auth/*</c> route Tap serves itself; everything else under that prefix is upstream.</summary>
+    private const string SignOutPath = "/tap-auth/signout";
+
     public static IApplicationBuilder UseTapAuth(this IApplicationBuilder app, TapAuthOptions options)
     {
         if (!options.AnyConfigured) return app;
+
+        // UseForwardedHeaders overwrites Connection.RemoteIpAddress, so stash the real transport
+        // peer first: "did this arrive over the tunnel's loopback hop?" is unanswerable afterwards,
+        // and that question is what decides whether the CF-* headers may be believed.
+        app.Use(async (ctx, nxt) =>
+        {
+            ctx.Items[TapAuthMiddleware.TransportPeerKey] = ctx.Connection.RemoteIpAddress;
+            await nxt();
+        });
 
         // Trust forwarded headers from cloudflared so URLs (and OIDC redirect_uri) reflect
         // the public scheme/host the client actually used.
@@ -508,13 +707,16 @@ public static class TapAuthBuilderExtensions
             app.Use(async (ctx, nxt) =>
             {
                 var path = ctx.Request.Path.Value ?? "";
-                var isCallback =
-                    path.StartsWith(callback, StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("/signout-oidc", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("/signout-callback-oidc", StringComparison.OrdinalIgnoreCase) ||
-                    path.StartsWith("/tap-auth/", StringComparison.OrdinalIgnoreCase);
+                // Exact matches only. A StartsWith exemption also unlocks "/signin-oidc/anything"
+                // and the whole "/tap-auth/" prefix, and the catch-all YARP route behind this
+                // middleware would happily proxy those to the upstream unauthenticated.
+                var isExempt =
+                    path.Equals(callback, StringComparison.OrdinalIgnoreCase) ||
+                    path.Equals("/signout-oidc", StringComparison.OrdinalIgnoreCase) ||
+                    path.Equals("/signout-callback-oidc", StringComparison.OrdinalIgnoreCase) ||
+                    path.Equals(SignOutPath, StringComparison.OrdinalIgnoreCase);
 
-                if (isCallback)
+                if (isExempt)
                 {
                     await nxt();
                     return;
@@ -526,7 +728,7 @@ public static class TapAuthBuilderExtensions
                     var returnTo = ctx.Request.GetEncodedUrl();
                     await ctx.ChallengeAsync(
                         OpenIdConnectDefaults.AuthenticationScheme,
-                        new AuthenticationProperties { RedirectUri = returnTo });
+                        new AuthenticationProperties { RedirectUri = SafeRedirect(ctx, returnTo) });
                     return;
                 }
                 await nxt();
@@ -536,10 +738,9 @@ public static class TapAuthBuilderExtensions
             // GET /tap-auth/signout?post=<url>
             app.Use(async (ctx, nxt) =>
             {
-                if (ctx.Request.Path.Equals("/tap-auth/signout", StringComparison.OrdinalIgnoreCase))
+                if (ctx.Request.Path.Equals(SignOutPath, StringComparison.OrdinalIgnoreCase))
                 {
-                    var post = ctx.Request.Query["post"].ToString();
-                    if (string.IsNullOrEmpty(post)) post = "/";
+                    var post = SafeRedirect(ctx, ctx.Request.Query["post"].ToString());
                     await ctx.SignOutAsync(CookieAuthenticationDefaults.AuthenticationScheme);
                     await ctx.SignOutAsync(OpenIdConnectDefaults.AuthenticationScheme,
                         new AuthenticationProperties { RedirectUri = post });
@@ -549,5 +750,28 @@ public static class TapAuthBuilderExtensions
             });
         }
         return app;
+    }
+
+    /// <summary>
+    /// Clamps a redirect target to this origin. Sign-out takes the destination from the query
+    /// string, which makes the gate an open redirect — and a convincing one, because the hop starts
+    /// on the tunnel's own hostname — unless the value is a local path or names this exact origin.
+    /// </summary>
+    private static string SafeRedirect(HttpContext ctx, string? target)
+    {
+        if (string.IsNullOrEmpty(target)) return "/";
+
+        // "//evil.example" and "/\evil.example" are protocol-relative: they look local and aren't.
+        if (target[0] == '/')
+        {
+            return target.Length == 1 || (target[1] != '/' && target[1] != '\\') ? target : "/";
+        }
+
+        return Uri.TryCreate(target, UriKind.Absolute, out var absolute) &&
+            (absolute.Scheme == Uri.UriSchemeHttp || absolute.Scheme == Uri.UriSchemeHttps) &&
+            string.Equals(absolute.Scheme, ctx.Request.Scheme, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(absolute.Authority, ctx.Request.Host.Value, StringComparison.OrdinalIgnoreCase)
+                ? target
+                : "/";
     }
 }

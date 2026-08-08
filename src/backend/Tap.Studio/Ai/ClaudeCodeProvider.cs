@@ -79,6 +79,7 @@ public sealed class ClaudeCodeProvider : IAiProvider
     {
         if (!cli.Found)
         {
+            if (cli.Rejection is { } rejected) return rejected;
             return cli.Source is CliSource.Override or CliSource.Env
                 ? $"Claude Code CLI path \"{cli.Command}\" does not exist. Set the full path in AI settings or {EnvOverride}."
                 : "Install the Claude Code CLI (https://claude.com/claude-code) and sign in once. "
@@ -156,9 +157,9 @@ public sealed class ClaudeCodeProvider : IAiProvider
         if (!cli.Found)
         {
             return new CliDetection(false, cli.Source == CliSource.Fallback ? null : cli.Command, cli.Source, null,
-                cli.Source == CliSource.Fallback
+                cli.Rejection ?? (cli.Source == CliSource.Fallback
                     ? "Could not find Claude Code CLI in common install paths or PATH."
-                    : $"Claude Code CLI path \"{cli.Command}\" does not exist or is not executable.");
+                    : $"Claude Code CLI path \"{cli.Command}\" does not exist or is not executable."));
         }
         try
         {

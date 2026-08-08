@@ -56,7 +56,11 @@ public static class HttpBlockParser
                         WorkspaceErrorCode.E_HTTP_BLOCK_SYNTAX,
                         $"Expected 'Name: Value' header line; got '{line}'."));
                 }
-                headers.Add((line[..colon].Trim(), line[(colon + 1)..].Trim()));
+                var headerName = line[..colon].Trim();
+                var headerValue = line[(colon + 1)..].Trim();
+                EnsureNoLineBreaks("A header name", headerName);
+                EnsureNoLineBreaks($"The '{headerName}' header value", headerValue);
+                headers.Add((headerName, headerValue));
             }
             else
             {
@@ -71,8 +75,28 @@ public static class HttpBlockParser
                 "Empty http block — no request line found."));
         }
 
+        EnsureNoLineBreaks("The request method", method);
+        EnsureNoLineBreaks("The request URL", url);
+
         var body = bodyLines.Count == 0 ? null : string.Join('\n', bodyLines).TrimEnd('\n', '\r');
         if (body is { Length: 0 }) body = null;
         return new Parsed(method, url, headers, body);
+    }
+
+    /// <summary>
+    /// Rejects CR/LF inside a request-line or header token.
+    ///
+    /// <para>By the time the renderer parses a block the variables in it have been expanded, so this
+    /// text is a mix of workspace file content and whatever a provider returned — all untrusted. A
+    /// bare CR that survives the line split would smuggle an extra header onto the wire. The offending
+    /// text is deliberately not echoed: it may be a resolved secret.</para>
+    /// </summary>
+    internal static void EnsureNoLineBreaks(string what, string value)
+    {
+        if (value.AsSpan().IndexOfAny('\r', '\n') < 0) return;
+
+        throw new WorkspaceParseException(new WorkspaceError(
+            WorkspaceErrorCode.E_HTTP_BLOCK_SYNTAX,
+            $"{what} contains a carriage return or line feed. Line breaks are not allowed there — they would inject extra headers into the request."));
     }
 }

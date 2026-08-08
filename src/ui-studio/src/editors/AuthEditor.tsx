@@ -1157,13 +1157,37 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
   const { browsers, pref, setPref, openLogin } = useBrowserLaunch()
 
   useEffect(() => {
+    // The callback popup signals completion with postMessage — and so can any other window
+    // holding a handle to this one, which without an origin check would let a hostile page
+    // drive a poll against a flow id of its choosing. Trust this origin plus the one Studio
+    // actually redirects to: behind the Vite dev proxy `changeOrigin` rewrites Host, so the
+    // callback page is served from the API origin rather than the dev server's.
+    let cancelled = false
+    const allowedOrigins = new Set([window.location.origin])
+    void api.authCallbackUri()
+      .then((r) => {
+        if (cancelled) return
+        try {
+          const { protocol, origin } = new URL(r.redirectUri, window.location.origin)
+          // The desktop shell redirects through `tap-studio://`, whose origin parses as the
+          // opaque "null" — the same value a sandboxed frame reports. Never allow it.
+          if (protocol === 'http:' || protocol === 'https:') allowedOrigins.add(origin)
+        } catch { /* unparseable — the same-origin entry still stands */ }
+      })
+      .catch(() => { /* best-effort; the same-origin entry still stands */ })
+
     const onMessage = (ev: MessageEvent) => {
-      const data = ev.data as { type?: string; state?: string } | undefined
-      if (data?.type !== 'tap-auth-callback') return
-      if (data.state) void pollOnce(data.state)
+      if (!allowedOrigins.has(ev.origin)) return
+      const data = ev.data as { type?: unknown; state?: unknown } | null | undefined
+      if (typeof data !== 'object' || data === null) return
+      if (data.type !== 'tap-auth-callback') return
+      if (typeof data.state === 'string' && data.state.length > 0) void pollOnce(data.state)
     }
     window.addEventListener('message', onMessage)
-    return () => window.removeEventListener('message', onMessage)
+    return () => {
+      cancelled = true
+      window.removeEventListener('message', onMessage)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(() => () => { if (pollRef.current !== null) window.clearInterval(pollRef.current) }, [])

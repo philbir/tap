@@ -26,6 +26,11 @@ public sealed class OidcDiscoveryClient
     public async Task<OidcDiscoveryDocument> FetchAsync(string authority, CancellationToken ct)
     {
         var key = authority.TrimEnd('/');
+        // Enforced here rather than at the call sites: /api/auth/discovery hands this method
+        // a caller-supplied authority verbatim, so this is the chokepoint that stops Studio
+        // being turned into a fetcher for arbitrary schemes and cleartext hosts.
+        AuthUrlGuard.RequireSecure(key, "OIDC authority");
+
         if (_cache.TryGetValue(key, out var hit) && hit.Expires > DateTimeOffset.UtcNow)
             return hit.Document;
 
@@ -52,6 +57,33 @@ public sealed class OidcDiscoveryClient
     }
 
     private readonly record struct CacheEntry(OidcDiscoveryDocument Document, DateTimeOffset Expires);
+}
+
+/// <summary>
+/// Transport guard for every endpoint an auth profile can point the runner at. Client
+/// secrets, resource-owner passwords, authorization codes and OBO assertions all ride
+/// these requests, so a workspace file must not be able to downgrade one to cleartext or
+/// steer it at a non-HTTP scheme. Loopback over plain http stays allowed — a local
+/// identity provider is a normal dev setup and never leaves the machine.
+/// </summary>
+internal static class AuthUrlGuard
+{
+    /// <summary>
+    /// Throws <see cref="InvalidOperationException"/> unless <paramref name="url"/> is an
+    /// absolute https URL, or an absolute http URL whose host is loopback.
+    /// <paramref name="what"/> names the field in the error the user sees.
+    /// </summary>
+    public static void RequireSecure(string? url, string what)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url, UriKind.Absolute, out var uri))
+            throw new InvalidOperationException($"{what} URL is invalid: '{url}'.");
+
+        if (uri.Scheme == Uri.UriSchemeHttps) return;
+        if (uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback) return;
+
+        throw new InvalidOperationException(
+            $"{what} must use https — plain http is accepted only for a loopback host: '{url}'.");
+    }
 }
 
 /// <summary>Subset of an OIDC discovery document we surface to the UI.</summary>

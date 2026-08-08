@@ -4,6 +4,7 @@ using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.Tunnels;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Tap.Core.Cloudflare;
 
@@ -13,11 +14,17 @@ namespace Aspire.Hosting.Tailscale;
 internal sealed class TailscaleLifecycleHook(
     ILogger<TailscaleLifecycleHook> logger,
     ResourceLoggerService resourceLoggers,
-    ResourceNotificationService resourceNotifications)
+    ResourceNotificationService resourceNotifications,
+    IHostApplicationLifetime applicationLifetime)
     : IDistributedApplicationLifecycleHook
 {
     private static readonly Regex HostnamePattern =
         new(@"TAP_TAILSCALE_HOSTNAME=([a-z0-9.\-]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    /// <summary>Auth-key env files written for Docker mode; removed on shutdown.</summary>
+    private readonly List<string> _secretFiles = [];
+
+    private int _cleanedUp;
 
     public async Task BeforeStartAsync(DistributedApplicationModel appModel, CancellationToken cancellationToken = default)
     {
@@ -45,8 +52,72 @@ internal sealed class TailscaleLifecycleHook(
             // Watcher runs for the lifetime of the AppHost; we don't await it.
             _ = WatchHostnameAsync(tunnel, cancellationToken);
         }
+
+        RegisterShutdownCleanup(tunnels);
     }
 #pragma warning restore CS0618
+
+    /// <summary>
+    /// Belt-and-braces teardown for public funnels on the system daemon. The bootstrapper's
+    /// EXIT trap covers a graceful stop, but a crashed or force-quit AppHost never runs it and
+    /// the system <c>tailscaled</c> outlives the process — leaving the funnel serving the
+    /// internet until somebody notices. Ephemeral and Docker nodes leave the tailnet with their
+    /// own daemon, so they need nothing here. A SIGKILL still bypasses this; the system
+    /// bootstrapper clears a stale rule on the next start to cover that case.
+    /// </summary>
+    private void RegisterShutdownCleanup(List<TailscaleFunnelResource> tunnels)
+    {
+        var funnels = tunnels
+            .Where(t => t.PublicExpose && !t.UseEphemeralDaemon && t.HostMode != TailscaleHostMode.Docker)
+            .ToList();
+
+        applicationLifetime.ApplicationStopping.Register(Cleanup);
+        AppDomain.CurrentDomain.ProcessExit += (_, _) => Cleanup();
+
+        void Cleanup()
+        {
+            if (Interlocked.Exchange(ref _cleanedUp, 1) != 0) return;
+
+            foreach (var tunnel in funnels)
+            {
+                TurnFunnelOff(tunnel);
+            }
+
+            foreach (var path in _secretFiles)
+            {
+                try { File.Delete(path); } catch { }
+            }
+        }
+    }
+
+    private void TurnFunnelOff(TailscaleFunnelResource tunnel)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("tailscale")
+            {
+                RedirectStandardOutput = true,
+                RedirectStandardError = true,
+                UseShellExecute = false,
+            };
+            psi.ArgumentList.Add("funnel");
+            psi.ArgumentList.Add($"--https={tunnel.FunnelPort.ToString(CultureInfo.InvariantCulture)}");
+            psi.ArgumentList.Add("off");
+
+            using var proc = Process.Start(psi);
+            proc?.WaitForExit(5000);
+            logger.LogInformation(
+                "Tailscale Funnel '{Name}': public exposure on port {Port} turned off.",
+                tunnel.Name, tunnel.FunnelPort);
+        }
+        catch (Exception ex)
+        {
+            logger.LogWarning(
+                ex,
+                "Could not turn off Tailscale Funnel '{Name}'. Run 'tailscale funnel --https={Port} off' by hand — the URL is public until you do.",
+                tunnel.Name, tunnel.FunnelPort);
+        }
+    }
 
     private void ConfigureTunnel(TailscaleFunnelResource tunnel)
     {
@@ -78,9 +149,25 @@ internal sealed class TailscaleLifecycleHook(
 
         var scriptPath = WriteBootstrapperScript(tunnel);
         ConfigureFunnelArgs(tunnel, scriptPath);
+        ConfigureAuthKeyEnvironment(tunnel);
     }
 
-    private static void ConfigureDaemonResource(TailscaleFunnelResource tunnel)
+    /// <summary>
+    /// Hands the ephemeral auth key to the bootstrapper through its environment. As a script
+    /// argument it sat in the host process list for the whole session, readable by every local
+    /// user; the key is long-lived enough (often reusable) that this is worth avoiding.
+    /// </summary>
+    private static void ConfigureAuthKeyEnvironment(TailscaleFunnelResource tunnel)
+    {
+        if (!tunnel.UseEphemeralDaemon || tunnel.HostMode == TailscaleHostMode.Docker) return;
+
+        tunnel.Annotations.Add(new EnvironmentCallbackAnnotation(ctx =>
+        {
+            ctx.EnvironmentVariables["TS_AUTHKEY"] = tunnel.AuthKey!;
+        }));
+    }
+
+    private void ConfigureDaemonResource(TailscaleFunnelResource tunnel)
     {
         if (!tunnel.UseEphemeralDaemon || tunnel.Daemon is null) return;
 
@@ -111,7 +198,7 @@ internal sealed class TailscaleLifecycleHook(
         }));
     }
 
-    private static void AppendDockerRunArgs(IList<object> args, TailscaleFunnelResource tunnel)
+    private void AppendDockerRunArgs(IList<object> args, TailscaleFunnelResource tunnel)
     {
         // `tailscale/tailscale` runs `tailscaled` and then `tailscale up --authkey=$TS_AUTHKEY`
         // automatically. We drive funnel config via `docker exec` rather than bind-mounting
@@ -119,19 +206,48 @@ internal sealed class TailscaleLifecycleHook(
         args.Add("run");
         args.Add("--rm");
         args.Add("--name"); args.Add(tunnel.DockerContainerName!);
-        args.Add("-e"); args.Add($"TS_AUTHKEY={tunnel.AuthKey}");
-        args.Add("-e"); args.Add("TS_USERSPACE=true");
-        args.Add("-e"); args.Add($"TS_HOSTNAME={SafeNodeName(tunnel.Name)}");
-        args.Add("-e"); args.Add("TS_EXTRA_ARGS=--reset");
-        if (!string.IsNullOrWhiteSpace(tunnel.LoginServer))
-        {
-            args.Add("-e"); args.Add($"TS_LOGIN_SERVER={tunnel.LoginServer}");
-        }
+        // --env-file, not `-e TS_AUTHKEY=...`: the latter puts the auth key in the host process
+        // list for as long as `docker run` lives, readable by every local user.
+        args.Add("--env-file"); args.Add(WriteDockerEnvFile(tunnel));
         if (OperatingSystem.IsLinux())
         {
             args.Add("--add-host"); args.Add("host.docker.internal:host-gateway");
         }
         args.Add(tunnel.DockerImage);
+    }
+
+    /// <summary>
+    /// Writes the container's environment (including the auth key) to a 0600 temp file. The
+    /// path is recorded so shutdown can delete it.
+    /// </summary>
+    private string WriteDockerEnvFile(TailscaleFunnelResource tunnel)
+    {
+        var path = Path.Combine(Path.GetTempPath(), $"tap-ts-{tunnel.Name}-{Guid.NewGuid():N}.env");
+
+        // Create empty and tighten the mode before the secret goes in, so it is never briefly
+        // world-readable.
+        using (File.Create(path)) { }
+        if (!OperatingSystem.IsWindows())
+        {
+            try { File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite); }
+            catch { /* best effort — a filesystem that can't express the mode is not fatal */ }
+        }
+
+        var lines = new List<string>
+        {
+            $"TS_AUTHKEY={tunnel.AuthKey}",
+            "TS_USERSPACE=true",
+            $"TS_HOSTNAME={SafeNodeName(tunnel.Name)}",
+            "TS_EXTRA_ARGS=--reset",
+        };
+        if (!string.IsNullOrWhiteSpace(tunnel.LoginServer))
+        {
+            lines.Add($"TS_LOGIN_SERVER={tunnel.LoginServer}");
+        }
+        File.WriteAllLines(path, lines);
+
+        _secretFiles.Add(path);
+        return path;
     }
 
     private static void ConfigureFunnelArgs(TailscaleFunnelResource tunnel, string scriptPath)
@@ -167,8 +283,9 @@ internal sealed class TailscaleLifecycleHook(
             }
             else if (tunnel.UseEphemeralDaemon)
             {
+                // The auth key is deliberately absent here — it arrives via TS_AUTHKEY so it
+                // stays out of the host process list. See ConfigureAuthKeyEnvironment.
                 ctx.Args.Add(tunnel.SocketPath!);
-                ctx.Args.Add(tunnel.AuthKey!);
                 ctx.Args.Add(tunnel.FunnelPort.ToString(CultureInfo.InvariantCulture));
                 ctx.Args.Add(upstream);
                 ctx.Args.Add(SafeNodeName(tunnel.Name));
@@ -398,6 +515,13 @@ fi
 TS_CERT_DIR="${TMPDIR:-/tmp}"
 tailscale cert --cert-file="$TS_CERT_DIR/$DNS.crt" --key-file="$TS_CERT_DIR/$DNS.key" "$DNS" >/dev/null 2>&1 || true
 
+# A previous run that was hard-killed never ran its EXIT trap, and the system daemon keeps
+# the rule. Funnel is a per-port flag, so a tailnet-only run would otherwise inherit that
+# port's public exposure and quietly serve the internet.
+if [ "$EXPOSE" != "funnel" ]; then
+  tailscale funnel --https="$PORT" off >/dev/null 2>&1 || true
+fi
+
 if [ "$EXPOSE" = "funnel" ]; then
   echo "WARNING: this URL is publicly reachable on the internet. Scanners typically find" >&2
   echo "         new funnel hostnames within minutes. Pair with auth (header/CIDR/OIDC)." >&2
@@ -427,16 +551,22 @@ tail -f /dev/null
 #!/usr/bin/env bash
 set -e
 SOCKET="$1"
-AUTHKEY="$2"
-PORT="$3"
-UPSTREAM="$4"
-NODE_NAME="$5"
-LOGIN_SERVER="${6:-}"
-EXPOSE="${7:-serve}"
+PORT="$2"
+UPSTREAM="$3"
+NODE_NAME="$4"
+LOGIN_SERVER="${5:-}"
+EXPOSE="${6:-serve}"
+# Comes in through the environment, not argv, so it never shows up in `ps`.
+AUTHKEY="${TS_AUTHKEY:-}"
 
 if ! command -v tailscale >/dev/null 2>&1; then
   echo "ERROR: tailscale CLI not found on PATH." >&2
   exit 127
+fi
+
+if [ -z "$AUTHKEY" ]; then
+  echo "ERROR: TS_AUTHKEY was not passed to the bootstrapper." >&2
+  exit 6
 fi
 
 # Wait for the daemon's LocalAPI socket to appear (up to 30s).
@@ -583,6 +713,12 @@ if (-not $dns) { Write-Error 'Failed to resolve MagicDNS name. Try `tailscale up
 
 $tsCertDir = if ($env:TEMP) { $env:TEMP } else { '.' }
 & tailscale cert --cert-file="$tsCertDir\$dns.crt" --key-file="$tsCertDir\$dns.key" $dns *> $null
+
+# A hard-killed previous run leaves its rule behind in the system daemon, and funnel is a
+# per-port flag — a tailnet-only run must not inherit that port's public exposure.
+if ($Expose -ne 'funnel') {
+  try { & tailscale funnel --https=$Port off *> $null } catch { }
+}
 
 if ($Expose -eq 'funnel') {
   Write-Warning 'This URL is publicly reachable on the internet — pair with auth.'

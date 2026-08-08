@@ -56,10 +56,10 @@ public static class OnePasswordCli
         if (!cli.Found)
         {
             return new CliDetection(false, cli.Source == CliSource.Fallback ? null : cli.Command, cli.Source, null,
-                cli.Source == CliSource.Fallback
+                cli.Rejection ?? (cli.Source == CliSource.Fallback
                     ? "Could not find the 1Password CLI ('op') in common install paths or on PATH. " +
                       "Install it with `brew install 1password-cli` or `winget install AgileBits.1Password.CLI`."
-                    : $"1Password CLI path \"{cli.Command}\" does not exist or is not executable.");
+                    : $"1Password CLI path \"{cli.Command}\" does not exist or is not executable."));
         }
         try
         {
@@ -85,7 +85,7 @@ public static class OnePasswordCli
     {
         if (!cli.Found)
         {
-            throw new OnePasswordCliException(
+            throw new OnePasswordCliException(cli.Rejection ??
                 "the 1Password CLI ('op') was not found. Install it (brew install 1password-cli / " +
                 "winget install AgileBits.1Password.CLI), or set the provider's 'cliPath' setting.");
         }

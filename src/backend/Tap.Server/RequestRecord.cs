@@ -60,11 +60,75 @@ public sealed class RequestRecord
     /// <summary>SSE events captured from a text/event-stream response.</summary>
     public List<SseEvent> SseEvents { get; set; } = new();
 
+    /// <summary>
+    /// Number of SSE events discarded because the capture caps were hit. Non-zero means
+    /// <see cref="SseEvents"/> is a tail, not the whole stream.
+    /// </summary>
+    public int SseEventsDropped { get; set; }
+
     /// <summary>True when this record represents a WebSocket connection.</summary>
     public bool IsWebSocket { get; set; }
 
     /// <summary>WebSocket frames captured for this connection (both directions).</summary>
     public List<WebSocketMessage> WebSocketMessages { get; set; } = new();
+
+    /// <summary>
+    /// Number of WebSocket frames discarded because the capture caps were hit. Non-zero
+    /// means <see cref="WebSocketMessages"/> is a tail, not the whole conversation.
+    /// </summary>
+    public int WebSocketMessagesDropped { get; set; }
+
+    /// <summary>
+    /// Approximate bytes this record's frame lists hold, charged against the store's
+    /// global capture budget. Internal, so it never reaches the wire.
+    /// </summary>
+    internal long CapturedFrameBytes { get; set; }
+
+    /// <summary>
+    /// Set once the record leaves the store (evicted or cleared). A pump may still be
+    /// running against it, and without this flag it would keep growing frames that
+    /// nobody can ever read.
+    /// </summary>
+    internal bool CaptureDetached { get; set; }
+
+    /// <summary>
+    /// Point-in-time copy for serialization. Readers serialize outside the store lock
+    /// while pumps append frames under it — handing out the live lists lets a concurrent
+    /// append throw mid-response or emit a half-written frame.
+    /// </summary>
+    internal RequestRecord Snapshot() => new()
+    {
+        Sequence = Sequence,
+        Id = Id,
+        Timestamp = Timestamp,
+        Method = Method,
+        Host = Host,
+        Path = Path,
+        Scheme = Scheme,
+        Upstream = Upstream,
+        RemoteIp = RemoteIp,
+        RequestHeaders = RequestHeaders,
+        RequestBody = RequestBody,
+        RequestBodyTruncated = RequestBodyTruncated,
+        RequestBodyOriginalSize = RequestBodyOriginalSize,
+        RequestContentType = RequestContentType,
+        StatusCode = StatusCode,
+        ResponseHeaders = ResponseHeaders,
+        ResponseBody = ResponseBody,
+        ResponseBodyBase64 = ResponseBodyBase64,
+        ResponseBodyTruncated = ResponseBodyTruncated,
+        ResponseBodyOriginalSize = ResponseBodyOriginalSize,
+        ResponseContentType = ResponseContentType,
+        DurationMs = DurationMs,
+        Error = Error,
+        IsStream = IsStream,
+        StreamCompleted = StreamCompleted,
+        SseEvents = [.. SseEvents],
+        SseEventsDropped = SseEventsDropped,
+        IsWebSocket = IsWebSocket,
+        WebSocketMessages = [.. WebSocketMessages],
+        WebSocketMessagesDropped = WebSocketMessagesDropped,
+    };
 }
 
 public sealed record SseEvent(

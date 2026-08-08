@@ -17,20 +17,69 @@ namespace Tap.Studio.Auth;
 public sealed class AuthTokenStore
 {
     private readonly string _path;
+    private readonly ILogger<AuthTokenStore> _logger;
     private readonly Lock _gate = new();
-    private readonly Dictionary<string, AuthTokenEntry> _entries;
+    private Dictionary<string, AuthTokenEntry> _entries;
+    private DateTime _loadedWriteTimeUtc;
 
-    public AuthTokenStore(StudioOptions options)
+    public AuthTokenStore(StudioOptions options, ILogger<AuthTokenStore> logger)
     {
+        _logger = logger;
         var dir = Path.GetDirectoryName(options.StatePath) ?? Path.GetTempPath();
         _path = Path.Combine(dir, "auth-tokens.json");
-        _entries = Load();
+
+        var (outcome, loaded) = TryLoad(_path);
+        if (outcome is LoadOutcome.Corrupt)
+        {
+            // Refresh tokens are not reproducible from anything else on disk. Move the
+            // unreadable file aside instead of letting the next Save() overwrite it.
+            var quarantined = AtomicStateFile.MoveAsideCorrupt(_path);
+            if (quarantined is not null)
+                _logger.LogError("Could not parse '{Path}'. Moved it to '{Quarantine}'; every profile must sign in again.", _path, quarantined);
+            else
+                _logger.LogError("Could not parse '{Path}' and could not move it aside. Every profile must sign in again.", _path);
+        }
+
+        _entries = loaded ?? new Dictionary<string, AuthTokenEntry>();
+        _loadedWriteTimeUtc = SafeWriteTimeUtc(_path);
+    }
+
+    /// <summary>Re-reads <c>auth-tokens.json</c> when its on-disk timestamp moved past what we
+    /// loaded. The packaged desktop app and a dev instance routinely share <c>~/.tap</c>, and
+    /// <see cref="Save"/> runs on every silent refresh, not just on interactive sign-in —
+    /// without this, the second process re-serializes its startup snapshot and quietly drops
+    /// every token the first one obtained. Must be called under <see cref="_gate"/>.</summary>
+    private void ReloadIfChangedLocked()
+    {
+        var mtime = SafeWriteTimeUtc(_path);
+        if (mtime == _loadedWriteTimeUtc) return;
+        var (outcome, fresh) = TryLoad(_path);
+        if (outcome is LoadOutcome.Corrupt)
+        {
+            // Keep the in-memory copy rather than adopting garbage. Advance the watermark so
+            // this warns once per on-disk change, not once per token read.
+            _loadedWriteTimeUtc = mtime;
+            _logger.LogWarning("'{Path}' changed on disk but could not be parsed; keeping the in-memory tokens.", _path);
+            return;
+        }
+        if (fresh is not null)
+        {
+            _entries = fresh;
+            _loadedWriteTimeUtc = mtime;
+        }
+    }
+
+    private static DateTime SafeWriteTimeUtc(string path)
+    {
+        try { return File.GetLastWriteTimeUtc(path); }
+        catch { return DateTime.MinValue; }
     }
 
     public AuthTokenEntry? Get(string workspaceRoot, AuthProfileScope scope)
     {
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             return _entries.GetValueOrDefault(Key(workspaceRoot, scope));
         }
     }
@@ -39,6 +88,7 @@ public sealed class AuthTokenStore
     {
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             _entries[Key(workspaceRoot, scope)] = entry;
             Persist();
         }
@@ -51,6 +101,7 @@ public sealed class AuthTokenStore
     {
         lock (_gate)
         {
+            ReloadIfChangedLocked();
             var baseKey = Key(workspaceRoot, new AuthProfileScope(authPath, null));
             var stagePrefix = baseKey + StageSeparator;
             var doomed = _entries.Keys
@@ -62,49 +113,33 @@ public sealed class AuthTokenStore
         }
     }
 
-    private Dictionary<string, AuthTokenEntry> Load()
+    private enum LoadOutcome { Missing, Loaded, Corrupt }
+
+    /// <summary>Reads the token file, keeping "not written yet" and "there but unreadable"
+    /// apart so the caller can quarantine the second case instead of overwriting it.</summary>
+    private static (LoadOutcome Outcome, Dictionary<string, AuthTokenEntry>? Entries) TryLoad(string path)
     {
-        if (!File.Exists(_path)) return new();
+        if (!File.Exists(path)) return (LoadOutcome.Missing, null);
         try
         {
-            var json = File.ReadAllText(_path);
-            return JsonSerializer.Deserialize(json, AuthTokenJson.Default.DictionaryStringAuthTokenEntry)
-                   ?? new Dictionary<string, AuthTokenEntry>();
+            var json = File.ReadAllText(path);
+            var entries = JsonSerializer.Deserialize(json, AuthTokenJson.Default.DictionaryStringAuthTokenEntry);
+            if (entries is null) return (LoadOutcome.Corrupt, null);
+            return (LoadOutcome.Loaded, entries);
         }
         catch
         {
-            // Corrupt or unreadable — start fresh rather than crashing the server. The user
-            // can always re-authenticate.
-            return new();
+            // Never crash the server over a bad token file — the caller logs and the user can
+            // always re-authenticate.
+            return (LoadOutcome.Corrupt, null);
         }
     }
 
     private void Persist()
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
-        File.WriteAllText(_path, JsonSerializer.Serialize(_entries, AuthTokenJson.Default.DictionaryStringAuthTokenEntry));
-        TryRestrictPermissions(_path);
-    }
-
-    /// <summary>
-    /// Best-effort tightening of the token file to user-only read/write (0600 on Unix).
-    /// Silent on Windows — NTFS ACLs are managed differently and the system-dir is already
-    /// inside the user profile. Silent on failure: a wide-open token file is preferable to a
-    /// crashed Studio process; the warning in <see cref="StudioHost"/> covers misconfigured
-    /// machines well enough.
-    /// </summary>
-    private static void TryRestrictPermissions(string path)
-    {
-        if (OperatingSystem.IsWindows()) return;
-        try
-        {
-            File.SetUnixFileMode(path,
-                UnixFileMode.UserRead | UnixFileMode.UserWrite);
-        }
-        catch
-        {
-            // ignore — the file is still owned by the current user
-        }
+        AtomicStateFile.CreateDirectory(Path.GetDirectoryName(_path)!);
+        AtomicStateFile.WriteAllText(_path, JsonSerializer.Serialize(_entries, AuthTokenJson.Default.DictionaryStringAuthTokenEntry));
+        _loadedWriteTimeUtc = SafeWriteTimeUtc(_path);
     }
 
     private const string StageSeparator = "#";

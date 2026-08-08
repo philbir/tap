@@ -222,7 +222,7 @@ public static class FileParser
 
     private static WorkspaceManifestFile ParseWorkspace(Common c, YamlMappingNode fm)
     {
-        var providers = ParseProviders(fm, ProviderOrigin.Workspace);
+        var providers = ParseProviders(fm, ProviderOrigin.Workspace, c.RelativePath);
 
         return new WorkspaceManifestFile
         {
@@ -246,7 +246,7 @@ public static class FileParser
     /// are accepted. The legacy <c>providers:</c> key is honored too so older workspaces
     /// don't break.
     /// </summary>
-    public static List<VariableProviderConfig> ParseProviders(YamlMappingNode fm, ProviderOrigin origin)
+    public static List<VariableProviderConfig> ParseProviders(YamlMappingNode fm, ProviderOrigin origin, string? relativePath = null)
     {
         var providers = new List<VariableProviderConfig>();
         var pNode = fm.Children.TryGetValue(new YamlScalarNode("variableProviders"), out var modern)
@@ -259,6 +259,17 @@ public static class FileParser
             var name = entry.String("name");
             var type = entry.String("type");
             if (name is null || type is null) continue;
+
+            if (!IsValidProviderName(name))
+            {
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
+                    $"Variable provider name '{name}' is not usable. Names must start with a letter and contain only " +
+                    "letters, digits, '_' or '-' — the same shape a '{{name:key}}' token prefix accepts. File-backed " +
+                    "providers combine the name into a path, so a name with separators or '..' would read and write " +
+                    "outside the workspace.",
+                    relativePath));
+            }
 
             var settings = new Dictionary<string, string?>();
             if (entry.Children.TryGetValue(new YamlScalarNode("settings"), out var sn) && sn is YamlMappingNode sMap)
@@ -284,6 +295,21 @@ public static class FileParser
             });
         }
         return providers;
+    }
+
+    /// <summary>
+    /// <c>^[A-Za-z][A-Za-z0-9_-]*$</c> — the shape the interpolation regex already assumes for a
+    /// <c>{{provider:name}}</c> prefix, enforced here so a hostile <c>tap.md</c> can't hand a
+    /// path fragment to a file-backed provider.
+    /// </summary>
+    private static bool IsValidProviderName(string name)
+    {
+        if (name.Length == 0 || !char.IsAsciiLetter(name[0])) return false;
+        foreach (var ch in name)
+        {
+            if (!char.IsAsciiLetterOrDigit(ch) && ch is not ('_' or '-')) return false;
+        }
+        return true;
     }
 
     private static void ReadSettings(YamlMappingNode node, Dictionary<string, string?> bag)

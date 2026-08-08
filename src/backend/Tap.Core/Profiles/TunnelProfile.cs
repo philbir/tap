@@ -39,6 +39,55 @@ public sealed class TunnelProfile
     [JsonPropertyName("oidcAuthority")] public string? OidcAuthority { get; init; }
     [JsonPropertyName("oidcClientId")] public string? OidcClientId { get; init; }
     [JsonPropertyName("oidcClientSecret")] public string? OidcClientSecret { get; init; }
+
+    /// <summary>
+    /// The fields that carry a credential. Anything listed here is redacted before a profile
+    /// leaves the machine over HTTP — see <c>Tap.Server.ProfileEndpoints</c>.
+    /// </summary>
+    public static readonly string[] SecretFieldNames =
+        ["token", "apiToken", "tailscaleAuthKey", "oidcClientSecret"];
+
+    /// <summary>Copy with a different <see cref="Name"/>, for when the filename is authoritative.</summary>
+    public TunnelProfile WithName(string name)
+        => Clone(name, Token, ApiToken, TailscaleAuthKey, OidcClientSecret);
+
+    /// <summary>Copy with the four credential fields replaced (redact on the way out, restore on save).</summary>
+    public TunnelProfile WithSecrets(string? token, string? apiToken, string? tailscaleAuthKey, string? oidcClientSecret)
+        => Clone(Name, token, apiToken, tailscaleAuthKey, oidcClientSecret);
+
+    /// <summary>
+    /// The single place that enumerates every field. Both copy helpers route through it so a
+    /// newly added property can't be silently dropped by one caller and kept by another — the
+    /// bug that previously lost every <c>tailscale*</c> field on load and on save.
+    /// </summary>
+    private TunnelProfile Clone(
+        string name, string? token, string? apiToken, string? tailscaleAuthKey, string? oidcClientSecret) => new()
+        {
+            Name = name,
+            Upstream = Upstream,
+            ProxyPort = ProxyPort,
+            UiPort = UiPort,
+            TunnelMode = TunnelMode,
+            Token = token,
+            ApiToken = apiToken,
+            AccountId = AccountId,
+            ApiManagedTunnelName = ApiManagedTunnelName,
+            DynamicZone = DynamicZone,
+            Hostname = Hostname,
+            Docker = Docker,
+            AutoInstall = AutoInstall,
+            TailscaleDaemonMode = TailscaleDaemonMode,
+            TailscaleAuthKey = tailscaleAuthKey,
+            TailscaleLoginServer = TailscaleLoginServer,
+            TailscaleFunnelPort = TailscaleFunnelPort,
+            TailscalePublic = TailscalePublic,
+            AuthHeader = AuthHeader,
+            AuthCidrs = AuthCidrs,
+            AuthCountries = AuthCountries,
+            OidcAuthority = OidcAuthority,
+            OidcClientId = OidcClientId,
+            OidcClientSecret = oidcClientSecret,
+        };
 }
 
 [JsonSourceGenerationOptions(

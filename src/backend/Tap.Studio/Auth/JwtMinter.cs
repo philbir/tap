@@ -22,13 +22,12 @@ internal static class JwtMinter
     {
         var alg = req.Algorithm.ToUpperInvariant();
 
-        // Header. kid is optional — if the caller passes one we include it verbatim,
-        // otherwise (for HMAC) we derive a stable kid from the key bytes so different
-        // secrets can be told apart in logs without leaking them.
+        // Header. kid is emitted only when the profile configures one. It must never be
+        // derived from the key: a kid computed from the HMAC secret ships a hash of that
+        // secret inside every token, which is an offline cracking oracle for anyone who
+        // sees one.
         var header = new Dictionary<string, object> { ["alg"] = alg, ["typ"] = "JWT" };
         if (!string.IsNullOrEmpty(req.KeyId)) header["kid"] = req.KeyId;
-        else if (IsHmac(alg))
-            header["kid"] = Base64UrlEncode(SHA256.HashData(Encoding.UTF8.GetBytes(req.Key)));
 
         // Payload. Start with the well-known claims, then merge whatever the user provided
         // — later keys win, so caller can override iss/aud/etc via PayloadJson.
@@ -68,8 +67,6 @@ internal static class JwtMinter
         var signature = Sign(alg, unsigned, req.Key);
         return $"{unsigned}.{Base64UrlEncode(signature)}";
     }
-
-    private static bool IsHmac(string alg) => alg is "HS256" or "HS384" or "HS512";
 
     private static byte[] Sign(string alg, string data, string key)
     {

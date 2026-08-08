@@ -639,6 +639,8 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 | `E_SECRET_RESOLUTION_FAILED` | A registered provider rejected the reference. |
 | `E_AUTH_TYPE_INVALID` | Auth `type:` is not a recognized value. |
 | `E_HTTP_BLOCK_SYNTAX` | The fenced `http` block fails to parse as VS Code REST Client syntax. |
+| `E_WORKSPACE_LOAD_FAILED` | The workspace root could not be read at all. The workspace loads empty carrying this error rather than failing the host. |
+| `E_WORKSPACE_SCAN_TRUNCATED` | The folder walk hit its budget (20s / 25 000 folders) and the workspace is only partially loaded — the root is far too broad. Walks skip `node_modules`, `.git`, `.hg`, `.svn`, `.venv`, `__pycache__`, `bin`, `obj`, `target`, and never follow symlinked directories. |
 
 ---
 

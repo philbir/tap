@@ -1,10 +1,14 @@
 using System.Text.Json;
+using Tap.Core.IO;
 
 namespace Tap.Core.Profiles;
 
 /// <summary>
 /// File-backed store for named tunnel profiles. One JSON file per profile under
 /// <c>~/.tap/tunnels</c> (all platforms; <c>~</c> resolves via the user-profile folder).
+///
+/// <para>Profiles carry live credentials — the Cloudflare API token, the connector token, and
+/// the OIDC client secret — so both the directory and the files are created owner-only.</para>
 /// </summary>
 public sealed class TunnelProfileStore
 {
@@ -16,7 +20,7 @@ public sealed class TunnelProfileStore
     public TunnelProfileStore(string? rootOverride = null)
     {
         RootDirectory = rootOverride ?? DefaultRootDirectory;
-        Directory.CreateDirectory(RootDirectory);
+        AtomicFile.CreateDirectory(RootDirectory);
     }
 
     public IReadOnlyList<string> ListNames()
@@ -37,29 +41,10 @@ public sealed class TunnelProfileStore
             using var fs = File.OpenRead(path);
             var p = JsonSerializer.Deserialize(fs, TunnelProfileJson.Default.TunnelProfile);
             if (p is null) return null;
-            // Tolerate stale file with different "name" — trust the filename.
-            return new TunnelProfile
-            {
-                Name = name,
-                Upstream = p.Upstream,
-                ProxyPort = p.ProxyPort,
-                UiPort = p.UiPort,
-                TunnelMode = p.TunnelMode,
-                Token = p.Token,
-                ApiToken = p.ApiToken,
-                AccountId = p.AccountId,
-                ApiManagedTunnelName = p.ApiManagedTunnelName,
-                DynamicZone = p.DynamicZone,
-                Hostname = p.Hostname,
-                Docker = p.Docker,
-                AutoInstall = p.AutoInstall,
-                AuthHeader = p.AuthHeader,
-                AuthCidrs = p.AuthCidrs,
-                AuthCountries = p.AuthCountries,
-                OidcAuthority = p.OidcAuthority,
-                OidcClientId = p.OidcClientId,
-                OidcClientSecret = p.OidcClientSecret,
-            };
+            // Tolerate stale file with different "name" — trust the filename. WithName copies
+            // every field; the previous hand-written projection dropped all five tailscale*
+            // properties, so an ephemeral-mode profile lost its auth key on every load.
+            return p.WithName(name);
         }
         catch
         {
@@ -72,9 +57,8 @@ public sealed class TunnelProfileStore
         if (string.IsNullOrWhiteSpace(profile.Name))
             throw new ArgumentException("Profile name is required.", nameof(profile));
         var path = ResolvePath(profile.Name);
-        Directory.CreateDirectory(RootDirectory);
-        using var fs = File.Create(path);
-        JsonSerializer.Serialize(fs, profile, TunnelProfileJson.Default.TunnelProfile);
+        AtomicFile.CreateDirectory(RootDirectory);
+        AtomicFile.WriteAllText(path, JsonSerializer.Serialize(profile, TunnelProfileJson.Default.TunnelProfile));
     }
 
     public bool Delete(string name)

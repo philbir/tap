@@ -6,8 +6,10 @@ on:
     tags: ["[0-9]+.[0-9]+.[0-9]+*"]
   workflow_dispatch:
 
+# Default to read. Only the two jobs that attach release assets get write, and
+# neither of them is the one that runs the npm/NuGet dependency trees.
 permissions:
-  contents: write
+  contents: read
 
 env:
   # Windows runners default `run:` blocks to PowerShell, where corepack's
@@ -15,9 +17,13 @@ env:
   COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
 
 jobs:
-  build:
+  # Everything that can be built without a secret is built here: the Studio SPA
+  # (the whole ui-studio npm tree) and the .NET sidecar (the whole NuGet tree).
+  # Neither dependency tree is in scope when the signing keys are on the runner
+  # — a compromised transitive package can't read what this job never sees.
+  sidecar:
     permissions:
-      contents: write
+      contents: read
     strategy:
       fail-fast: false
       matrix:
@@ -25,32 +31,91 @@ jobs:
           # macOS: arm64 only. macos-13 (Intel) runners are deprecated/scarce
           # and Rosetta runs the arm64 binary fine on Intel Macs. Add a native
           # x86_64 row if/when we ship a non-Rosetta build.
-          - { runner: macos-14,        target: aarch64-apple-darwin,        bundles: "app,dmg"  }
+          - { runner: macos-14,        target: aarch64-apple-darwin        }
           # Linux: deb only — AppImage bundling via linuxdeploy is fragile in
           # CI and not our primary distribution channel.
-          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu,    bundles: "deb"      }
-          - { runner: windows-latest,  target: x86_64-pc-windows-msvc,      bundles: "msi,nsis" }
+          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu    }
+          - { runner: windows-latest,  target: x86_64-pc-windows-msvc      }
 
     runs-on: ${{ matrix.runner }}
-    name: ${{ matrix.target }}
+    name: sidecar ${{ matrix.target }}
     # Fail fast if a step hangs (Windows UI build stalled ~70m under PowerShell)
     # instead of eating the full 6h default.
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
       - run: corepack enable
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           global-json-file: global.json
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Build the SPA, then publish the sidecar + stage wwwroot for the target
+      # triple. compile-server.mjs is cross-platform (no bash) so the Windows
+      # runner can invoke it without WSL.
+      - name: Build Studio UI
+        working-directory: src/ui-studio
+        shell: bash
+        run: |
+          corepack enable
+          yarn install --immutable
+          yarn build
+
+      - name: Compile sidecar
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: node src/desktop/scripts/compile-server.mjs "$TARGET"
+
+      # Hands src-tauri/binaries/{tap-studio-<triple>,wwwroot/**} to the bundle
+      # job. The archive loses the exec bit; the bundle job restores it.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sidecar-${{ matrix.target }}
+          path: src/desktop/src-tauri/binaries
+          if-no-files-found: error
+          retention-days: 1
+
+  # The signing job. Keep this one lean: it holds the Apple certificate, the
+  # App Store Connect key and the Tauri updater private key, so every step here
+  # is either checkout, something tauri-action itself cannot run without (the
+  # Rust toolchain, the Tauri CLI, the Linux webkit headers), or the release
+  # upload. Do not move build work back into it.
+  bundle:
+    needs: sidecar
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14,        target: aarch64-apple-darwin,        bundles: "app,dmg"  }
+          - { runner: ubuntu-22.04,    target: x86_64-unknown-linux-gnu,    bundles: "deb"      }
+          - { runner: windows-latest,  target: x86_64-pc-windows-msvc,      bundles: "msi,nsis" }
+
+    runs-on: ${{ matrix.runner }}
+    name: ${{ matrix.target }}
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      - run: corepack enable
+
+      # `stable` is a mutable branch ref, not a tag — a force-push to it would
+      # land arbitrary code next to the signing keys. Pin the commit; the action
+      # still installs whatever Rust stable is current at run time.
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
         with:
           targets: ${{ matrix.target }}
 
@@ -65,11 +130,29 @@ jobs:
             libayatana-appindicator3-dev \
             patchelf
 
-      # src/ui-studio uses yarn 4 (Berry); install at the desktop dir level so the
-      # @tauri-apps/cli is in scope for tauri-action's bundling step.
+      # src/desktop uses yarn 4 (Berry); this installs only @tauri-apps/cli,
+      # which tauri-action shells out to. The Studio SPA's dependencies are not
+      # installed here — they were only ever needed by the sidecar job.
       - name: Install desktop deps
         working-directory: src/desktop
         run: yarn install --immutable
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sidecar-${{ matrix.target }}
+          path: src/desktop/src-tauri/binaries
+
+      # upload-artifact zips without Unix mode bits, so the sidecar comes back
+      # non-executable and the bundled app would fail to spawn it at runtime.
+      - name: Restore sidecar exec bit
+        if: ${{ !startsWith(matrix.runner, 'windows-') }}
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -euo pipefail
+          chmod +x "src/desktop/src-tauri/binaries/tap-studio-${TARGET}"
+          ls -la src/desktop/src-tauri/binaries
 
       # Defensive sync: rewrite src/desktop/package.json,
       # src-tauri/tauri.conf.json, src-tauri/Cargo.toml, and src-tauri/Cargo.lock
@@ -79,20 +162,6 @@ jobs:
         if: github.ref_type == 'tag'
         shell: bash
         run: node src/desktop/scripts/sync-version.mjs "${GITHUB_REF_NAME}"
-
-      # Build the SPA, then publish the sidecar + stage wwwroot for the target
-      # triple. compile-server.mjs is cross-platform (no bash) so the Windows
-      # runner can invoke it without WSL.
-      - name: Build Studio UI
-        working-directory: src/ui-studio
-        shell: bash
-        run: |
-          corepack enable
-          yarn install --immutable
-          yarn build
-
-      - name: Compile sidecar
-        run: node src/desktop/scripts/compile-server.mjs ${{ matrix.target }}
 
       # Notarization needs the App Store Connect .p8 private key on disk.
       # The secret holds the base64-encoded file; decode and export the path so
@@ -106,6 +175,7 @@ jobs:
           if [ -n "$APPLE_API_KEY_BASE64" ]; then
             mkdir -p "$HOME/.private_keys"
             echo "$APPLE_API_KEY_BASE64" | base64 --decode > "$HOME/.private_keys/AuthKey.p8"
+            chmod 600 "$HOME/.private_keys/AuthKey.p8"
             echo "APPLE_API_KEY_PATH=$HOME/.private_keys/AuthKey.p8" >> "$GITHUB_ENV"
           fi
 
@@ -116,15 +186,18 @@ jobs:
       - name: Resolve bundles for this tag
         id: bundles
         shell: bash
+        env:
+          BUNDLES: ${{ matrix.bundles }}
+          TARGET: ${{ matrix.target }}
         run: |
-          B="${{ matrix.bundles }}"
-          if [[ "${{ matrix.target }}" == "x86_64-pc-windows-msvc" && "${GITHUB_REF_NAME}" == *-* ]]; then
+          B="$BUNDLES"
+          if [[ "$TARGET" == "x86_64-pc-windows-msvc" && "${GITHUB_REF_NAME}" == *-* ]]; then
             B="nsis"
             echo "Pre-release tag ${GITHUB_REF_NAME}: building nsis only (skipping msi)."
           fi
           echo "value=$B" >> "$GITHUB_OUTPUT"
 
-      - uses: tauri-apps/tauri-action@v0
+      - uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code-signing + notarization. Tauri-action only acts on these
@@ -197,11 +270,19 @@ jobs:
               ;;
           esac
 
+      # Runner disks are wiped between jobs, but a cancelled or failed run can
+      # leave the notarization key readable to any later step in this one.
+      # Delete it on every exit path.
+      - name: Remove App Store Connect API key
+        if: ${{ always() && startsWith(matrix.runner, 'macos-') }}
+        shell: bash
+        run: rm -rf "$HOME/.private_keys"
+
   # Compose latest.json from the per-platform sigs the matrix attached and
   # publish it to the release. The updater client at
   # github.com/philbir/tap/releases/latest/download/latest.json reads this.
   publish-updater:
-    needs: build
+    needs: bundle
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     permissions:

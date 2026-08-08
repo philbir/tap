@@ -52,6 +52,12 @@ Thumbs.db
 *.local.json
 appsettings.Development.json
 
+# Security review write-ups. These enumerate weaknesses with file:line references and
+# working attack scenarios, so they're a roadmap for anyone who reads the repo — keep
+# them local and share them out of band.
+SECURITY-REVIEW*.md
+SECURITY-REVIEW*/
+
 # Pack output
 artifacts/
 *.nupkg

@@ -43,8 +43,29 @@ public sealed class VariableProviderRegistry
         IReadOnlyDictionary<string, string>? aliases = null,
         bool strict = false)
     {
-        _providers = [.. providers];
-        _byName = _providers.ToDictionary(p => p.Name, StringComparer.OrdinalIgnoreCase);
+        // Two `variableProviders` entries with the same name used to make ToDictionary throw out of
+        // this constructor, and the workspace that declared them comes from a cloned repo. Keep the
+        // first registration, drop the rest so the walk order stays unambiguous, and report the
+        // collision instead of failing the load.
+        var deduped = new List<IVariableProvider>();
+        var byName = new Dictionary<string, IVariableProvider>(StringComparer.OrdinalIgnoreCase);
+        var configErrors = new List<WorkspaceError>();
+        foreach (var provider in providers)
+        {
+            if (!byName.TryAdd(provider.Name, provider))
+            {
+                configErrors.Add(new WorkspaceError(
+                    WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
+                    $"More than one variable provider is named '{provider.Name}' (names are matched case-insensitively). " +
+                    "The first registration wins; the rest are ignored."));
+                continue;
+            }
+            deduped.Add(provider);
+        }
+
+        _providers = deduped;
+        _byName = byName;
+        ConfigurationErrors = configErrors;
         _aliases = aliases is { Count: > 0 }
             ? new Dictionary<string, string>(aliases, StringComparer.OrdinalIgnoreCase)
             : null;
@@ -56,6 +77,10 @@ public sealed class VariableProviderRegistry
     }
 
     public IReadOnlyList<IVariableProvider> Providers => _providers;
+
+    /// <summary>Non-fatal problems found while composing the registry — currently duplicate
+    /// provider names. Surfaced so a caller can warn without the workspace failing to load.</summary>
+    public IReadOnlyList<WorkspaceError> ConfigurationErrors { get; }
 
     /// <summary>The effective default provider name (env &gt; workspace &gt; system, aliases
     /// already resolved), or <c>null</c> if unset. Surfaced so the renderer/UI can tell users

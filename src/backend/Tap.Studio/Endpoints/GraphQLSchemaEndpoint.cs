@@ -46,7 +46,8 @@ public static class GraphQLSchemaEndpoint
 
     private static readonly HttpClient HttpClient = new(new HttpClientHandler
     {
-        AllowAutoRedirect = true,
+        // See ExecuteEndpoint: hops are followed manually so each new host is re-validated.
+        AllowAutoRedirect = false,
         UseCookies = false,
     })
     {
@@ -62,6 +63,7 @@ public static class GraphQLSchemaEndpoint
             {
                 var rendered = await svc.RenderAsync(body.Path, body.Env, null, ct, body.Stage)
                     .ConfigureAwait(false);
+                HttpExecutionHelpers.ValidateScheme(rendered);
 
                 var isSdl = string.Equals(body.Mode, "sdl", StringComparison.OrdinalIgnoreCase);
 
@@ -110,9 +112,12 @@ public static class GraphQLSchemaEndpoint
                 if (!req.Headers.Contains("User-Agent"))
                     req.Headers.TryAddWithoutValidation("User-Agent", StudioVersion.UserAgent);
 
-                using var resp = await HttpClient.SendAsync(req, HttpCompletionOption.ResponseContentRead, ct)
-                    .ConfigureAwait(false);
-                var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                // ResponseHeadersRead + a capped read: an introspection reply is JSON we hand
+                // straight to the UI, so a multi-gigabyte body from a hostile endpoint has to be
+                // cut off at the same 2 MiB the execute endpoints enforce, not buffered whole.
+                using var resp = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
+                    HttpClient, req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                var text = await HttpExecutionHelpers.ReadCappedStringAsync(resp, ct).ConfigureAwait(false);
 
                 if (!resp.IsSuccessStatusCode)
                 {

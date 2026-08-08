@@ -27,7 +27,8 @@ public static class ExecuteStreamEndpoint
 {
     private static readonly HttpClient HttpClient = new(new HttpClientHandler
     {
-        AllowAutoRedirect = true,
+        // See ExecuteEndpoint: hops are followed manually so each new host is re-validated.
+        AllowAutoRedirect = false,
         UseCookies = false,
     })
     {
@@ -98,7 +99,8 @@ public static class ExecuteStreamEndpoint
 
                 using var req = HttpExecutionHelpers.BuildRequest(rendered);
 
-                using var httpResp = await HttpClient.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                using var httpResp = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
+                    HttpClient, req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
                 var contentType = httpResp.Content.Headers.ContentType?.ToString();
                 var responseHeaders = HttpExecutionHelpers.FlattenHeaders(httpResp);
 

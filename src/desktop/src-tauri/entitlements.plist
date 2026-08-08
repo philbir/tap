@@ -10,6 +10,16 @@
   <true/>
   <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
   <true/>
+  <!-- Still required, not cargo-culted: Tap.Studio is published with
+       PublishSingleFile + IncludeNativeLibrariesForSelfExtract (see
+       Tap.Studio.csproj), so libcoreclr/libclrjit/libSystem.Native are carried
+       inside the executable and written to ~/.net/<app>/<hash>/ by the apphost
+       on first run. Those extracted copies are produced at runtime and are
+       therefore outside the notarized bundle's signature, so library validation
+       refuses to dlopen them and the sidecar dies before Kestrel binds. Drop
+       this only if the sidecar stops self-extracting (NativeAOT, or
+       IncludeNativeLibrariesForSelfExtract=false with the .dylibs shipped
+       alongside the binary as signed bundle resources). -->
   <key>com.apple.security.cs.disable-library-validation</key>
   <true/>
 </dict>

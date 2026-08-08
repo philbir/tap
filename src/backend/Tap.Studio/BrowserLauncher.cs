@@ -232,11 +232,24 @@ public static class BrowserLauncher
         new("safari", "Safari", ResolveExecutable("safari") is not null, false, []),
     ];
 
+    /// <summary>True when <paramref name="url"/> is something we are willing to hand to a
+    /// browser: an absolute <c>http</c>/<c>https</c> URL and nothing else. Everything here ends
+    /// up as an operand of a real executable — a leading dash would become a Chromium switch
+    /// (<c>--gpu-launcher=…</c> runs a command), and <c>file:</c> or a bare path would be opened
+    /// by the shell-style launchers. Callers validate before calling; <see cref="Open"/> checks
+    /// again so no future caller can skip it.</summary>
+    public static bool IsLaunchableUrl(string? url) =>
+        Uri.TryCreate(url, UriKind.Absolute, out var parsed)
+        && (parsed.Scheme == Uri.UriSchemeHttp || parsed.Scheme == Uri.UriSchemeHttps);
+
     /// <summary>Launch <paramref name="url"/> in the chosen browser + profile, or the system
-    /// default when <paramref name="browser"/> is null/empty. Throws when the browser/profile
-    /// isn't available.</summary>
+    /// default when <paramref name="browser"/> is null/empty. Throws when the URL isn't an
+    /// http(s) URL, or the browser/profile isn't available.</summary>
     public static void Open(string url, string? browser, string? profile)
     {
+        if (!IsLaunchableUrl(url))
+            throw new InvalidOperationException("Only absolute http:// or https:// URLs can be opened in a browser.");
+
         if (string.IsNullOrWhiteSpace(browser))
         {
             OpenWithDefaultBrowser(url);
@@ -265,6 +278,10 @@ public static class BrowserLauncher
             if (browser == "firefox") { args.Add("-P"); args.Add(match.Key); }
             else args.Add($"--profile-directory={match.Key}");
         }
+        // Chromium honours "--" as an end-of-switches marker, so the URL can never be read as
+        // another flag. Belt and braces on top of the scheme check above. Firefox has no such
+        // terminator and rejects options it doesn't know, so it relies on the scheme check alone.
+        if (browser != "firefox") args.Add("--");
         args.Add(url);
         Start(executable, args);
     }

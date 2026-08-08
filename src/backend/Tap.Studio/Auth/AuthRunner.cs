@@ -120,12 +120,32 @@ public sealed class AuthRunner
 
     public async Task<ExecuteAuthResult> CompleteAuthCodeAsync(string flowId, string code, CancellationToken ct)
     {
-        var flow = _flows.Get(flowId);
-        if (flow is null) return ExecuteAuthResult.Failed("Flow not found or expired.");
+        // TryClaim is the single-use gate on `state`: it only hands back a flow that is still
+        // pending, and flips it out of Pending in the same breath. A replayed callback — the
+        // same state arriving twice, whether from a re-opened redirect URL or an attacker who
+        // captured it — finds nothing to redeem. Expiry is enforced inside the store.
+        var flow = _flows.TryClaim(flowId);
+        if (flow is null) return ExecuteAuthResult.Failed("Flow not found, expired, or already completed.");
 
         try
         {
             var token = await ExchangeCodeAsync(flow, code, ct).ConfigureAwait(false);
+
+            // The nonce binds the id_token to *this* authorize request. We only enforce it
+            // when the provider echoed one back: some IdPs that speak plain OAuth2 still
+            // return an id_token without honouring the parameter, and failing those would
+            // break working profiles for no gain.
+            if (!string.IsNullOrEmpty(flow.Nonce) && token.IdToken is { Length: > 0 } idToken
+                && ReadJwtClaim(idToken, "nonce") is { } echoed
+                && !string.Equals(echoed, flow.Nonce, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException("id_token nonce does not match the authorize request — token rejected.");
+            }
+
+            // Neither is needed again, and the flow record lives on for the UI's poll.
+            flow.CodeVerifier = string.Empty;
+            flow.ClientSecret = null;
+
             flow.AccessToken = token.AccessToken;
             flow.IdToken = token.IdToken;
             flow.RefreshToken = token.RefreshToken;
@@ -277,6 +297,7 @@ public sealed class AuthRunner
     {
         if (string.IsNullOrWhiteSpace(deviceEndpoint))
             return ExecuteAuthResult.Failed("OAuth2 device_code: deviceAuthorizationUrl is missing (set it or enable Use Discovery).");
+        AuthUrlGuard.RequireSecure(deviceEndpoint, "Device authorization endpoint");
 
         var form = new Dictionary<string, string> { ["client_id"] = clientId };
         if (scopes.Count > 0) form["scope"] = string.Join(' ', scopes);
@@ -404,6 +425,9 @@ public sealed class AuthRunner
     {
         if (string.IsNullOrWhiteSpace(authorizeEndpoint))
             return ExecuteAuthResult.Failed("OAuth2: authorizeUrl is missing.");
+        // The user's browser follows this URL with their IdP session attached — checked for
+        // the same reason as the token endpoint, one step earlier in the flow.
+        AuthUrlGuard.RequireSecure(authorizeEndpoint, "Authorize endpoint");
 
         var flowId = Guid.NewGuid().ToString("N");
         var codeVerifier = RandomUrlSafe(64);
@@ -590,6 +614,41 @@ public sealed class AuthRunner
         return SaveAndReturn(profile, tokenEndpoint!, clientId!, scopes, token);
     }
 
+    /// <summary>
+    /// Resolve a CLI name to something we can spawn directly.
+    ///
+    /// On Windows <c>az</c> and <c>gh</c> are shims (<c>az.cmd</c>), which is why this used
+    /// to run through <c>cmd.exe /c</c>. That was injectable: <see cref="ProcessStartInfo.ArgumentList"/>
+    /// quotes by C-runtime rules — whitespace or a quote character — but cmd.exe treats
+    /// <c>&amp; | ^ &lt; &gt;</c> as metacharacters wherever they are unquoted, so an
+    /// argument like <c>tenant&amp;whoami</c> (no whitespace, therefore never quoted) arrived
+    /// at cmd.exe as two commands. Every one of those arguments comes from a workspace
+    /// <c>.auth.md</c> profile or a variable provider. Locating the shim ourselves and
+    /// starting it with <c>UseShellExecute=false</c> leaves exactly one parser in the path.
+    ///
+    /// Falls back to the bare name so a miss behaves as before — the OS still does its own
+    /// PATH lookup, and a genuine "not installed" surfaces as the usual Win32Exception.
+    /// </summary>
+    private static string ResolveCliPath(string binaryName)
+    {
+        if (!OperatingSystem.IsWindows()) return binaryName;
+
+        var extensions = (Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var searchPath = Environment.GetEnvironmentVariable("PATH") ?? string.Empty;
+
+        foreach (var dir in searchPath.Split(Path.PathSeparator))
+        {
+            if (string.IsNullOrWhiteSpace(dir)) continue;
+            foreach (var ext in extensions)
+            {
+                var candidate = Path.Combine(dir, binaryName + ext);
+                if (File.Exists(candidate)) return candidate;
+            }
+        }
+        return binaryName;
+    }
+
     private async Task<AzCliResult> RunAzCliAsync(string? resource, string? scope, string? tenant, string? subscription, CancellationToken ct)
     {
         var args = new List<string> { "account", "get-access-token", "--output", "json" };
@@ -598,26 +657,15 @@ public sealed class AuthRunner
         if (!string.IsNullOrEmpty(tenant)) { args.Add("--tenant"); args.Add(tenant!); }
         if (!string.IsNullOrEmpty(subscription)) { args.Add("--subscription"); args.Add(subscription!); }
 
-        // `az` on Windows is a cmd shim — wrap accordingly. On Unix the binary is on PATH.
         var psi = new ProcessStartInfo
         {
+            FileName = ResolveCliPath("az"),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        if (OperatingSystem.IsWindows())
-        {
-            psi.FileName = "cmd.exe";
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add("az");
-            foreach (var a in args) psi.ArgumentList.Add(a);
-        }
-        else
-        {
-            psi.FileName = "az";
-            foreach (var a in args) psi.ArgumentList.Add(a);
-        }
+        foreach (var a in args) psi.ArgumentList.Add(a);
 
         try
         {
@@ -646,6 +694,13 @@ public sealed class AuthRunner
         catch (System.ComponentModel.Win32Exception)
         {
             return new AzCliResult { Error = "Could not run `az` — install the Azure CLI and `az login` first." };
+        }
+        catch (ArgumentException ex)
+        {
+            // Windows shim targets (.cmd/.bat) are escaped by the runtime under cmd.exe rules,
+            // and it refuses anything it cannot escape safely. Report it as bad input rather
+            // than letting a raw framework exception reach the user.
+            return new AzCliResult { Error = $"An az argument could not be passed safely: {ex.Message}" };
         }
     }
 
@@ -875,25 +930,14 @@ public sealed class AuthRunner
     {
         var psi = new ProcessStartInfo
         {
+            FileName = ResolveCliPath("gh"),
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
         };
-        if (OperatingSystem.IsWindows())
-        {
-            psi.FileName = "cmd.exe";
-            psi.ArgumentList.Add("/c");
-            psi.ArgumentList.Add("gh");
-            psi.ArgumentList.Add("auth");
-            psi.ArgumentList.Add("token");
-        }
-        else
-        {
-            psi.FileName = "gh";
-            psi.ArgumentList.Add("auth");
-            psi.ArgumentList.Add("token");
-        }
+        psi.ArgumentList.Add("auth");
+        psi.ArgumentList.Add("token");
 
         try
         {
@@ -924,6 +968,10 @@ public sealed class AuthRunner
         // since our OidcDiscoveryDocument doesn't surface it (yet).
         try
         {
+            // Same transport rule as OidcDiscoveryClient — this path sidesteps that class, so
+            // it has to make the check itself or it becomes the hole in the fence.
+            AuthUrlGuard.RequireSecure(authority, "OIDC authority");
+
             using var http = new HttpClient();
             var url = authority.TrimEnd('/') + "/.well-known/openid-configuration";
             using var stream = await http.GetStreamAsync(url, ct).ConfigureAwait(false);
@@ -957,8 +1005,10 @@ public sealed class AuthRunner
 
     private async Task<TokenResponse> PostTokenAsync(string tokenEndpoint, Dictionary<string, string> form, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(tokenEndpoint) || !Uri.TryCreate(tokenEndpoint, UriKind.Absolute, out _))
-            throw new InvalidOperationException($"Token endpoint URL is invalid: '{tokenEndpoint}'.");
+        // Every grant funnels through here, so this one guard covers client_credentials,
+        // ROPC, device-code polling, the auth-code exchange and the OBO assertion: none of
+        // them may put a secret on the wire in cleartext because a workspace file said so.
+        AuthUrlGuard.RequireSecure(tokenEndpoint, "Token endpoint");
 
         using var req = new HttpRequestMessage(HttpMethod.Post, tokenEndpoint)
         {
@@ -1061,6 +1111,33 @@ public sealed class AuthRunner
         Span<byte> buf = stackalloc byte[bytes];
         RandomNumberGenerator.Fill(buf);
         return Convert.ToBase64String(buf).TrimEnd('=').Replace('+', '-').Replace('/', '_');
+    }
+
+    /// <summary>
+    /// Read one string claim out of a JWT payload without verifying the signature. That is
+    /// deliberate and sufficient here: the token was just fetched over TLS from the token
+    /// endpoint we chose, so the question is not "did the IdP sign this" but "is it the
+    /// answer to the request we sent". Returns null when the token is malformed or the
+    /// claim is absent / not a string.
+    /// </summary>
+    private static string? ReadJwtClaim(string jwt, string claim)
+    {
+        var parts = jwt.Split('.');
+        if (parts.Length < 2) return null;
+
+        var payload = parts[1].Replace('-', '+').Replace('_', '/');
+        payload = payload.PadRight(payload.Length + (4 - payload.Length % 4) % 4, '=');
+        try
+        {
+            using var doc = JsonDocument.Parse(Encoding.UTF8.GetString(Convert.FromBase64String(payload)));
+            return doc.RootElement.TryGetProperty(claim, out var v) && v.ValueKind == JsonValueKind.String
+                ? v.GetString()
+                : null;
+        }
+        catch (Exception ex) when (ex is FormatException or JsonException)
+        {
+            return null;
+        }
     }
 
     private static string Base64UrlSha256(string input)

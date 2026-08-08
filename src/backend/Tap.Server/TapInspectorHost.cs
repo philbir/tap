@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Threading.RateLimiting;
 using Tap.Core.Auth;
 using Yarp.ReverseProxy.Configuration;
 
@@ -14,8 +15,23 @@ public sealed class TapInspectorOptions
 {
     public required int ProxyPort { get; init; }
     public required int UiPort { get; init; }
-    public string ProxyHost { get; init; } = "0.0.0.0";
+
+    /// <summary>
+    /// Address the capture proxy binds to. Loopback by default: cloudflared and tailscaled both
+    /// connect over localhost, so a wildcard bind only ever adds LAN reachability — and a plain
+    /// <c>tap run</c> has no tunnel and no auth in front of it. Container hosting sets
+    /// <c>Inspector:ProxyHost</c> to <c>0.0.0.0</c> explicitly, because there the wildcard is the
+    /// only way the published port reaches the process.
+    /// </summary>
+    public string ProxyHost { get; init; } = "localhost";
     public string UiHost { get; init; } = "localhost";
+
+    /// <summary>
+    /// Host header values the UI (control-plane) port will answer to, on top of the loopback
+    /// literals and <see cref="UiHost"/>. Bound from <c>Inspector:UiAllowedHosts</c> as a
+    /// comma-separated list. Only needed when the UI is bound to a wildcard address.
+    /// </summary>
+    public string[] UiAllowedHosts { get; init; } = [];
     public required InspectorIngressEntry[] Ingress { get; init; }
     public string Mode { get; init; } = "standalone";
     public TapAuthOptions? Auth { get; init; }
@@ -54,12 +70,24 @@ public static class TapInspectorHost
         var auth = new TapAuthOptions();
         config.GetSection("Inspector:Auth").Bind(auth);
 
+        // A header credential that binds to an empty string — an unset $TAP_KEY, a config key that
+        // isn't there — used to register the gate and then wave every request through. Refuse to
+        // start instead: a tunnel that claims to be protected has to actually be protected.
+        if (auth.Header is { } header && string.IsNullOrEmpty(header.Value))
+        {
+            throw new InvalidOperationException(
+                $"Inspector:Auth:Header is configured for '{header.Name}' but its Value is empty. " +
+                "Set Inspector__Auth__Header__Value, or remove the header auth configuration.");
+        }
+
         return new TapInspectorOptions
         {
             ProxyPort = config.GetValue<int>("Inspector:ProxyPort"),
             UiPort = config.GetValue<int>("Inspector:UiPort"),
-            ProxyHost = config["Inspector:ProxyHost"] ?? "0.0.0.0",
+            ProxyHost = config["Inspector:ProxyHost"] ?? "localhost",
             UiHost = config["Inspector:UiHost"] ?? "localhost",
+            UiAllowedHosts = (config["Inspector:UiAllowedHosts"] ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
             Ingress = ingress,
             Mode = config["Inspector:Mode"] ?? "standalone",
             Auth = auth.AnyConfigured ? auth : null,
@@ -142,20 +170,27 @@ public static class TapInspectorHost
 
         builder.Services.AddReverseProxy().LoadFromMemory(routes, clusters);
 
-        if (options.Auth is not null)
+        if (options.Auth is { } auth)
         {
-            builder.Services.AddTapAuth(options.Auth);
+            // The CF-* forwarded headers are only believable when Cloudflare is actually the thing
+            // in front of us, so the gate is told which provider it is sitting behind.
+            auth.Provider = options.Provider;
+            builder.Services.AddTapAuth(auth);
+            AddAuthRateLimiter(builder.Services, auth);
         }
 
         var app = builder.Build();
 
         if (!options.Quiet)
         {
+            // Reported from the checks that will actually run, never from "an Auth object exists" —
+            // a gate that skips every check must not announce itself as enforced.
+            IReadOnlyList<string> enforced = options.Auth?.EnforcedChecks ?? [];
             app.Logger.LogInformation(
                 "HTTP Inspector starting. Proxy: http://{ProxyHost}:{ProxyPort}, UI: http://{UiHost}:{UiPort}. {Ingress} ingress entr{Suffix}.{Auth}",
                 options.ProxyHost, options.ProxyPort, options.UiHost, options.UiPort, options.Ingress.Length,
                 options.Ingress.Length == 1 ? "y" : "ies",
-                options.Auth is not null ? " Auth: enforced." : "");
+                enforced.Count > 0 ? $" Auth: enforced ({string.Join(", ", enforced)})." : "");
         }
 
         // Proxy branch: tunnel/captured traffic, with optional auth in front.
@@ -167,6 +202,9 @@ public static class TapInspectorHost
             proxy.Use(ServeErrorPageAssets);
             if (options.Auth is not null)
             {
+                // Ahead of the gate: without it a static header key on a public tunnel is open to
+                // unlimited online guessing. Only on this branch — the UI branch is loopback-only.
+                proxy.UseRateLimiter();
                 proxy.UseTapAuth(options.Auth);
             }
             proxy.UseMiddleware<CaptureMiddleware>();
@@ -179,11 +217,26 @@ public static class TapInspectorHost
             proxy.UseEndpoints(ep => ep.MapReverseProxy());
         });
 
-        // UI branch — local control plane. It binds to loopback by default and rejects
-        // cross-origin unsafe browser requests.
+        // UI branch — local control plane. Binding to loopback keeps other machines out, but
+        // it is NOT an authorization boundary against the developer's own browser: Kestrel
+        // answers whatever Host header arrives, so a page on attacker.example whose DNS flips
+        // to 127.0.0.1 becomes same-origin with this port and can read every response
+        // (captured Authorization headers, tunnel profiles). Pinning the acceptable Host
+        // values is what closes that; the origin guard behind it is defence in depth.
+        var (uiHosts, allowAnyUiHost) = BuildUiHostAllowlist(options);
+        if (allowAnyUiHost)
+        {
+            app.Logger.LogWarning(
+                "Inspector UI is bound to a wildcard host ('{UiHost}') with no Inspector:UiAllowedHosts set, so the " +
+                "control plane accepts any Host header and cannot be defended against DNS rebinding. " +
+                "Set Inspector:UiAllowedHosts to the hostname(s) you actually browse it on.",
+                options.UiHost);
+        }
+
         app.MapWhen(ctx => ctx.Connection.LocalPort == options.UiPort, ui =>
         {
-            ui.Use(RejectCrossOriginUnsafeRequests);
+            ui.Use(HostAllowlist(uiHosts, allowAnyUiHost));
+            ui.Use(RejectCrossOriginRequests);
             ui.UseDefaultFiles();
             ui.UseStaticFiles();
             ui.UseRouting();
@@ -191,6 +244,44 @@ public static class TapInspectorHost
         });
 
         return app;
+    }
+
+    /// <summary>
+    /// Per-client-IP throttling for the auth-gated proxy branch. Tap is a transparent proxy, so the
+    /// normal bucket is deliberately wide enough that real traffic never notices it; a client that
+    /// has recently failed the gate (<see cref="TapAuthFailureTracker"/>) drops into a bucket that
+    /// makes guessing a key pointless. The partition key is best-effort — see
+    /// <see cref="TapAuthMiddleware.RateLimitPartitionKey"/> — because this runs before
+    /// UseForwardedHeaders; behind a tunnel that hides the client address every request shares one
+    /// partition, which is why the normal limit is a ceiling rather than a per-user quota.
+    /// </summary>
+    private static void AddAuthRateLimiter(IServiceCollection services, TapAuthOptions auth)
+    {
+        services.AddRateLimiter(limiter =>
+        {
+            limiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            limiter.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(ctx =>
+            {
+                var client = TapAuthMiddleware.RateLimitPartitionKey(ctx, auth);
+                var suspect = ctx.RequestServices.GetService<TapAuthFailureTracker>()?.IsSuspect(client) == true;
+
+                return suspect
+                    ? RateLimitPartition.GetFixedWindowLimiter($"suspect:{client}", _ =>
+                        new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = 10,
+                            Window = TimeSpan.FromMinutes(1),
+                            QueueLimit = 0,
+                        })
+                    : RateLimitPartition.GetFixedWindowLimiter($"client:{client}", _ =>
+                        new FixedWindowRateLimiterOptions
+                        {
+                            PermitLimit = 1200,
+                            Window = TimeSpan.FromMinutes(1),
+                            QueueLimit = 0,
+                        });
+            });
+        });
     }
 
     private static async Task ServeErrorPageAssets(HttpContext ctx, RequestDelegate next)
@@ -230,8 +321,73 @@ public static class TapInspectorHost
         await ctx.Response.SendFileAsync(path, ctx.RequestAborted);
     }
 
-    private static async Task RejectCrossOriginUnsafeRequests(HttpContext ctx, RequestDelegate next)
+    private static readonly string[] LoopbackHostNames = ["localhost", "127.0.0.1", "::1"];
+
+    /// <summary>
+    /// The Host values the control plane answers to. Wildcard binds ("0.0.0.0", "*", "+", "::")
+    /// have no single correct hostname, so unless the operator names one via
+    /// <c>Inspector:UiAllowedHosts</c> we keep accepting any Host (container/LAN hosting still
+    /// works) and warn at startup instead of silently breaking it.
+    /// </summary>
+    private static (HashSet<string> Hosts, bool AllowAny) BuildUiHostAllowlist(TapInspectorOptions options)
     {
+        var hosts = new HashSet<string>(LoopbackHostNames, StringComparer.OrdinalIgnoreCase);
+        foreach (var extra in options.UiAllowedHosts)
+        {
+            hosts.Add(NormalizeHost(extra));
+        }
+
+        var isWildcard = options.UiHost is "0.0.0.0" or "*" or "+" or "::" or "[::]";
+        if (!isWildcard)
+        {
+            hosts.Add(NormalizeHost(options.UiHost));
+        }
+
+        return (hosts, isWildcard && options.UiAllowedHosts.Length == 0);
+    }
+
+    /// <summary>Strips the brackets Kestrel keeps around an IPv6 literal so "[::1]" matches "::1".</summary>
+    private static string NormalizeHost(string host) => host.Trim().Trim('[', ']');
+
+    private static Func<HttpContext, RequestDelegate, Task> HostAllowlist(HashSet<string> allowed, bool allowAny) =>
+        async (ctx, next) =>
+        {
+            if (allowAny || allowed.Contains(NormalizeHost(ctx.Request.Host.Host)))
+            {
+                await next(ctx);
+                return;
+            }
+
+            ctx.Response.StatusCode = StatusCodes.Status421MisdirectedRequest;
+            ctx.Response.Headers.CacheControl = "no-store";
+            await ctx.Response.WriteAsync(
+                "Tap inspector control plane: this Host is not allowed. Browse it on localhost, " +
+                "or list the hostname in Inspector:UiAllowedHosts.");
+        };
+
+    /// <summary>
+    /// Keeps foreign origins off the control plane. Two layers:
+    /// <list type="bullet">
+    /// <item><c>Sec-Fetch-Site</c> — sent by every current browser and not forgeable from
+    /// script, so it covers GET as well. That matters because the endpoints worth stealing
+    /// (<c>/api/requests</c>, <c>/api/profiles</c>, <c>/api/stream</c>) are all reads; the old
+    /// guard exempted every safe method. Top-level navigations to non-API paths stay allowed —
+    /// following a link to the UI is legitimate and the response is not script-readable.</item>
+    /// <item><c>Origin</c>/<c>Referer</c> — the original check, still applied to unsafe methods.
+    /// It compares against <c>ctx.Request.Host</c>, which is only trustworthy because
+    /// <see cref="HostAllowlist"/> has already pinned that value.</item>
+    /// </list>
+    /// Non-browser clients (curl, the CLI) send neither header and are unaffected.
+    /// </summary>
+    private static async Task RejectCrossOriginRequests(HttpContext ctx, RequestDelegate next)
+    {
+        if (string.Equals(ctx.Request.Headers["Sec-Fetch-Site"].ToString(), "cross-site", StringComparison.OrdinalIgnoreCase)
+            && !IsTopLevelDocumentNavigation(ctx.Request))
+        {
+            await RejectCrossOrigin(ctx);
+            return;
+        }
+
         if (HttpMethods.IsGet(ctx.Request.Method) ||
             HttpMethods.IsHead(ctx.Request.Method) ||
             HttpMethods.IsOptions(ctx.Request.Method))
@@ -249,7 +405,18 @@ public static class TapInspectorHost
             return;
         }
 
+        await RejectCrossOrigin(ctx);
+    }
+
+    private static bool IsTopLevelDocumentNavigation(HttpRequest req) =>
+        !req.Path.StartsWithSegments("/api") &&
+        string.Equals(req.Headers["Sec-Fetch-Mode"].ToString(), "navigate", StringComparison.OrdinalIgnoreCase) &&
+        string.Equals(req.Headers["Sec-Fetch-Dest"].ToString(), "document", StringComparison.OrdinalIgnoreCase);
+
+    private static async Task RejectCrossOrigin(HttpContext ctx)
+    {
         ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+        ctx.Response.Headers.CacheControl = "no-store";
         await ctx.Response.WriteAsync("Cross-origin control-plane requests are not allowed.");
     }
 

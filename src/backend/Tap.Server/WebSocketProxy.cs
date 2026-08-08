@@ -15,6 +15,22 @@ public static class WebSocketProxy
     private const int MaxCaptureBytes = 1_000_000;
     private const int BufferSize = 16 * 1024;
 
+    /// <summary>
+    /// Absolute ceiling on a single reassembled message. A peer that never sets
+    /// EndOfMessage would otherwise stream frames at us for the life of the connection;
+    /// past this point the socket is torn down rather than trusted.
+    /// </summary>
+    private const long MaxMessageBytes = 64L * 1024 * 1024;
+
+    /// <summary>
+    /// Ceiling on simultaneously proxied sockets. Each one costs two pumps, a rented
+    /// buffer and a reassembly stream, and this proxy is reachable from the public
+    /// internet through the tunnel.
+    /// </summary>
+    private const int MaxConcurrentConnections = 64;
+
+    private static int _activeConnections;
+
     public static async Task ProxyAsync(
         HttpContext ctx,
         RequestRecord record,
@@ -40,9 +56,39 @@ public static class WebSocketProxy
             Query = ctx.Request.QueryString.HasValue ? ctx.Request.QueryString.Value!.TrimStart('?') : string.Empty,
         };
 
+        if (Interlocked.Increment(ref _activeConnections) > MaxConcurrentConnections)
+        {
+            Interlocked.Decrement(ref _activeConnections);
+            logger.LogWarning("Refusing WebSocket upgrade: {Limit} connections already proxied", MaxConcurrentConnections);
+            ctx.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            record.IsWebSocket = true;
+            record.StatusCode = ctx.Response.StatusCode;
+            record.Error = "WebSocket connection limit reached";
+            record.StreamCompleted = true;
+            store.Add(record);
+            return;
+        }
+
+        try
+        {
+            await ProxyCoreAsync(ctx, record, wsBuilder.Uri, store, logger);
+        }
+        finally
+        {
+            Interlocked.Decrement(ref _activeConnections);
+        }
+    }
+
+    private static async Task ProxyCoreAsync(
+        HttpContext ctx,
+        RequestRecord record,
+        Uri upstream,
+        IRequestStore store,
+        ILogger logger)
+    {
         record.IsWebSocket = true;
         record.IsStream = true;
-        record.Upstream = wsBuilder.Uri.ToString();
+        record.Upstream = upstream.ToString();
         record.ResponseContentType = "websocket";
         store.Add(record);
 
@@ -63,11 +109,11 @@ public static class WebSocketProxy
 
         try
         {
-            await clientWs.ConnectAsync(wsBuilder.Uri, ctx.RequestAborted);
+            await clientWs.ConnectAsync(upstream, ctx.RequestAborted);
         }
         catch (Exception ex)
         {
-            logger.LogWarning(ex, "WebSocket upstream connect failed: {Uri}", wsBuilder.Uri);
+            logger.LogWarning(ex, "WebSocket upstream connect failed: {Uri}", upstream);
             ctx.Response.StatusCode = StatusCodes.Status502BadGateway;
             record.StatusCode = ctx.Response.StatusCode;
             record.Error = $"upstream connect failed: {ex.Message}";
@@ -119,6 +165,7 @@ public static class WebSocketProxy
         {
             using var assembled = new MemoryStream();
             WebSocketMessageType currentType = WebSocketMessageType.Text;
+            long messageBytes = 0;
 
             while (!ct.IsCancellationRequested && from.State == WebSocketState.Open)
             {
@@ -162,12 +209,34 @@ public static class WebSocketProxy
                     return;
                 }
 
-                if (assembled.Length == 0)
+                if (messageBytes == 0)
                 {
                     currentType = result.MessageType;
                 }
 
-                assembled.Write(buffer, 0, result.Count);
+                messageBytes += result.Count;
+
+                if (messageBytes > MaxMessageBytes)
+                {
+                    // Nothing legitimate reassembles to this; a peer that keeps sending
+                    // continuation frames is just holding memory hostage. Abort rather
+                    // than negotiate a close it may never complete.
+                    logger.LogWarning(
+                        "WebSocket {Direction} message exceeded {Limit} bytes; aborting connection",
+                        direction, MaxMessageBytes);
+                    record.Error = $"WebSocket message exceeded {MaxMessageBytes} bytes";
+                    store.Update(record);
+                    try { from.Abort(); } catch { /* already torn down */ }
+                    return;
+                }
+
+                // Keep forwarding every byte — the proxy must stay transparent — but stop
+                // buffering once we have as much as we would ever show in the UI.
+                if (assembled.Length < MaxCaptureBytes)
+                {
+                    var room = MaxCaptureBytes - (int)assembled.Length;
+                    assembled.Write(buffer, 0, Math.Min(result.Count, room));
+                }
 
                 try
                 {
@@ -188,10 +257,23 @@ public static class WebSocketProxy
                     continue;
                 }
 
-                var bytes = assembled.ToArray();
+                // GetBuffer over ToArray: the captured span is handed straight to the
+                // encoder, so there is no reason to copy the payload a second time.
+                var message = BuildMessage(
+                    direction,
+                    currentType,
+                    assembled.GetBuffer().AsSpan(0, (int)assembled.Length),
+                    messageBytes);
                 assembled.SetLength(0);
+                messageBytes = 0;
 
-                var message = BuildMessage(direction, currentType, bytes);
+                // SetLength keeps the grown array, so one fat message would pin a megabyte
+                // for the rest of the connection. Give it back.
+                if (assembled.Capacity > BufferSize)
+                {
+                    assembled.Capacity = BufferSize;
+                }
+
                 store.AppendWebSocketMessage(record, message);
             }
         }
@@ -201,11 +283,16 @@ public static class WebSocketProxy
         }
     }
 
-    private static WebSocketMessage BuildMessage(string direction, WebSocketMessageType type, byte[] bytes)
+    /// <summary><paramref name="captured"/> is the buffered prefix; <paramref name="totalSize"/>
+    /// is the true message size, which may be larger because buffering stops at the cap.</summary>
+    private static WebSocketMessage BuildMessage(
+        string direction,
+        WebSocketMessageType type,
+        ReadOnlySpan<byte> captured,
+        long totalSize)
     {
-        var size = bytes.Length;
-        var truncated = size > MaxCaptureBytes;
-        var captured = truncated ? bytes.AsSpan(0, MaxCaptureBytes).ToArray() : bytes;
+        var truncated = totalSize > captured.Length;
+        var size = (int)Math.Min(totalSize, int.MaxValue);
 
         if (type == WebSocketMessageType.Text)
         {

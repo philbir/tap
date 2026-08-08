@@ -152,6 +152,13 @@ public static class TapExtensions
     /// must contain the published <c>Tap.Server</c> with its <c>wwwroot/</c> bundled
     /// (use <c>src/backend/Tap.Server/Dockerfile</c> from this repo).
     /// </summary>
+    /// <param name="exposeUiOnAllInterfaces">
+    /// Publish the UI (control-plane) port on every host interface instead of loopback only.
+    /// The UI branch is unauthenticated — whoever reaches it gets the whole capture ring
+    /// (every proxied Authorization header and body) plus <c>DELETE /api/requests</c> and
+    /// <c>POST /api/replay</c> — so opening it to the network is opt-in and belongs behind
+    /// some other access control.
+    /// </param>
     public static TapHandle AddTapContainer(
         this IDistributedApplicationBuilder builder,
         string name = "tap",
@@ -160,7 +167,8 @@ public static class TapExtensions
         int proxyPort = DefaultProxyPort,
         int uiPort = DefaultUiPort,
         string mode = "standalone",
-        ImagePullPolicy imagePullPolicy = ImagePullPolicy.Missing)
+        ImagePullPolicy imagePullPolicy = ImagePullPolicy.Missing,
+        bool exposeUiOnAllInterfaces = false)
     {
         var annotation = new TapIngressAnnotation
         {
@@ -178,8 +186,36 @@ public static class TapExtensions
             .WithHttpEndpoint(port: uiPort, targetPort: uiPort, name: "ui", isProxied: false)
             .WithAnnotation(annotation);
 
+        if (!exposeUiOnAllInterfaces)
+        {
+            // A container port mapping binds every host interface unless it is given an explicit
+            // host IP, and DCP takes that IP from the endpoint's TargetHost. Left at the default
+            // this hands the whole LAN an unauthenticated control plane, where the origin guard
+            // — a browser-side defence — buys nothing against curl.
+            container.WithEndpoint("ui", e => e.TargetHost = "127.0.0.1", createIfNotExists: false);
+        }
+
         var handle = TapHandle.ForContainer(builder, container, annotation);
         ConfigureCommonTapEnv(handle, builder.Configuration, annotation, mode);
+
+        handle.WithEnvironment(ctx =>
+        {
+            // Inside the container both listeners must bind the wildcard address: a published
+            // port arrives on the container's external interface, so a loopback-only listener
+            // would refuse it. Host-side exposure is decided by the endpoint above, not here.
+            ctx.EnvironmentVariables["Inspector__ProxyHost"] = "0.0.0.0";
+            ctx.EnvironmentVariables["Inspector__UiHost"] = "0.0.0.0";
+
+            if (!exposeUiOnAllInterfaces)
+            {
+                // Publishing on loopback still leaves DNS rebinding: a page on attacker.example
+                // that resolves to 127.0.0.1 reaches the control plane and counts as same-site,
+                // so the origin guard lets it through. Pinning the Host allowlist closes that,
+                // and is only safe to do because we know the port isn't published any wider.
+                ctx.EnvironmentVariables["Inspector__UiAllowedHosts"] = "localhost,127.0.0.1,::1";
+            }
+        });
+
         return handle;
     }
 
@@ -197,10 +233,6 @@ public static class TapExtensions
                 ctx.EnvironmentVariables["Inspector__ProxyPort"] = annotation.ProxyPort.ToString(CultureInfo.InvariantCulture);
                 ctx.EnvironmentVariables["Inspector__UiPort"] = annotation.UiPort.ToString(CultureInfo.InvariantCulture);
                 ctx.EnvironmentVariables["Inspector__Mode"] = mode;
-                if (handle.Resource is ContainerResource)
-                {
-                    ctx.EnvironmentVariables["Inspector__UiHost"] = "0.0.0.0";
-                }
             })
             .WithEnvironment(ctx =>
             {

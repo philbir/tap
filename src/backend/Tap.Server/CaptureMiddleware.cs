@@ -189,9 +189,10 @@ public sealed class CaptureMiddleware
         }
 
         byte[] bytes;
+        bool decodeTruncated;
         try
         {
-            bytes = DecodeBody(captureStream.ToArray(), contentEncoding);
+            bytes = DecodeBody(captureStream.ToArray(), contentEncoding, out decodeTruncated);
         }
         catch
         {
@@ -199,10 +200,9 @@ public sealed class CaptureMiddleware
             return;
         }
 
-        if (bytes.Length > MaxCaptureBytes)
+        if (decodeTruncated)
         {
             record.ResponseBodyTruncated = true;
-            return;
         }
 
         if (IsSvgContentType(record.ResponseContentType))
@@ -226,8 +226,16 @@ public sealed class CaptureMiddleware
         record.ResponseBodyTruncated = true;
     }
 
-    private static byte[] DecodeBody(byte[] bytes, string? contentEncoding)
+    /// <summary>
+    /// Decompresses a captured response body, refusing to materialise more than
+    /// <see cref="MaxCaptureBytes"/>. The cap has to bound the decompressor itself: a
+    /// few kilobytes of gzip expand to gigabytes, so checking the output afterwards is
+    /// already too late. <paramref name="truncated"/> reports that the cap was hit.
+    /// </summary>
+    private static byte[] DecodeBody(byte[] bytes, string? contentEncoding, out bool truncated)
     {
+        truncated = false;
+
         if (string.IsNullOrEmpty(contentEncoding))
         {
             return bytes;
@@ -255,7 +263,21 @@ public sealed class CaptureMiddleware
         using (decompressor)
         {
             using var output = new MemoryStream();
-            decompressor.CopyTo(output);
+            var chunk = new byte[81920];
+            int read;
+            while ((read = decompressor.Read(chunk, 0, chunk.Length)) > 0)
+            {
+                var room = MaxCaptureBytes - output.Length;
+                if (read > room)
+                {
+                    output.Write(chunk, 0, (int)room);
+                    truncated = true;
+                    break;
+                }
+
+                output.Write(chunk, 0, read);
+            }
+
             return output.ToArray();
         }
     }

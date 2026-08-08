@@ -173,7 +173,22 @@ IPs, version — plus every active `serve` / `funnel` rule on the node.
 ## Proxy authentication
 
 Auth gates the **proxy** branch before traffic reaches your upstream. The Inspector UI port
-stays local and is not gated by these checks.
+is not gated by these checks — it is protected instead by being local:
+
+- It binds to `localhost` by default (`Inspector:UiHost`).
+- It only answers to a **loopback `Host` header**. That stops DNS rebinding, where a page on
+  a domain the attacker controls repoints its DNS at `127.0.0.1` so the browser treats your
+  control plane as same-origin and can read every response. Binding to loopback alone does
+  not stop this — Kestrel answers whatever `Host` arrives. If you deliberately bind the UI to
+  a non-loopback address, list the hostnames you browse it on in `Inspector:UiAllowedHosts`
+  (comma-separated); otherwise Tap logs a warning at startup and accepts any `Host`.
+- Cross-site browser requests are rejected via `Sec-Fetch-Site` (reads included), plus an
+  `Origin`/`Referer` same-origin check on unsafe methods. Following a link to the UI still
+  works; a background `fetch` from another site does not.
+- Saved tunnel profiles are returned with `token`, `apiToken`, `tailscaleAuthKey`, and
+  `oidcClientSecret` replaced by `__tap_redacted__`. Saving a profile with a field left at
+  that placeholder keeps the stored value. `POST /api/profiles/{name}/reveal` returns them in
+  the clear when you explicitly ask.
 
 | Check | Behaviour |
 |---|---|

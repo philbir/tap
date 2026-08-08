@@ -13,13 +13,15 @@ API and `fetch('/api/...')` Just Works without any URL plumbing.
 src/desktop/
 ├── package.json            # @tauri-apps/cli wrapper scripts
 ├── src/
-│   └── index.html          # splash shown until the sidecar reports ready
+│   ├── index.html          # splash shown until the sidecar reports ready
+│   └── splash.js           # renders startup phases + the failure card
 └── src-tauri/
     ├── Cargo.toml
     ├── tauri.conf.json     # bundle, externalBin (sidecar), deep-link config
     ├── build.rs
     ├── capabilities/
-    │   └── default.json
+    │   ├── default.json    # granted to the sidecar's http origin
+    │   └── splash.json     # local-only: retry / reveal-log commands
     ├── icons/              # see "Icons" below
     ├── binaries/           # generated — sidecar dropped here per host triple
     └── src/
@@ -158,13 +160,55 @@ runs.
 
 ## Sidecar handshake protocol
 
-Studio emits a single line on stdout once Kestrel is listening, gated by
-`TAP_STUDIO_EMIT_READY=1`:
+With `TAP_STUDIO_EMIT_READY=1` the sidecar narrates its startup on stdout as
+newline-delimited JSON — one event per line, every one carrying `event` and
+`elapsedMs` (see `Tap.Studio/StartupSignal.cs`):
 
 ```json
-{"event":"studio.ready","url":"http://127.0.0.1:54123","pid":42}
+{"event":"studio.progress","phase":"host.building","message":"Configuring the Studio host","elapsedMs":0}
+{"event":"studio.progress","phase":"workspace.loading","message":"Loading workspace /Users/me/apis","elapsedMs":94}
+{"event":"studio.progress","phase":"workspace.loaded","message":"Loaded 37 workspace file(s) in 62 ms","elapsedMs":156}
+{"event":"studio.progress","phase":"server.starting","message":"Binding to localhost:0","elapsedMs":162}
+{"event":"studio.ready","url":"http://127.0.0.1:54123","pid":42,"elapsedMs":175}
 ```
 
-The Rust shell waits for the first line that parses as this shape and uses
-`url` to drive `window.location.replace(...)`. All subsequent stdout lines are
-forwarded to the host process's stderr so they show up under `cargo tauri dev`.
+`studio.ready` is the one that matters: the shell navigates the webview at `url`.
+The rest exist so a launch that *doesn't* get there can say how far it got —
+`studio.error` reports a failure the sidecar could describe itself. Lines that
+don't parse as an event are logged verbatim, so adding a new event is backward
+compatible with an older shell.
+
+## Startup, when it goes wrong
+
+The shell used to sit on "Spawning sidecar" forever if the handshake never
+arrived. It now tracks startup as phases and shows the current one:
+
+- **Timeout** — no `studio.ready` within 45s (`TAP_STUDIO_STARTUP_TIMEOUT_SECS`
+  overrides; `0` waits forever) swaps the spinner for a failure card naming the
+  last phase reached. The sidecar is *not* killed — a genuinely slow first scan
+  still finishes and navigates, and the card disappears when it does.
+- **Sidecar exits early** — reported immediately with its exit code/signal and
+  the tail of its output, instead of waiting out the timeout.
+- **PATH probe** — `resolve_user_path` runs the user's *interactive* login shell
+  to recover a real `PATH` for `az`/`gh`/`op`. That is arbitrary user code, so it
+  runs under a 5s deadline; past it the launch continues with the inherited PATH
+  and says so in the log.
+- **Session log** — everything above plus all sidecar output goes to
+  `<app log dir>/studio.log` (macOS: `~/Library/Logs/dev.philbir.tap-studio/`),
+  with the previous session kept as `studio.prev.log` and a 4 MB ceiling. The
+  failure card shows the path, can reveal it in the file manager, and can copy a
+  diagnostics blob.
+- **Try again** respawns the sidecar without restarting the app.
+
+The failure card lives in `src/index.html` + `src/splash.js`; the Rust side pushes
+status into it with `window.eval` (the page has no bundler, and the payload is a
+serde-produced JSON literal, never hand-quoted text). Its two commands
+(`studio_retry`, `studio_open_log`) are granted in `capabilities/splash.json`,
+which — unlike `default.json` — is local-context only, so the sidecar-origin SPA
+cannot fork extra backends.
+
+To exercise the failure path locally:
+
+```bash
+TAP_STUDIO_STARTUP_TIMEOUT_SECS=1 yarn --cwd src/desktop tauri dev
+```

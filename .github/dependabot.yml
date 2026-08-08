@@ -1,0 +1,42 @@
+version: 2
+
+# Actions are pinned to full commit SHAs (see .github/workflows/*.yml) so a
+# force-pushed tag can't swap code into the job that holds the Apple and Tauri
+# signing keys. Pins only stay safe if something bumps them — that's this file.
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: nuget
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  # One entry per package.json — Dependabot does not walk the tree on its own.
+  - package-ecosystem: npm
+    directories:
+      - "/src/ui-inspector"
+      - "/src/ui-studio"
+      - "/src/desktop"
+      - "/docs-site"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"
+
+  - package-ecosystem: cargo
+    directory: "/src/desktop/src-tauri"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "deps"

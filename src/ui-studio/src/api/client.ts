@@ -30,6 +30,7 @@ import type {
   RequestSpec,
   RequestSummary,
   TaggedItem,
+  TlsDiagnosis,
   VariableTrace,
   AzureKeyVault,
   AzureSubscription,
@@ -237,6 +238,9 @@ export const api = {
   // Actually fire the request against the upstream and return status/headers/body/timing.
   execute: (path: string, env: string | null, stage: string | null, overrides?: Record<string, string>) =>
     post<ExecutionResult>('/api/execute', { path, env, stage, overrides }),
+
+  diagnoseTls: (path: string, env: string | null, stage: string | null, spec?: RequestSpec) =>
+    post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, stage, spec }),
 
   /**
    * Streaming variant of `execute()`. Drives a single fetch + ReadableStream against

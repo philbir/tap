@@ -39,6 +39,7 @@ public static class RequestSpecEmitter
         {
             fm.Set("protocol", spec.Protocol.ToLowerInvariant());
         }
+        fm.SetTransport(spec.Transport);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
         fm.SetStringList("tags", spec.Tags);
 

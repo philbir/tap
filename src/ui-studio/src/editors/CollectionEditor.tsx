@@ -1,9 +1,9 @@
 import {
-  ActionIcon, Badge, Box, Button, Checkbox, Code, Group, ScrollArea, Select, Stack, Tabs, TagsInput, Text, TextInput,
+  ActionIcon, Badge, Box, Button, Checkbox, Code, Group, NumberInput, ScrollArea, Select, Stack, Tabs, TagsInput, Text, TextInput,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
-  IconCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRocket, IconTrash, IconVariable,
+  IconCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRocket, IconShieldCheck, IconTrash, IconVariable,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
@@ -114,6 +114,7 @@ export function CollectionEditor({ path }: Props) {
           <Tabs.Tab value="headers" leftSection={<IconList size={14} />}>
             Headers <TabCount count={headerRows.length} />
           </Tabs.Tab>
+          <Tabs.Tab value="transport" leftSection={<IconShieldCheck size={14} />}>Transport</Tabs.Tab>
           <Tabs.Tab value="variables" leftSection={<IconVariable size={14} />}>
             Variables <TabCount count={varRows.length} />
           </Tabs.Tab>
@@ -201,6 +202,26 @@ export function CollectionEditor({ path }: Props) {
               getValueSuggestions={valuesForHeader}
             />
           </Box>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="transport">
+          <Stack gap="md" maw={760}>
+            <Text size="xs" c="dimmed">Defaults inherited by every request in this collection unless that request overrides a value.</Text>
+            <Checkbox
+              label="Ignore TLS certificate errors"
+              description="Accept invalid, expired, or untrusted certificates. Use only for trusted development endpoints."
+              checked={spec.transport?.ignoreTlsErrors === true}
+              onChange={(e) => update('transport', e.currentTarget.checked ? { ...spec.transport, ignoreTlsErrors: true } : { ...spec.transport, ignoreTlsErrors: undefined })}
+            />
+            <NumberInput
+              label="Timeout (ms)"
+              description="Total request time. Leave blank for the executor default; zero disables the timeout."
+              value={spec.transport?.timeoutMs ?? ''}
+              min={0}
+              step={1000}
+              onChange={(value) => update('transport', { ...spec.transport, timeoutMs: typeof value === 'number' ? value : undefined })}
+            />
+          </Stack>
         </Tabs.Panel>
 
         <Tabs.Panel value="variables">
@@ -293,6 +314,7 @@ function specFromDetail(d: CollectionDetail): CollectionSpec {
     baseUrl: d.baseUrl && d.baseUrl.length > 0 ? d.baseUrl : undefined,
     defaultAuth: d.defaultAuth ?? undefined,
     defaultHeaders: Object.keys(d.defaultHeaders ?? {}).length > 0 ? d.defaultHeaders : undefined,
+    transport: d.transport ?? undefined,
     vars: split.vars,
     secrets: split.secrets,
     tags: d.tags && d.tags.length > 0 ? d.tags : undefined,

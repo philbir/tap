@@ -52,7 +52,8 @@ public static class RequestEndpoints
                 Body: markdownBody,
                 Vars: req.Vars,
                 Source: svc.ReadSource(req.RelativePath),
-                Protocol: req.Protocol.ToWire());
+                Protocol: req.Protocol.ToWire(),
+                Transport: ToDto(req.Transport));
             return Results.Ok(dto);
         });
 
@@ -127,4 +128,9 @@ public static class RequestEndpoints
             : (string.IsNullOrWhiteSpace(after) ? before : before + "\n\n" + after);
         return combined.Trim();
     }
+
+    private static RequestTransportSettingsDto? ToDto(RequestTransportSettings settings)
+        => settings.IgnoreTlsErrors is null && settings.TimeoutMs is null
+            ? null
+            : new RequestTransportSettingsDto(settings.IgnoreTlsErrors, settings.TimeoutMs);
 }

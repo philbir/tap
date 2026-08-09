@@ -6,9 +6,10 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 - SDK is pinned in `global.json` to .NET 10 (`10.0.201`). Targets `net10.0` everywhere.
 - `TreatWarningsAsErrors` is enabled globally (`Directory.Build.props`) — warnings break the build.
-- Solution file is `Tap.slnx` (modern XML format). Use `dotnet build Tap.slnx` / `dotnet restore Tap.slnx`.
-- Run the full demo: `dotnet run --project samples/Sample.AppHost`. There is no test project yet.
-- Aspire CLI: `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire run` from inside `samples/` works.
+- Solution file is `Tap.slnx` (modern XML format). Use `dotnet restore Tap.slnx` only for an explicit restore; do not use `dotnet build` to run or debug the application.
+- Use Aspire exclusively to run and debug application resources. A user-started AppHost is usually already running: check `aspire ps --non-interactive`, reuse that existing AppHost, and only start a new one when none is running. Start an AppHost with `aspire start --non-interactive --apphost <apphost.csproj>`.
+- After changing a backend resource, rebuild and restart only that resource with `aspire resource <resource-name> rebuild --apphost <apphost.csproj> --non-interactive`. Use `aspire ps --non-interactive` / `aspire describe --non-interactive` to identify the existing AppHost and resource name first.
+- `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire start --non-interactive` from inside `samples/` selects it automatically. There is no test project yet.
 - `cloudflared` must be on PATH at AppHost start time (`brew install cloudflared` / `winget install Cloudflare.cloudflared`). The lifecycle hook shells out and fails fast if it's missing.
 
 ### UI

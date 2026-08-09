@@ -1,15 +1,15 @@
 import {
-  Badge, ActionIcon, Box, Button, Code, Group, Loader, Menu, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip, UnstyledButton,
+  Badge, ActionIcon, Box, Button, Code, Group, Loader, Menu, Modal, NumberInput, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconFile, IconFileText, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconSparkles, IconUpload, IconVariable, IconX,
+  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconFile, IconFileText, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
-  CollectionDetail, CollectionSummary, ExecutionResult, HttpHeaderSpec, RenderedRequest, RequestDetail, RequestProtocol, RequestSpec, SseEvent, VariableContext, WsFrame,
+  CollectionDetail, CollectionSummary, ExecutionResult, HttpHeaderSpec, RenderedRequest, RequestDetail, RequestProtocol, RequestSpec, SseEvent, TlsDiagnosis, VariableContext, WsFrame,
 } from '../api/types'
 import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
@@ -65,6 +65,8 @@ export function RequestEditor({ path }: Props) {
   // tags it so the panel can show a "cancelled" marker instead of pretending it finished.
   const [stopped, setStopped] = useState(false)
   const [stage, setStage] = useState<string | null>(null)
+  const [diagnosis, setDiagnosis] = useState<TlsDiagnosis | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
   const [varsOpened, varsCtl] = useDisclosure(false)
   const [assistantOpened, assistantCtl] = useDisclosure(false)
   // Holds the in-flight stream controller so we can abort on Send-again / close.
@@ -273,6 +275,19 @@ export function RequestEditor({ path }: Props) {
     const without = headers.filter((h) => h.name.toLowerCase() !== 'content-type')
     setHeaders(contentType ? [{ name: 'Content-Type', value: contentType }, ...without] : without)
   }
+  function updateTransport(patch: Partial<NonNullable<RequestSpec['transport']>>) {
+    setSpec((cur) => {
+      if (!cur) return cur
+      const transport = { ...cur.transport, ...patch }
+      return { ...cur, transport: transport.ignoreTlsErrors === undefined && transport.timeoutMs === undefined ? undefined : transport }
+    })
+  }
+  async function diagnoseTls() {
+    setDiagnosing(true); setActionError(null)
+    try { setDiagnosis(await api.diagnoseTls(path, activeEnv, effectiveStage, spec ?? undefined)) }
+    catch (e) { setActionError(e instanceof Error ? e.message : String(e)) }
+    finally { setDiagnosing(false) }
+  }
 
   return (
     <>
@@ -410,6 +425,7 @@ export function RequestEditor({ path }: Props) {
           <Tabs.Tab value="auth" leftSection={<IconLock size={14} />}>
             Auth <TabDot active={!!spec.auth && spec.auth !== 'none'} color="orange" />
           </Tabs.Tab>
+          <Tabs.Tab value="transport" leftSection={<IconShieldCheck size={14} />}>Transport</Tabs.Tab>
           <Tabs.Tab value="vars" leftSection={<IconVariable size={14} />}>
             Variables <TabCount count={Object.keys(spec.vars ?? {}).length} />
           </Tabs.Tab>
@@ -503,6 +519,37 @@ export function RequestEditor({ path }: Props) {
           </Stack>
         </Tabs.Panel>
 
+        <Tabs.Panel value="transport">
+          <Stack gap="md" maw={760}>
+            <Select
+              label="TLS certificate validation"
+              description="Choose whether this request inherits the collection policy, validates certificates normally, or accepts certificate errors."
+              data={[
+                { value: '', label: '(inherit from collection)' },
+                { value: 'validate', label: 'Validate certificates' },
+                { value: 'ignore', label: 'Ignore certificate errors' },
+              ]}
+              value={spec.transport?.ignoreTlsErrors === undefined ? '' : spec.transport.ignoreTlsErrors ? 'ignore' : 'validate'}
+              onChange={(value) => updateTransport({ ignoreTlsErrors: value === 'ignore' ? true : value === 'validate' ? false : undefined })}
+              allowDeselect={false}
+            />
+            <NumberInput
+              label="Timeout (ms)"
+              description="Total time allowed for connection and response. Leave blank to inherit from the collection or use the default; zero disables the timeout."
+              value={spec.transport?.timeoutMs ?? ''}
+              min={0}
+              step={1000}
+              onChange={(value) => updateTransport({ timeoutMs: typeof value === 'number' ? value : undefined })}
+            />
+            <Group>
+              <Button variant="default" leftSection={<IconShieldCheck size={14} />} loading={diagnosing} onClick={diagnoseTls}>
+                Diagnose TLS
+              </Button>
+              {linkedCollection && !spec.transport && <Text size="xs" c="dimmed">Unset values inherit collection defaults.</Text>}
+            </Group>
+          </Stack>
+        </Tabs.Panel>
+
         <Tabs.Panel value="vars">
           <Box maw={880}>
             <KvTable
@@ -569,6 +616,7 @@ export function RequestEditor({ path }: Props) {
       </Tabs>
     </EditorShell>
     <VariablesPanel opened={varsOpened} onClose={varsCtl.close} context={variableContext} />
+    <TlsDiagnosisModal diagnosis={diagnosis} onClose={() => setDiagnosis(null)} />
     </>
   )
 }
@@ -952,7 +1000,27 @@ function specFromDetail(d: RequestDetail, path: string): RequestSpec {
     requestBody: d.requestBody ?? undefined,
     // Default is `http` — omit from spec so dirty-tracking + emitter stay quiet.
     protocol: d.protocol === 'websocket' ? 'websocket' : undefined,
+    transport: d.transport ?? undefined,
   }
+}
+
+function TlsDiagnosisModal({ diagnosis, onClose }: { diagnosis: TlsDiagnosis | null; onClose: () => void }) {
+  return (
+    <Modal opened={diagnosis !== null} onClose={onClose} title="TLS diagnosis" size="lg">
+      {diagnosis && <Stack gap="md">
+        <Text size="sm" c={diagnosis.valid ? 'green' : 'red'}>{diagnosis.valid ? 'Certificate validation passed.' : diagnosis.error ?? 'Certificate validation failed.'}</Text>
+        {diagnosis.errors.map((error) => <Text key={error} size="sm" c="red">{error}</Text>)}
+        {diagnosis.certificates.map((certificate) => (
+          <Box key={certificate.thumbprint} p="sm" style={{ border: '1px solid var(--mantine-color-default-border)', borderRadius: 'var(--mantine-radius-sm)' }}>
+            <Text size="sm" fw={600}>{certificate.subject}</Text>
+            <Text size="xs" c="dimmed">Issuer: {certificate.issuer}</Text>
+            <Text size="xs" c="dimmed">Valid: {new Date(certificate.notBefore).toLocaleString()} - {new Date(certificate.notAfter).toLocaleString()}</Text>
+            <Text size="xs" ff="var(--mono)" mt={4}>Thumbprint: {certificate.thumbprint}</Text>
+          </Box>
+        ))}
+      </Stack>}
+    </Modal>
+  )
 }
 
 function basename(p: string): string { return p.split('/').pop() ?? p }

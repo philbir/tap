@@ -112,6 +112,9 @@ public sealed record CollectionFile : WorkspaceFile
     public IReadOnlyDictionary<string, string> DefaultHeaders { get; init; } =
         new Dictionary<string, string>();
 
+    /// <summary>Transport defaults inherited by requests in this collection unless the request overrides them.</summary>
+    public RequestTransportSettings Transport { get; init; } = new();
+
     /// <summary>Collection-scoped variables. Cascade tier between workspace and env
     /// (workspace &lt; <b>collection</b> &lt; stage &lt; env &lt; request).</summary>
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
@@ -165,6 +168,9 @@ public sealed record RequestFile : WorkspaceFile
     /// renderer and transport selection in the executor.</summary>
     public RequestProtocol Protocol { get; init; } = RequestProtocol.Http;
 
+    /// <summary>Request-specific transport overrides. Unset fields inherit from the collection.</summary>
+    public RequestTransportSettings Transport { get; init; } = new();
+
     /// <summary>The single fenced <c>http</c> block carried by the body, verbatim (interpolations un-expanded).</summary>
     public string HttpBlock { get; init; } = string.Empty;
 
@@ -173,4 +179,14 @@ public sealed record RequestFile : WorkspaceFile
 
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
         new Dictionary<string, VarSpec>();
+}
+
+/// <summary>Optional HTTP transport controls. A null value means inherit/use the executor default.</summary>
+public sealed record RequestTransportSettings
+{
+    /// <summary>When true, accept otherwise-invalid TLS certificates. Keep false except for trusted development endpoints.</summary>
+    public bool? IgnoreTlsErrors { get; init; }
+
+    /// <summary>Overall request timeout in milliseconds. Null keeps the executor default; zero disables the timeout.</summary>
+    public int? TimeoutMs { get; init; }
 }

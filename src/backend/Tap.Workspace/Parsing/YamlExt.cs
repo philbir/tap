@@ -17,6 +17,16 @@ internal static class YamlExt
         => map.TryGet(key, out var n) && n is YamlScalarNode s
             && bool.TryParse(s.Value, out var b) ? b : fallback;
 
+    public static bool? NullableBool(this YamlMappingNode map, string key)
+        => map.TryGet(key, out var n) && n is YamlScalarNode s && bool.TryParse(s.Value, out var b)
+            ? b
+            : null;
+
+    public static int? Int(this YamlMappingNode map, string key)
+        => map.TryGet(key, out var n) && n is YamlScalarNode s && int.TryParse(s.Value, out var value)
+            ? value
+            : null;
+
     public static IReadOnlyList<string> StringList(this YamlMappingNode map, string key)
     {
         if (!map.TryGet(key, out var n) || n is not YamlSequenceNode seq) return [];

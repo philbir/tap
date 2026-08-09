@@ -63,6 +63,9 @@ export function VariableInput({
     if (!view) return [] as string[]
     const seen = new Set<string>()
     for (const s of view.sets) if (s.providerName) seen.add(s.providerName)
+    // Env-scoped aliases (e.g. `confix` -> `confix-d`) are valid `{{alias:name}}`
+    // qualifiers too — surface them as their own prefix hints alongside real provider names.
+    for (const alias of Object.keys(view.aliases ?? {})) seen.add(alias)
     const all = Array.from(seen).sort()
     const def = view.defaultProvider
     if (def && all.includes(def)) return [def, ...all.filter((p) => p !== def)]
@@ -601,15 +604,18 @@ function findTokens(text: string): ParsedToken[] {
 
 /** Resolve a parsed token against the view: explicit `{{provider:name}}` searches the
  *  matching provider's set; bare `{{name}}` falls back to the merged cascade. Returns
- *  `null` when nothing matches (caller paints the unknown chip). */
+ *  `null` when nothing matches (caller paints the unknown chip). The qualifier may be
+ *  an env-scoped alias (`view.aliases`) rather than a literal provider name — resolve
+ *  it first so `{{kv:secret}}` still hits `kv-dev`'s set when `kv` is an alias. */
 function resolveToken(
   t: ParsedToken,
   view: import('../api/types').VariableView | null,
   vars: Map<string, Variable>,
 ): Variable | null {
   if (t.provider && view) {
+    const provider = view.aliases?.[t.provider] ?? t.provider
     for (const set of view.sets) {
-      if (set.providerName !== t.provider) continue
+      if (set.providerName !== provider) continue
       const hit = set.variables.find((v) => v.name === t.name)
       if (hit) return hit
     }
@@ -626,9 +632,11 @@ function buildVariableSuggestions(
   const defaultProvider = view.defaultProvider
   const trimmed = prefix.trim()
   const colon = trimmed.indexOf(':')
-  // Provider-qualified prefix: filter to that provider's vars by name.
+  // Provider-qualified prefix: filter to that provider's vars by name. The qualifier may
+  // be an env-scoped alias — resolve it to the real provider name before matching sets.
   if (colon >= 0 && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(trimmed.slice(0, colon))) {
-    const provider = trimmed.slice(0, colon)
+    const qualifier = trimmed.slice(0, colon)
+    const provider = view.aliases?.[qualifier] ?? qualifier
     const q = trimmed.slice(colon + 1).toLowerCase()
     const out: VariableSuggestion[] = []
     for (const set of view.sets) {
@@ -636,7 +644,7 @@ function buildVariableSuggestions(
       for (const v of set.variables) {
         if (v.name.toLowerCase().startsWith(q)) {
           out.push({
-            kind: 'variable', name: v.name, provider, sourceProvider: provider,
+            kind: 'variable', name: v.name, provider: qualifier, sourceProvider: provider,
             isSensitive: v.isSensitive, scope: v.scope,
           })
         }

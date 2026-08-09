@@ -5,15 +5,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Developer flow
 
 - **Frontend changes (`src/ui-inspector/`, `src/ui-studio/`)**: always verify in a browser before reporting done. Use the Claude Preview / Chrome MCP to load the dev server, exercise the changed feature, and check the console for errors. Type-check + build passing is not enough — the UI must actually render and behave correctly.
-- **Backend changes (`Tap.Hosting`, `Tap.Server`, `Tap.Studio`, AppHost)**: use the Aspire CLI to rebuild and restart only the affected resource rather than restarting the whole AppHost. Prefer `aspire` over `dotnet run`/manual kill loops — it keeps tunnels, daemons, and sibling resources warm and gives faster turnaround.
+- **Backend changes (`Tap.Hosting`, `Tap.Server`, `Tap.Studio`, AppHost)**: use Aspire exclusively for application execution and debugging. A user-started AppHost is usually already running: inspect `aspire ps --non-interactive`, reuse it, and only start a new AppHost when none is running. Rebuild and restart only the affected resource with `aspire resource <resource-name> rebuild --apphost <apphost.csproj> --non-interactive`; do not use `dotnet build`, `dotnet run`, or manual process management for application iteration.
 
 ## Build, run, test
 
 - SDK is pinned in `global.json` to .NET 10 (`10.0.201`). Targets `net10.0` everywhere.
 - `TreatWarningsAsErrors` is enabled globally (`Directory.Build.props`) — warnings break the build.
-- Solution file is `Tap.slnx` (modern XML format). Use `dotnet build Tap.slnx` / `dotnet restore Tap.slnx`.
-- Run the full demo: `dotnet run --project samples/Sample.AppHost`. There is no test project yet.
-- Aspire CLI: `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire run` from inside `samples/` works.
+- Solution file is `Tap.slnx` (modern XML format). Use `dotnet restore Tap.slnx` only for an explicit restore; do not use `dotnet build` to run or debug the application.
+- Only when no AppHost is already running, start the app with `aspire start --non-interactive --apphost <apphost.csproj>`. There is no test project yet.
+- After a backend change, use `aspire resource <resource-name> rebuild --apphost <apphost.csproj> --non-interactive`; this rebuilds and restarts the resource.
+- `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire start --non-interactive` from inside `samples/` selects it automatically.
 - `cloudflared` must be on PATH at AppHost start time (`brew install cloudflared` / `winget install Cloudflare.cloudflared`). The lifecycle hook shells out and fails fast if it's missing.
 
 ### UI

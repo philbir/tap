@@ -19,6 +19,7 @@ public static class CollectionSpecEmitter
         fm.SetIfNotEmpty("baseUrl", spec.BaseUrl);
         fm.SetIfNotEmpty("defaultAuth", spec.DefaultAuth);
         fm.SetStringMap("defaultHeaders", spec.DefaultHeaders);
+        fm.SetTransport(spec.Transport);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
         fm.SetStringList("tags", spec.Tags);
 

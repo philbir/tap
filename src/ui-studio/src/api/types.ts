@@ -85,6 +85,28 @@ export interface HttpHeaderSpec {
   value: string
 }
 
+export interface RequestTransportSettings {
+  ignoreTlsErrors?: boolean
+  timeoutMs?: number
+}
+
+export interface TlsCertificate {
+  subject: string
+  issuer: string
+  thumbprint: string
+  notBefore: string
+  notAfter: string
+  serialNumber: string
+}
+
+export interface TlsDiagnosis {
+  url: string
+  valid: boolean
+  error: string | null
+  certificates: TlsCertificate[]
+  errors: string[]
+}
+
 /** Wire protocol carried by a request — `http` (default) or `websocket`. Drives baseUrl
  *  scheme normalization and the executor's transport selection. */
 export type RequestProtocol = 'http' | 'websocket'
@@ -98,6 +120,7 @@ export interface RequestDetail extends RequestSummary {
   vars: Record<string, VarSpec>
   source: string
   protocol: RequestProtocol
+  transport: RequestTransportSettings | null
 }
 
 export interface RequestSpec {
@@ -116,6 +139,7 @@ export interface RequestSpec {
   requestBody?: string
   /** Omitted when `http` (default). `websocket` triggers ws scheme normalization + ws transport. */
   protocol?: RequestProtocol
+  transport?: RequestTransportSettings
 }
 
 /** One named stage inside a collection. Stage fields override the parent collection's
@@ -567,6 +591,7 @@ export interface CollectionDetail {
   baseUrl: string
   defaultAuth: string | null
   defaultHeaders: Record<string, string>
+  transport: RequestTransportSettings | null
   vars: Record<string, VarSpec>
   tags: string[]
   body: string
@@ -582,6 +607,7 @@ export interface CollectionSpec {
   baseUrl?: string
   defaultAuth?: string
   defaultHeaders?: Record<string, string>
+  transport?: RequestTransportSettings
   vars?: Record<string, string>
   /** Names of collection-scoped variables marked secret. */
   secrets?: string[]

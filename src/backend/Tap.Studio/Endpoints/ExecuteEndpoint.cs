@@ -16,18 +16,6 @@ namespace Tap.Studio.Endpoints;
 /// </summary>
 public static class ExecuteEndpoint
 {
-    private static readonly HttpClient HttpClient = new(new HttpClientHandler
-    {
-        // Redirects are followed by HttpExecutionHelpers.SendFollowingRedirectsAsync instead, so
-        // every hop past the first one gets re-validated before we reconnect.
-        AllowAutoRedirect = false,
-        UseCookies = false,
-        // No timeout cap at the HttpClient level — we apply a soft cancellation per-request.
-    })
-    {
-        Timeout = TimeSpan.FromMinutes(2),
-    };
-
     public static void Map(IEndpointRouteBuilder app)
     {
         app.MapPost("/api/execute", async (ExecuteRequestDto body, WorkspaceService svc, CancellationToken ct) =>
@@ -98,17 +86,19 @@ public static class ExecuteEndpoint
                 }
 
                 using var req = HttpExecutionHelpers.BuildRequest(rendered);
+                using var timeout = HttpTransport.CreateTimeout(rendered, ct);
+                using var httpClient = HttpTransport.CreateClient(rendered);
 
                 var sw = Stopwatch.StartNew();
                 using var resp = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
-                    HttpClient, req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
-                var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                    httpClient, req, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
+                var stream = await resp.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
 
                 using var ms = new MemoryStream();
                 var buf = new byte[64 * 1024];
                 long total = 0;
                 int read;
-                while ((read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false)) > 0)
+                while ((read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), timeout.Token).ConfigureAwait(false)) > 0)
                 {
                     total += read;
                     if (ms.Length < HttpExecutionHelpers.BodyCap)
@@ -165,9 +155,15 @@ public static class ExecuteEndpoint
                     DurationMs: 0,
                     VariablesUsed: [],
                     Stage: null,
-                    Error: ex.Message,
+                    Error: HttpTransport.DescribeException(ex),
                     Protocol: "http"));
             }
+        });
+
+        app.MapPost("/api/execute/tls-diagnose", async (ExecuteRequestDto body, WorkspaceService svc, CancellationToken ct) =>
+        {
+            var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec).ConfigureAwait(false);
+            return Results.Ok(await HttpTransport.DiagnoseAsync(new Uri(rendered.Url), ct).ConfigureAwait(false));
         });
     }
 

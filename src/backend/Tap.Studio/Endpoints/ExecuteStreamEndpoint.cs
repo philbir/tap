@@ -25,17 +25,6 @@ namespace Tap.Studio.Endpoints;
 /// </summary>
 public static class ExecuteStreamEndpoint
 {
-    private static readonly HttpClient HttpClient = new(new HttpClientHandler
-    {
-        // See ExecuteEndpoint: hops are followed manually so each new host is re-validated.
-        AllowAutoRedirect = false,
-        UseCookies = false,
-    })
-    {
-        // Effectively no timeout — SSE producers stream indefinitely. The client can abort.
-        Timeout = Timeout.InfiniteTimeSpan,
-    };
-
     public static void Map(IEndpointRouteBuilder app)
     {
         app.MapPost("/api/execute/stream", async (HttpContext ctx, ExecuteRequestDto body, WorkspaceService svc) =>
@@ -98,9 +87,11 @@ public static class ExecuteStreamEndpoint
                 }
 
                 using var req = HttpExecutionHelpers.BuildRequest(rendered);
+                using var timeout = HttpTransport.CreateTimeout(rendered, ct);
+                using var httpClient = HttpTransport.CreateClient(rendered);
 
                 using var httpResp = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
-                    HttpClient, req, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+                    httpClient, req, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
                 var contentType = httpResp.Content.Headers.ContentType?.ToString();
                 var responseHeaders = HttpExecutionHelpers.FlattenHeaders(httpResp);
 
@@ -120,18 +111,18 @@ public static class ExecuteStreamEndpoint
                 var isSse = contentType?.Split(';')[0].Trim()
                     .Equals("text/event-stream", StringComparison.OrdinalIgnoreCase) ?? false;
 
-                using var stream = await httpResp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+                using var stream = await httpResp.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
 
                 if (isSse)
                 {
-                    totalBytes = await PumpSseFramesAsync(stream, resp, sw, ct).ConfigureAwait(false);
+                    totalBytes = await PumpSseFramesAsync(stream, resp, sw, timeout.Token).ConfigureAwait(false);
                 }
                 else
                 {
                     using var ms = new MemoryStream();
                     var buf = new byte[64 * 1024];
                     int read;
-                    while ((read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false)) > 0)
+                    while ((read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), timeout.Token).ConfigureAwait(false)) > 0)
                     {
                         totalBytes += read;
                         if (ms.Length < HttpExecutionHelpers.BodyCap)
@@ -156,9 +147,10 @@ public static class ExecuteStreamEndpoint
             catch (Exception ex)
             {
                 sw.Stop();
-                await WriteEventAsync(resp, "error", new ExecuteStreamErrorDto(ex.Message), ct);
+                var message = HttpTransport.DescribeException(ex);
+                await WriteEventAsync(resp, "error", new ExecuteStreamErrorDto(message), ct);
                 await WriteEventAsync(resp, "done",
-                    new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, ex.Message), ct);
+                    new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, message), ct);
             }
         });
     }

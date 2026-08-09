@@ -133,7 +133,8 @@ public sealed record RequestDetailDto(
     string Source,
     /// <summary>Wire protocol — <c>"http"</c> (default) or <c>"websocket"</c>. Drives the
     /// renderer's baseUrl scheme normalization and the executor's transport selection.</summary>
-    string Protocol);
+    string Protocol,
+    RequestTransportSettingsDto? Transport);
 
 public sealed record AuthDetailDto(
     string Path,
@@ -207,6 +208,7 @@ public sealed record CollectionDetailDto(
     string BaseUrl,
     string? DefaultAuth,
     IReadOnlyDictionary<string, string> DefaultHeaders,
+    RequestTransportSettingsDto? Transport,
     IReadOnlyDictionary<string, VarSpec> Vars,
     IReadOnlyList<string> Tags,
     string Body,
@@ -225,6 +227,7 @@ public sealed record CollectionSpecDto
     /// <summary>Relative path to an auth file, or <c>id:…</c>. Falls through to requests.</summary>
     public string? DefaultAuth { get; init; }
     public IReadOnlyDictionary<string, string>? DefaultHeaders { get; init; }
+    public RequestTransportSettingsDto? Transport { get; init; }
     public IReadOnlyDictionary<string, string>? Vars { get; init; }
     /// <summary>Variable names marked secret. Same encoding as <see cref="EnvSpecDto.Secrets"/>.</summary>
     public IReadOnlyList<string>? Secrets { get; init; }
@@ -496,7 +499,10 @@ public sealed record RequestSpecDto
     public IReadOnlyList<HttpHeaderSpecDto>? Headers { get; init; }
     public string? RequestBody { get; init; }
     public string? Protocol { get; init; }
+    public RequestTransportSettingsDto? Transport { get; init; }
 }
+
+public sealed record RequestTransportSettingsDto(bool? IgnoreTlsErrors, int? TimeoutMs);
 
 public sealed record HttpHeaderSpecDto(string Name, string Value);
 
@@ -858,6 +864,9 @@ public sealed record ExecuteStreamDoneDto(
 
 public sealed record ExecuteStreamErrorDto(string Message);
 
+public sealed record TlsCertificateDto(string Subject, string Issuer, string Thumbprint, DateTime NotBefore, DateTime NotAfter, string SerialNumber);
+public sealed record TlsDiagnosisDto(string Url, bool Valid, string? Error, IReadOnlyList<TlsCertificateDto> Certificates, IReadOnlyList<string> Errors);
+
 public sealed record GraphQLSchemaRequestDto(string Path, string? Env, string? Stage, string Mode);
 
 public sealed record GraphQLSchemaResponseDto(string? Schema, string? Error);
@@ -948,6 +957,7 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(ExecuteStreamWsDto))]
 [JsonSerializable(typeof(ExecuteStreamDoneDto))]
 [JsonSerializable(typeof(ExecuteStreamErrorDto))]
+[JsonSerializable(typeof(TlsDiagnosisDto))]
 [JsonSerializable(typeof(GraphQLSchemaRequestDto))]
 [JsonSerializable(typeof(GraphQLSchemaResponseDto))]
 [JsonSerializable(typeof(FileUploadResponseDto))]

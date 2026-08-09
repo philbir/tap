@@ -73,6 +73,7 @@ public static class CollectionEndpoints
                     BaseUrl: c.BaseUrl,
                     DefaultAuth: c.DefaultAuth?.RelativePath,
                     DefaultHeaders: c.DefaultHeaders,
+                    Transport: ToDto(c.Transport),
                     Vars: c.Vars,
                     Tags: c.Tags,
                     Body: c.Body,
@@ -95,6 +96,7 @@ public static class CollectionEndpoints
                 BaseUrl: string.Empty,
                 DefaultAuth: null,
                 DefaultHeaders: new Dictionary<string, string>(),
+                Transport: null,
                 Vars: new Dictionary<string, VarSpec>(),
                 Tags: Array.Empty<string>(),
                 Body: string.Empty,
@@ -209,6 +211,11 @@ public static class CollectionEndpoints
             return Results.NoContent();
         });
     }
+
+    private static RequestTransportSettingsDto? ToDto(RequestTransportSettings settings)
+        => settings.IgnoreTlsErrors is null && settings.TimeoutMs is null
+            ? null
+            : new RequestTransportSettingsDto(settings.IgnoreTlsErrors, settings.TimeoutMs);
 
     private static string? SlugFromCollectionFile(string relativePath)
     {

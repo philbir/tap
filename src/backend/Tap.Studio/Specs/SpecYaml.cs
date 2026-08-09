@@ -1,4 +1,5 @@
 using System.Text;
+using Tap.Studio.Contracts;
 using YamlDotNet.RepresentationModel;
 
 namespace Tap.Studio.Specs;
@@ -48,6 +49,17 @@ internal static class SpecYaml
         foreach (var (k, v) in values)
             inner.Add(k, new YamlScalarNode(v) { Style = QuoteStyleFor(v) });
         map.Add(key, inner);
+    }
+
+    public static void SetTransport(this YamlMappingNode map, RequestTransportSettingsDto? transport)
+    {
+        if (transport is null || transport.IgnoreTlsErrors is null && transport.TimeoutMs is null) return;
+        var inner = new YamlMappingNode();
+        if (transport.IgnoreTlsErrors is not null)
+            inner.Add("ignoreTlsErrors", new YamlScalarNode(transport.IgnoreTlsErrors.Value ? "true" : "false"));
+        if (transport.TimeoutMs is not null)
+            inner.Add("timeoutMs", new YamlScalarNode(transport.TimeoutMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
+        map.Add("transport", inner);
     }
 
     /// <summary>

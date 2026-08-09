@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Net.Security;
 using System.Net.WebSockets;
 using System.Text;
 using Tap.Studio.Contracts;
@@ -54,6 +55,8 @@ internal sealed class WebSocketExecutor
         CancellationToken ct)
     {
         using var ws = new ClientWebSocket();
+        if (rendered.Transport.IgnoreTlsErrors == true)
+            ws.Options.RemoteCertificateValidationCallback = static (_, _, _, _) => true;
 
         // Carry the rendered headers across the upgrade. ClientWebSocket validates a small
         // allowlist of header names — anything WS-handshake-managed (Connection, Upgrade,
@@ -103,8 +106,9 @@ internal sealed class WebSocketExecutor
             // just the exception. We still emit a meta event so the UI panel has something to
             // anchor the failure to.
             var status = ex is WebSocketException wse ? MapHandshakeStatus(wse) : 0;
-            await emitMeta(status, ex.Message, new Dictionary<string, string>(), null, ct).ConfigureAwait(false);
-            await emitFrame(new ExecuteStreamWsDto(seq++, "system", "error", ex.Message, null, 0, null, null,
+            var message = HttpTransport.DescribeException(ex);
+            await emitMeta(status, message, new Dictionary<string, string>(), null, ct).ConfigureAwait(false);
+            await emitFrame(new ExecuteStreamWsDto(seq++, "system", "error", message, null, 0, null, null,
                 sw.Elapsed.TotalMilliseconds), ct).ConfigureAwait(false);
             return 0;
         }

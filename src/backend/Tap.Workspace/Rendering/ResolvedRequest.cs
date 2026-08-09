@@ -22,6 +22,7 @@ public sealed record ResolvedRequest
     /// <summary>Wire protocol picked up from the source request. <c>Http</c> = standard
     /// request/response; <c>WebSocket</c> = the executor opens a ws connection at <see cref="Url"/>.</summary>
     public RequestProtocol Protocol { get; init; } = RequestProtocol.Http;
+    public RequestTransportSettings Transport { get; init; } = new();
     public required ResolvedRequestMetadata Metadata { get; init; }
 }
 

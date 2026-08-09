@@ -87,6 +87,7 @@ public static class FileParser
             Body = body,
             Auth = fm.Ref("auth"),
             Protocol = protocol,
+            Transport = ParseTransport(fm, relativePath),
             HttpBlock = block.Content,
             HttpBlockStartLine = block.StartLine,
             Vars = fm.VarSpecMap("vars"),
@@ -214,9 +215,31 @@ public static class FileParser
             BaseUrl = fm.String("baseUrl") ?? string.Empty,
             DefaultAuth = fm.Ref("defaultAuth"),
             DefaultHeaders = fm.StringMap("defaultHeaders"),
+            Transport = ParseTransport(fm, relativePath),
             Vars = fm.VarSpecMap("vars"),
             Stages = stages,
             DefaultStage = defaultStage,
+        };
+    }
+
+    private static RequestTransportSettings ParseTransport(YamlMappingNode fm, string relativePath)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("transport"), out var node) || node is not YamlMappingNode transport)
+            return new RequestTransportSettings();
+
+        var timeoutMs = transport.Int("timeoutMs");
+        if (timeoutMs is < 0)
+        {
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                "'transport.timeoutMs' must be zero or a positive integer.",
+                relativePath));
+        }
+
+        return new RequestTransportSettings
+        {
+            IgnoreTlsErrors = transport.NullableBool("ignoreTlsErrors"),
+            TimeoutMs = timeoutMs,
         };
     }
 

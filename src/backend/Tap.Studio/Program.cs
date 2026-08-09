@@ -2,6 +2,13 @@ using Tap.Studio;
 
 try
 {
+    if (OperatingSystem.IsMacOS())
+    {
+        // Use Apple's Network framework for TLS, which avoids the .NET 10 macOS protocol
+        // negotiation issue while retaining the platform's normal TLS version selection.
+        AppContext.SetSwitch("System.Net.Security.UseNetworkFramework", true);
+    }
+
     var builder = WebApplication.CreateBuilder(args);
     var options = StudioOptions.FromConfiguration(builder.Configuration);
     var app = StudioHost.Build(args, options);

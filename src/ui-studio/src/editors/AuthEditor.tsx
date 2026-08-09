@@ -582,6 +582,7 @@ const OAUTH2_GRANT_TYPES = [
 ] as const
 
 function OAuth2Fields({ spec, update }: { spec: AuthSpec; update: <K extends keyof AuthSpec>(k: K, v: AuthSpec[K]) => void }) {
+  const activeEnv = useActiveEnv()
   const [advancedOpened, advancedControls] = useDisclosure(false)
   const [discoveryBusy, setDiscoveryBusy] = useState(false)
   const [discoveryErr, setDiscoveryErr] = useState<string | null>(null)
@@ -604,8 +605,9 @@ function OAuth2Fields({ spec, update }: { spec: AuthSpec; update: <K extends key
     let cancelled = false
     setDiscoveryBusy(true); setDiscoveryErr(null)
     // Pass the profile path so an authority like `{{IDP_URL}}/tenant` resolves through the
-    // owning collection's variables, not just the workspace's.
-    api.oidcDiscovery(debouncedAuthority.trim(), spec.path).then((doc) => {
+    // owning collection's variables, not just the workspace's — and the active env so it
+    // resolves against the same one the field's own preview highlighted.
+    api.oidcDiscovery(debouncedAuthority.trim(), spec.path, undefined, activeEnv ?? undefined).then((doc) => {
       if (cancelled) return
       update('tokenUrl', doc.tokenEndpoint)
       update('authorizeUrl', doc.authorizationEndpoint)
@@ -614,7 +616,7 @@ function OAuth2Fields({ spec, update }: { spec: AuthSpec; update: <K extends key
     }).finally(() => { if (!cancelled) setDiscoveryBusy(false) })
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [spec.useDiscovery, debouncedAuthority, spec.path])
+  }, [spec.useDiscovery, debouncedAuthority, spec.path, activeEnv])
 
   return (
     <Stack gap="md">
@@ -1145,6 +1147,7 @@ function GithubPanel({ spec, update, setSpec }: {
 // ---- Execute (right-side) panel -------------------------------------------------------
 
 function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean; type: string }) {
+  const activeEnv = useActiveEnv()
   const [result, setResult] = useState<AuthExecuteResponse | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -1219,7 +1222,9 @@ function AuthExecutePanel({ path, dirty, type }: { path: string; dirty: boolean;
   async function execute(force = false) {
     setBusy(true); setError(null); setResult(null); setLaunchMode(null); stopPolling()
     try {
-      const r = await api.executeAuth(path, force)
+      // The active env is what the fields above were previewed against — send it, or the
+      // runner falls back to the workspace default and reports every env-only var unknown.
+      const r = await api.executeAuth(path, force, { env: activeEnv ?? undefined })
       setResult(r)
       if (r.status === 'pending' && r.flowId) {
         // Server has already created the flow record, so we can poll right away.

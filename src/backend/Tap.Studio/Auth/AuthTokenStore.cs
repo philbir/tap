@@ -6,9 +6,10 @@ namespace Tap.Studio.Auth;
 /// <summary>
 /// Persisted store of OAuth tokens obtained for auth profiles. Keyed by
 /// <c>{workspaceRoot}::{authRelativePath}</c> so multiple workspaces don't collide, with a
-/// <c>#{stage}</c> suffix for profiles owned by a collection that defines stages — the same
-/// profile resolved under <c>dev</c> and <c>prod</c> points at different token endpoints and
-/// must not share an entry. Workspace-scoped profiles key exactly as they always have.
+/// <c>#{stage}</c> suffix for profiles owned by a collection that defines stages and an
+/// <c>@{envPath}</c> suffix for the environment in effect. The same profile resolved under
+/// <c>dev</c> and <c>prod</c> — whether those are stages or envs — points at different token
+/// endpoints and must not share an entry.
 ///
 /// Tokens are sensitive — this file lives under the user's state folder
 /// (<c>~/.tap/auth-tokens.json</c>), not in the workspace itself (which is checked into Git).
@@ -94,18 +95,21 @@ public sealed class AuthTokenStore
         }
     }
 
-    /// <summary>Drop every cached token for <paramref name="authPath"/> — the un-staged entry
-    /// plus one per stage. "Clear token" in the UI means the profile is signed out, not just
-    /// signed out of whichever stage happens to be selected.</summary>
+    /// <summary>Drop every cached token for <paramref name="authPath"/> — the bare entry plus
+    /// one per stage/env combination. "Clear token" in the UI means the profile is signed out,
+    /// not just signed out of whichever stage and env happen to be selected.</summary>
     public void RemoveAll(string workspaceRoot, string authPath)
     {
         lock (_gate)
         {
             ReloadIfChangedLocked();
-            var baseKey = Key(workspaceRoot, new AuthProfileScope(authPath, null));
-            var stagePrefix = baseKey + StageSeparator;
+            // Escaping makes the path segment free of both separators, so the base key is a
+            // prefix of every variant and of nothing else.
+            var baseKey = Key(workspaceRoot, new AuthProfileScope(authPath, null, null));
             var doomed = _entries.Keys
-                .Where(k => k == baseKey || k.StartsWith(stagePrefix, StringComparison.Ordinal))
+                .Where(k => k == baseKey
+                    || k.StartsWith(baseKey + StageSeparator, StringComparison.Ordinal)
+                    || k.StartsWith(baseKey + EnvSeparator, StringComparison.Ordinal))
                 .ToArray();
             if (doomed.Length == 0) return;
             foreach (var k in doomed) _entries.Remove(k);
@@ -143,11 +147,26 @@ public sealed class AuthTokenStore
     }
 
     private const string StageSeparator = "#";
+    private const string EnvSeparator = "@";
 
     private static string Key(string workspaceRoot, AuthProfileScope scope)
-        => scope.Stage is { Length: > 0 } stage
-            ? $"{workspaceRoot}::{scope.Path}{StageSeparator}{stage}"
-            : $"{workspaceRoot}::{scope.Path}";
+    {
+        var key = $"{workspaceRoot}::{Escape(scope.Path)}";
+        if (scope.Stage is { Length: > 0 } stage) key += StageSeparator + Escape(stage);
+        if (scope.Env is { Length: > 0 } env) key += EnvSeparator + Escape(env);
+        return key;
+    }
+
+    /// <summary>Backslash-escape the separators inside a segment so the composed key is
+    /// injective. Both <c>#</c> and <c>@</c> are legal in a file name, so without this a
+    /// profile at <c>a@b.auth.md</c> and a profile at <c>a</c> under env <c>b.auth.md</c>
+    /// would key identically — and <see cref="RemoveAll"/>'s prefix scan would delete across
+    /// profiles.</summary>
+    private static string Escape(string segment)
+        => segment
+            .Replace(@"\", @"\\", StringComparison.Ordinal)
+            .Replace(StageSeparator, @"\" + StageSeparator, StringComparison.Ordinal)
+            .Replace(EnvSeparator, @"\" + EnvSeparator, StringComparison.Ordinal);
 }
 
 public sealed record AuthTokenEntry

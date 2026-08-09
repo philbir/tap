@@ -63,7 +63,7 @@ public static class ExecuteStreamEndpoint
                 // Snapshot auth state *after* RenderAsync so the cached-token freshness check sees
                 // whatever the executor saw (the renderer doesn't mutate the store, so the order
                 // is just for clarity).
-                var authStatus = svc.BuildAuthStatus(body.Path, body.Spec, stage);
+                var authStatus = svc.BuildAuthStatus(body.Path, body.Spec, stage, body.Env);
 
                 // WebSocket requests skip the HttpClient path entirely — see WebSocketExecutor.
                 // Same event stream shape, just `ws` frames in place of `body`/`sse`.

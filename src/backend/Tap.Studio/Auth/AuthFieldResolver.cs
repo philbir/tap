@@ -17,20 +17,22 @@ namespace Tap.Studio.Auth;
 ///
 /// Without this pass, a tokenUrl like <c>http://{{DEMO_API_URL}}/connect/token</c> would
 /// be sent verbatim and the runner would 500 with an invalid-URI.
+///
+/// <para>Every layer — including the env — comes off the <see cref="AuthContext"/>. It used to
+/// take the env as a separate argument, which let a caller build the cascade from one env and
+/// the registry from another; the registry's provider bindings and the cascade have to agree
+/// or <c>{{kv:secret}}</c> resolves against a vault the selected env never named.</para>
 /// </summary>
 public sealed class AuthFieldResolver
 {
-    private readonly LoadedWorkspace _workspace;
     private readonly VariableProviderRegistry _registry;
     private readonly IReadOnlyDictionary<string, string> _cascade;
 
     public AuthFieldResolver(
         LoadedWorkspace workspace,
         VariableProviderRegistry registry,
-        EnvFile? env,
-        AuthContext context = default)
+        AuthContext context)
     {
-        _workspace = workspace;
         _registry = registry;
 
         // workspace < collection < stage < env. Skipped nulls so an unset value doesn't
@@ -39,7 +41,7 @@ public sealed class AuthFieldResolver
         if (workspace.Manifest is not null) Merge(cascade, workspace.Manifest.Vars);
         if (context.Collection is not null) Merge(cascade, context.Collection.Vars);
         if (context.Stage is not null) Merge(cascade, context.Stage.Vars);
-        if (env is not null) Merge(cascade, env.Vars);
+        if (context.Env is not null) Merge(cascade, context.Env.Vars);
         _cascade = cascade;
     }
 

@@ -110,6 +110,11 @@ public sealed class AuthFlow
     /// workspace-scoped profile. Carried so the callback caches the resulting token under the
     /// same key <see cref="AuthRunner.ExecuteAsync"/> would have read it from.</summary>
     public string? Stage { get; init; }
+    /// <summary>Env in effect when the flow started, or <c>null</c> when the workspace has
+    /// none. Carried for the same reason as <see cref="Stage"/>: the callback runs minutes
+    /// later on a different request, and the token it mints belongs to the env that produced
+    /// the authorize URL — not to whatever env happens to be selected by then.</summary>
+    public string? Env { get; init; }
     public required DateTimeOffset CreatedAt { get; init; }
 
     /// <summary>PKCE code verifier — only kept until token exchange completes. Settable so

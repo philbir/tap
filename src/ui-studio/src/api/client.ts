@@ -269,23 +269,27 @@ export const api = {
 
   /** Fetch the OpenID Connect discovery document for a given authority URL. `authPath` is
    *  the profile being edited — passing it lets a collection-scoped profile resolve an
-   *  authority that references its collection's (or stage's) variables. */
-  oidcDiscovery: (authority: string, authPath?: string, stage?: string) => {
+   *  authority that references its collection's (or stage's) variables. `env` is the active
+   *  environment, without which the authority resolves against the workspace default. */
+  oidcDiscovery: (authority: string, authPath?: string, stage?: string, env?: string) => {
     const q = new URLSearchParams({ authority })
     if (authPath) q.set('authPath', authPath)
     if (stage) q.set('stage', stage)
+    if (env) q.set('env', env)
     return get<OidcDiscovery>(`/api/auth/discovery?${q}`)
   },
 
   /** Run an auth profile. For OAuth2 client_credentials returns tokens synchronously;
    *  for authorization_code+PKCE returns a loginUrl + flowId for the UI to drive.
    *  `context` carries the caller's request + stage so a collection-scoped profile expands
-   *  against the right stage (and caches its token there); ignored for workspace-scoped ones. */
+   *  against the right stage (and caches its token there); ignored for workspace-scoped ones.
+   *  `env` applies to every profile — it must be the environment the editor previewed the
+   *  profile's fields against, or the runner resolves `{{…}}` refs against a different one. */
   executeAuth: (path: string, forceReauthenticate = false,
-                context?: { requestPath?: string; stage?: string }) =>
+                context?: { requestPath?: string; stage?: string; env?: string }) =>
     post<AuthExecuteResponse>('/api/auth/execute', {
       path, forceReauthenticate,
-      requestPath: context?.requestPath, stage: context?.stage,
+      requestPath: context?.requestPath, stage: context?.stage, env: context?.env,
     }),
 
   /** Poll a pending flow until it transitions to completed or failed. */

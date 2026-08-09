@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { AuthExecuteResponse, AuthStatus, AuthSummary, ExecutionResult, RenderedRequest, SseEvent, WsFrame } from '../api/types'
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
-import { useTapStore } from '../store'
+import { useActiveEnv, useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
 
 interface Props {
@@ -1250,6 +1250,7 @@ function AuthRunPanel({ status, requestPath, stage }: {
   requestPath?: string
   stage?: string
 }) {
+  const activeEnv = useActiveEnv()
   const [result, setResult] = useState<AuthExecuteResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1295,7 +1296,9 @@ function AuthRunPanel({ status, requestPath, stage }: {
     setBusy(true); setError(null); setResult(null); setLaunchMode(null); setCleared(false)
     stopPolling()
     try {
-      const r = await api.executeAuth(status.path, force, { requestPath, stage })
+      // env goes with requestPath/stage: the token is cached per env, so running the flow
+      // under a different one than the send used would mint an entry the send never reads.
+      const r = await api.executeAuth(status.path, force, { requestPath, stage, env: activeEnv ?? undefined })
       setResult(r)
       if (r.status === 'pending' && r.flowId) {
         pollRef.current = window.setInterval(() => { void pollOnce(r.flowId!) }, 800)

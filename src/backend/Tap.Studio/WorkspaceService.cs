@@ -197,7 +197,7 @@ public sealed class WorkspaceService : IDisposable
         var renderer = new WorkspaceRenderer(ws, registry);
         var rendered = await renderer.RenderAsync(req, env, overrides, ct, stageName).ConfigureAwait(false);
         rendered = ResolveBinaryRef(req, rendered);
-        return InjectAuthToken(ws, req, rendered);
+        return InjectAuthToken(ws, req, rendered, env?.RelativePath);
     }
 
     /// <summary>
@@ -284,7 +284,7 @@ public sealed class WorkspaceService : IDisposable
     /// past <c>bearer</c>/<c>basic</c>/<c>apiKey</c>/<c>custom</c>) would render without an
     /// Authorization header — the renderer is static, so it can't see the cached token.</para>
     /// </summary>
-    private ResolvedRequest InjectAuthToken(LoadedWorkspace ws, RequestFile req, ResolvedRequest rendered)
+    private ResolvedRequest InjectAuthToken(LoadedWorkspace ws, RequestFile req, ResolvedRequest rendered, string? envPath)
     {
         var auth = ResolveAuth(ws, req, rendered.Metadata.StageName);
         if (auth is null || auth.Type is "none" or "basic" or "bearer" or "apiKey" or "custom" or "aws-sigv4")
@@ -299,10 +299,10 @@ public sealed class WorkspaceService : IDisposable
                 return rendered;
         }
 
-        // A profile that lives inside a collection has one cached token per stage — read the
-        // one minted for the stage this render resolved to.
+        // A profile has one cached token per stage and env — read the one minted for the stage
+        // and env this render resolved to, not whichever entry happens to exist.
         var scope = AuthScopeResolver
-            .ContextFor(ws, auth.RelativePath, req.RelativePath, rendered.Metadata.StageName)
+            .ContextFor(ws, auth.RelativePath, req.RelativePath, rendered.Metadata.StageName, envPath)
             .ScopeFor(auth.RelativePath);
         var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
@@ -323,9 +323,12 @@ public sealed class WorkspaceService : IDisposable
     ///
     /// <para><paramref name="stageName"/> is the stage the caller has selected. It only changes
     /// the answer for a profile that lives inside the request's own collection, where each
-    /// stage caches its own token.</para>
+    /// stage caches its own token. <paramref name="envPath"/> is the selected env, which caches
+    /// its own token for every profile — pass the same one the render used or the Flow tab
+    /// reports on an entry the executor will never read.</para>
     /// </summary>
-    public AuthStatusDto BuildAuthStatus(string requestPath, RequestSpecDto? draftSpec = null, string? stageName = null)
+    public AuthStatusDto BuildAuthStatus(
+        string requestPath, RequestSpecDto? draftSpec = null, string? stageName = null, string? envPath = null)
     {
         var ws = Current;
         RequestFile req;
@@ -355,7 +358,7 @@ public sealed class WorkspaceService : IDisposable
 
         var interactive = IsInteractive(auth);
         var scope = AuthScopeResolver
-            .ContextFor(ws, auth.RelativePath, req.RelativePath, stageName)
+            .ContextFor(ws, auth.RelativePath, req.RelativePath, stageName, envPath)
             .ScopeFor(auth.RelativePath);
         var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))

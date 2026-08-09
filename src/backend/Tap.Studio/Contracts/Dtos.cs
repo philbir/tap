@@ -316,11 +316,14 @@ public sealed record OidcDiscoveryDto(
 /// <summary>Body for <c>POST /api/auth/execute</c>. <see cref="RequestPath"/> +
 /// <see cref="Stage"/> carry the caller's editing context so a collection-scoped profile
 /// expands against the right stage's variables (and caches its token there); both are
-/// ignored for a workspace-scoped profile.</summary>
+/// ignored for a workspace-scoped profile. <see cref="Env"/> is the workspace-relative path
+/// of the selected environment — it applies to every profile, and omitting it falls back to
+/// the workspace's <c>defaultEnv</c>.</summary>
 public sealed record AuthExecuteRequestDto(string Path, bool ForceReauthenticate)
 {
     public string? RequestPath { get; init; }
     public string? Stage { get; init; }
+    public string? Env { get; init; }
 }
 
 /// <summary>Body for <c>POST /api/auth/clear</c> — removes any cached runtime token for the

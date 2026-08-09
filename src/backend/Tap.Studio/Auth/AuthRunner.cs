@@ -69,16 +69,23 @@ public sealed class AuthRunner
     /// its fields expand against that collection's (and the selected stage's) variables, and
     /// the resulting token is cached per stage. See <see cref="AuthScopeResolver"/> — a
     /// workspace-scoped profile ignores both.</para>
+    ///
+    /// <para><paramref name="envPath"/> is the environment the caller has selected. It applies
+    /// to every profile: its fields expand against that env's variables and bind that env's
+    /// variable providers, and the resulting token is cached per env. Omitting it falls back to
+    /// the workspace's <c>defaultEnv</c> — which is what the whole call used to do
+    /// unconditionally, so a profile referencing a var that only exists in the selected env
+    /// failed with E_VAR_UNKNOWN however the editor previewed it.</para>
     /// </summary>
     public async Task<ExecuteAuthResult> ExecuteAsync(
         string authPath, bool forceReauthenticate, CancellationToken ct,
-        string? requestPath = null, string? stageName = null)
+        string? requestPath = null, string? stageName = null, string? envPath = null)
     {
         var workspace = _ws.Current;
         if (workspace.FindByPath(authPath) is not AuthFile auth)
             return ExecuteAuthResult.Failed($"Auth profile '{authPath}' not in workspace.");
 
-        var context = AuthScopeResolver.ContextFor(workspace, authPath, requestPath, stageName);
+        var context = AuthScopeResolver.ContextFor(workspace, authPath, requestPath, stageName, envPath);
         var profile = context.ScopeFor(authPath);
 
         if (!forceReauthenticate)
@@ -165,7 +172,7 @@ public sealed class AuthRunner
                 ClientId = flow.ClientId,
                 Scopes = flow.Scopes,
             };
-            _tokens.Save(_ws.RootDirectory, new AuthProfileScope(flow.AuthPath, flow.Stage), entry);
+            _tokens.Save(_ws.RootDirectory, new AuthProfileScope(flow.AuthPath, flow.Stage, flow.Env), entry);
             return ExecuteAuthResult.FromTokens(entry, fromCache: false);
         }
         catch (Exception ex)
@@ -176,14 +183,13 @@ public sealed class AuthRunner
         }
     }
 
+    /// <summary>Both halves of the resolver come off the same <see cref="AuthContext"/>: the
+    /// cascade from <c>context.Env</c>'s vars, and the provider registry from the same env's
+    /// bindings. <see cref="WorkspaceService.CreateRegistry(EnvFile?)"/> is the no-fallback
+    /// overload — <see cref="AuthScopeResolver.ContextFor"/> already applied the defaultEnv
+    /// fallback, and re-applying it here would put the two layers on different envs.</summary>
     private AuthFieldResolver CreateResolver(AuthContext context)
-    {
-        var ws = _ws.Current;
-        EnvFile? env = null;
-        if (ws.Manifest?.DefaultEnv is { } defaultRef)
-            env = ws.Resolve(defaultRef) as EnvFile;
-        return new AuthFieldResolver(ws, _ws.CreateRegistry(), env, context);
-    }
+        => new(_ws.Current, _ws.CreateRegistry(context.Env), context);
 
     // ---- OAuth2 ----------------------------------------------------------------------
 
@@ -320,6 +326,7 @@ public sealed class AuthRunner
             Id = flowId,
             AuthPath = profile.Path,
             Stage = profile.Stage,
+            Env = profile.Env,
             CreatedAt = DateTimeOffset.UtcNow,
             CodeVerifier = string.Empty,
             Nonce = string.Empty,
@@ -439,6 +446,7 @@ public sealed class AuthRunner
             Id = flowId,
             AuthPath = profile.Path,
             Stage = profile.Stage,
+            Env = profile.Env,
             CreatedAt = DateTimeOffset.UtcNow,
             CodeVerifier = codeVerifier,
             Nonce = nonce,

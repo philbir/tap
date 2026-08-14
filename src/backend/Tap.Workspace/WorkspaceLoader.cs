@@ -215,6 +215,8 @@ public sealed class LoadedWorkspace
         Auths = files.OfType<AuthFile>().ToArray();
         Environments = files.OfType<EnvFile>().ToArray();
         Collections = files.OfType<CollectionFile>().ToArray();
+        Flows = files.OfType<FlowFile>().ToArray();
+        TestSets = files.OfType<TestSetFile>().ToArray();
     }
 
     public string RootDirectory { get; }
@@ -227,6 +229,8 @@ public sealed class LoadedWorkspace
     public IReadOnlyList<AuthFile> Auths { get; }
     public IReadOnlyList<EnvFile> Environments { get; }
     public IReadOnlyList<CollectionFile> Collections { get; }
+    public IReadOnlyList<FlowFile> Flows { get; }
+    public IReadOnlyList<TestSetFile> TestSets { get; }
 
     public WorkspaceFile? FindByPath(string relativePath)
         => _byPath.GetValueOrDefault(relativePath.Replace('\\', '/'));

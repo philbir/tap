@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
+using Tap.Execution.Contracts;
 using Tap.Workspace.Model;
+using Tap.Execution.Auth;
 
 namespace Tap.Studio.Contracts;
 
@@ -134,7 +136,9 @@ public sealed record RequestDetailDto(
     /// <summary>Wire protocol — <c>"http"</c> (default) or <c>"websocket"</c>. Drives the
     /// renderer's baseUrl scheme normalization and the executor's transport selection.</summary>
     string Protocol,
-    RequestTransportSettingsDto? Transport);
+    RequestTransportSettingsDto? Transport,
+    /// <summary>Declared expectations about the response, in file order.</summary>
+    IReadOnlyList<AssertSpecDto> Assertions);
 
 public sealed record AuthDetailDto(
     string Path,
@@ -500,11 +504,188 @@ public sealed record RequestSpecDto
     public string? RequestBody { get; init; }
     public string? Protocol { get; init; }
     public RequestTransportSettingsDto? Transport { get; init; }
+
+    /// <summary>Declared expectations about the response. Omitted (or empty) leaves the
+    /// <c>assertions:</c> key out of the emitted file entirely.</summary>
+    public IReadOnlyList<AssertSpecDto>? Assertions { get; init; }
 }
 
 public sealed record RequestTransportSettingsDto(bool? IgnoreTlsErrors, int? TimeoutMs);
 
 public sealed record HttpHeaderSpecDto(string Name, string Value);
+
+/// <summary>
+/// Wire form of one assertion. Always the normalized (extractor, matcher) pair — the YAML
+/// sugar (<c>- status: 200</c>, <c>- regex: …</c>) is a file-format concern that the server
+/// applies on the way out, so the editor only ever deals with this one shape.
+/// </summary>
+public sealed record AssertSpecDto
+{
+    /// <summary>Display label. Null means "derive it from the assertion" — the server does
+    /// that so the UI never has to reimplement the phrasing.</summary>
+    public string? Name { get; init; }
+
+    /// <summary><c>status</c> | <c>duration</c> | <c>header</c> | <c>body</c> | <c>jsonpath</c> | <c>xpath</c>.</summary>
+    public required string Source { get; init; }
+
+    /// <summary>Header name or path expression; null for the argument-less sources.</summary>
+    public string? Selector { get; init; }
+
+    /// <summary><c>equals</c> | <c>contains</c> | <c>matches</c> | <c>lt</c> | <c>between</c> | <c>exists</c> | … </summary>
+    public required string Op { get; init; }
+
+    public string? Expected { get; init; }
+
+    /// <summary>Expected values for <c>in</c> and <c>between</c>.</summary>
+    public IReadOnlyList<string>? ExpectedList { get; init; }
+
+    public bool IgnoreCase { get; init; }
+    public bool Skip { get; init; }
+}
+
+/// <summary><c>POST /api/assertions/evaluate</c> — re-check assertions against a response the
+/// client already has, without sending the request again. <see cref="Context"/> supplies the
+/// scope needed to expand <c>{{var}}</c> tokens in the expected values.</summary>
+public sealed record EvaluateAssertsRequestDto(
+    IReadOnlyList<AssertSpecDto> Assertions,
+    AssertResponseSnapshotDto Response,
+    string? Path,
+    string? Env,
+    string? Stage);
+
+/// <summary>The captured response an <see cref="EvaluateAssertsRequestDto"/> is checked against.</summary>
+public sealed record AssertResponseSnapshotDto(
+    int Status,
+    IReadOnlyList<HttpHeaderSpecDto>? Headers,
+    string? Body,
+    bool BodyTruncated,
+    double DurationMs);
+
+public sealed record EvaluateAssertsResponseDto(
+    IReadOnlyList<AssertResultDto> Results,
+    AssertSummaryDto Summary);
+
+// -----------------------------------------------------------------------------------------
+// Testing — flows (*.flow.md, §10) and test sets (*.test.md, §11), plus the shapes a run
+// streams back. Editors ship the *SpecDto; the server emits the canonical YAML.
+// -----------------------------------------------------------------------------------------
+
+/// <summary>Wire form of one extraction on a flow step — a variable name plus exactly one
+/// source. <see cref="Selector"/> carries the header name / path expression / regex pattern;
+/// the argument-less sources leave it null.</summary>
+public sealed record ExtractSpecDto
+{
+    /// <summary>The variable name this binds for the steps that follow.</summary>
+    public required string Var { get; init; }
+
+    /// <summary><c>status</c> | <c>duration</c> | <c>header</c> | <c>body</c> | <c>jsonpath</c> | <c>xpath</c> | <c>regex</c>.</summary>
+    public required string Source { get; init; }
+
+    public string? Selector { get; init; }
+
+    /// <summary>Capture group for a <c>regex</c> source. Null means group 1, or the whole
+    /// match when the pattern declares no groups.</summary>
+    public int? Group { get; init; }
+
+    /// <summary>Bound when the source matches nothing, instead of failing the step.</summary>
+    public string? Default { get; init; }
+
+    /// <summary>False lets a step carry on when the source matches nothing.</summary>
+    public bool Required { get; init; } = true;
+}
+
+public sealed record FlowStepSpecDto
+{
+    /// <summary>Ref to the request this step sends — a path relative to the flow file, or
+    /// <c>id:&lt;uuid&gt;</c>.</summary>
+    public required string Request { get; init; }
+
+    public string? Name { get; init; }
+
+    /// <summary>Per-step overrides. Values are templates expanded against the run bag first,
+    /// which is how a step reads an earlier step's output.</summary>
+    public IReadOnlyDictionary<string, string>? Vars { get; init; }
+
+    public IReadOnlyList<ExtractSpecDto>? Extract { get; init; }
+
+    /// <summary>Assertions on top of the ones the referenced request declares.</summary>
+    public IReadOnlyList<AssertSpecDto>? Assertions { get; init; }
+
+    public bool ContinueOnFailure { get; init; }
+    public bool Skip { get; init; }
+}
+
+public sealed record FlowSpecDto
+{
+    public required string Path { get; init; }
+    public string? Id { get; init; }
+    public required string Name { get; init; }
+    public IReadOnlyDictionary<string, string>? Vars { get; init; }
+    /// <summary>Names of flow-scoped variables marked secret.</summary>
+    public IReadOnlyList<string>? Secrets { get; init; }
+    public IReadOnlyList<string>? Tags { get; init; }
+    public string? Body { get; init; }
+    public required IReadOnlyList<FlowStepSpecDto> Steps { get; init; }
+}
+
+public sealed record FlowSummaryDto(string Path, string Name, string? Id, int StepCount, IReadOnlyList<string> Tags);
+
+public sealed record FlowDetailDto(
+    string Path,
+    string Name,
+    string? Id,
+    IReadOnlyDictionary<string, VarSpec> Vars,
+    IReadOnlyList<FlowStepSpecDto> Steps,
+    IReadOnlyList<string> Tags,
+    string Body,
+    string Source);
+
+public sealed record TestEntrySpecDto
+{
+    public string? Name { get; init; }
+
+    /// <summary>Ref to the request this test sends. Exactly one of this and <see cref="Flow"/>.</summary>
+    public string? Request { get; init; }
+
+    /// <summary>Ref to the flow this test runs. Exactly one of this and <see cref="Request"/>.</summary>
+    public string? Flow { get; init; }
+
+    public IReadOnlyDictionary<string, string>? Vars { get; init; }
+
+    /// <summary>Assertions on top of the target's own. For a flow entry they check the last
+    /// step's response.</summary>
+    public IReadOnlyList<AssertSpecDto>? Assertions { get; init; }
+
+    public bool Skip { get; init; }
+}
+
+public sealed record TestSetSpecDto
+{
+    public required string Path { get; init; }
+    public string? Id { get; init; }
+    public required string Name { get; init; }
+    public IReadOnlyDictionary<string, string>? Vars { get; init; }
+    /// <summary>Names of set-scoped variables marked secret.</summary>
+    public IReadOnlyList<string>? Secrets { get; init; }
+    /// <summary><c>continue</c> (default) or <c>stop</c>.</summary>
+    public string? OnFailure { get; init; }
+    public IReadOnlyList<string>? Tags { get; init; }
+    public string? Body { get; init; }
+    public required IReadOnlyList<TestEntrySpecDto> Tests { get; init; }
+}
+
+public sealed record TestSetSummaryDto(string Path, string Name, string? Id, int TestCount, IReadOnlyList<string> Tags);
+
+public sealed record TestSetDetailDto(
+    string Path,
+    string Name,
+    string? Id,
+    IReadOnlyDictionary<string, VarSpec> Vars,
+    string OnFailure,
+    IReadOnlyList<TestEntrySpecDto> Tests,
+    IReadOnlyList<string> Tags,
+    string Body,
+    string Source);
 
 // -----------------------------------------------------------------------------------------
 // AI assistant — CLI detection/config + the request-crafting assist call.
@@ -796,7 +977,13 @@ public sealed record ExecutionResultDto(
     IReadOnlyList<VariableTraceDto> VariablesUsed,
     string? Stage,
     string? Error,
-    string Protocol);
+    string Protocol,
+    /// <summary>One entry per declared assertion, in file order. Empty when the request
+    /// declares none.</summary>
+    IReadOnlyList<AssertResultDto> Assertions,
+    /// <summary>Roll-up of <see cref="Assertions"/>. Null when the request declares none, so
+    /// a request without assertions shows no pass/fail chrome at all.</summary>
+    AssertSummaryDto? AssertSummary);
 
 public sealed record ExecuteStreamMetaDto(
     string Method,
@@ -860,12 +1047,14 @@ public sealed record ExecuteStreamDoneDto(
     long ResponseBodyBytes,
     IReadOnlyList<VariableTraceDto> VariablesUsed,
     string? Stage,
-    string? Error);
+    string? Error,
+    /// <summary>Assertion results, evaluated server-side once the body is complete. Rides on
+    /// <c>done</c> rather than its own event so the UI paints the verdict in the same frame
+    /// it stops the spinner.</summary>
+    IReadOnlyList<AssertResultDto> Assertions,
+    AssertSummaryDto? AssertSummary);
 
 public sealed record ExecuteStreamErrorDto(string Message);
-
-public sealed record TlsCertificateDto(string Subject, string Issuer, string Thumbprint, DateTime NotBefore, DateTime NotAfter, string SerialNumber);
-public sealed record TlsDiagnosisDto(string Url, bool Valid, string? Error, IReadOnlyList<TlsCertificateDto> Certificates, IReadOnlyList<string> Errors);
 
 public sealed record GraphQLSchemaRequestDto(string Path, string? Env, string? Stage, string Mode);
 
@@ -884,6 +1073,40 @@ public sealed record FileUploadResponseDto(
     string? ContentType);
 
 [JsonSerializable(typeof(WorkspaceInfoDto))]
+[JsonSerializable(typeof(AssertSpecDto))]
+[JsonSerializable(typeof(IReadOnlyList<AssertSpecDto>))]
+[JsonSerializable(typeof(AssertResultDto))]
+[JsonSerializable(typeof(IReadOnlyList<AssertResultDto>))]
+[JsonSerializable(typeof(AssertSummaryDto))]
+[JsonSerializable(typeof(AssertResponseSnapshotDto))]
+[JsonSerializable(typeof(EvaluateAssertsRequestDto))]
+[JsonSerializable(typeof(EvaluateAssertsResponseDto))]
+[JsonSerializable(typeof(ExtractSpecDto))]
+[JsonSerializable(typeof(IReadOnlyList<ExtractSpecDto>))]
+[JsonSerializable(typeof(FlowStepSpecDto))]
+[JsonSerializable(typeof(IReadOnlyList<FlowStepSpecDto>))]
+[JsonSerializable(typeof(FlowSpecDto))]
+[JsonSerializable(typeof(FlowSummaryDto))]
+[JsonSerializable(typeof(IReadOnlyList<FlowSummaryDto>))]
+[JsonSerializable(typeof(FlowDetailDto))]
+[JsonSerializable(typeof(TestEntrySpecDto))]
+[JsonSerializable(typeof(IReadOnlyList<TestEntrySpecDto>))]
+[JsonSerializable(typeof(TestSetSpecDto))]
+[JsonSerializable(typeof(TestSetSummaryDto))]
+[JsonSerializable(typeof(IReadOnlyList<TestSetSummaryDto>))]
+[JsonSerializable(typeof(TestSetDetailDto))]
+[JsonSerializable(typeof(RunTestRequestDto))]
+[JsonSerializable(typeof(ExtractedValueDto))]
+[JsonSerializable(typeof(IReadOnlyList<ExtractedValueDto>))]
+[JsonSerializable(typeof(TestStepResultDto))]
+[JsonSerializable(typeof(IReadOnlyList<TestStepResultDto>))]
+[JsonSerializable(typeof(TestEntryResultDto))]
+[JsonSerializable(typeof(IReadOnlyList<TestEntryResultDto>))]
+[JsonSerializable(typeof(TestRunPlanEntryDto))]
+[JsonSerializable(typeof(IReadOnlyList<TestRunPlanEntryDto>))]
+[JsonSerializable(typeof(TestRunStartDto))]
+[JsonSerializable(typeof(TestRunStepEventDto))]
+[JsonSerializable(typeof(TestRunResultDto))]
 [JsonSerializable(typeof(CollectionStageDto))]
 [JsonSerializable(typeof(IReadOnlyList<CollectionStageDto>))]
 [JsonSerializable(typeof(CollectionStageSpecDto))]

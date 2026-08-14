@@ -1,5 +1,6 @@
 using System.Text;
 using Tap.Studio.Contracts;
+using Tap.Workspace.Model;
 using YamlDotNet.RepresentationModel;
 
 namespace Tap.Studio.Specs;
@@ -91,6 +92,90 @@ internal static class SpecYaml
         }
         map.Add(key, inner);
     }
+
+    /// <summary>
+    /// Emit the <c>assertions:</c> sequence, preferring the shorthand forms from §5.5 of
+    /// <c>docs/workspace-format.md</c> whenever they express the assertion exactly:
+    /// <c>- status: 200</c> for an equality on an argument-less extractor, <c>- header: etag</c>
+    /// for a plain existence check, and <c>- regex: …</c> for a body match. Everything else
+    /// goes out as the explicit extractor + matcher pair. Key order within an entry is fixed
+    /// (name, extractor, matcher, ignoreCase, skip) so re-saving an unchanged request is a
+    /// no-op in the diff.
+    /// </summary>
+    public static void SetAssertions(this YamlMappingNode map, IReadOnlyList<AssertSpec>? assertions)
+    {
+        if (assertions is null || assertions.Count == 0) return;
+
+        var seq = new YamlSequenceNode { Style = YamlDotNet.Core.Events.SequenceStyle.Block };
+        foreach (var assertion in assertions) seq.Add(BuildAssertion(assertion));
+        map.Add("assertions", seq);
+    }
+
+    private static YamlMappingNode BuildAssertion(AssertSpec assertion)
+    {
+        var entry = new YamlMappingNode();
+        entry.SetIfNotEmpty("name", assertion.Name);
+
+        var sourceKey = assertion.Source.ToWire();
+        var takesSelector = assertion.Source.TakesSelector();
+
+        // The extractor key's value slot holds its argument. `header`/`jsonpath`/`xpath` need
+        // that slot for a selector, so their matcher goes alongside as a sibling; `status`/
+        // `duration`/`body` have it free, so the matcher (or, in the sugar case, the expected
+        // value itself) goes straight into it.
+        //
+        // `regex:` — body + matches, the most common body check by far.
+        if (assertion is { Source: AssertSource.Body, Op: AssertOp.Matches })
+        {
+            entry.Set("regex", assertion.Expected ?? string.Empty);
+        }
+        // `status: 200` — a scalar on an argument-less extractor is an equality check.
+        else if (!takesSelector && assertion.Op == AssertOp.Equals)
+        {
+            entry.Set(sourceKey, assertion.Expected ?? string.Empty);
+        }
+        // `header: etag` — a selector alone is an existence check.
+        else if (takesSelector && assertion.Op == AssertOp.Exists
+                 && !string.Equals(assertion.Expected, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            entry.SetSelector(sourceKey, assertion.Selector);
+        }
+        else if (takesSelector)
+        {
+            entry.SetSelector(sourceKey, assertion.Selector);
+            entry.SetMatcher(assertion);
+        }
+        else
+        {
+            var inner = new YamlMappingNode();
+            inner.SetMatcher(assertion);
+            entry.Add(sourceKey, inner);
+        }
+
+        entry.SetIfTrue("ignoreCase", assertion.IgnoreCase);
+        entry.SetIfTrue("skip", assertion.Skip);
+        return entry;
+    }
+
+    private static void SetMatcher(this YamlMappingNode map, AssertSpec assertion)
+    {
+        var key = assertion.Op.ToWire();
+        if (assertion.ExpectedList is { Count: > 0 } list) map.SetStringList(key, list);
+        else map.Set(key, assertion.Expected ?? string.Empty);
+    }
+
+    private static void SetSelector(this YamlMappingNode map, string key, string? selector)
+        => map.SetPathLike(key, selector);
+
+    /// <summary>
+    /// Emit a path expression. Deliberately bypasses <see cref="QuoteStyleFor"/>: every
+    /// JSONPath starts with <c>$</c>, which that policy single-quotes to protect
+    /// <c>${{secret}}</c> tokens — correct there, pure noise on <c>$.order.id</c>. YAML has
+    /// no special meaning for a leading <c>$</c>, and the emitter still falls back to a
+    /// quoted style on its own for anything plain style can't carry.
+    /// </summary>
+    public static void SetPathLike(this YamlMappingNode map, string key, string? selector)
+        => map.Add(key, new YamlScalarNode(selector ?? string.Empty) { Style = YamlDotNet.Core.ScalarStyle.Any });
 
     public static void SetMappingList(this YamlMappingNode map, string key, IReadOnlyList<YamlMappingNode>? values)
     {

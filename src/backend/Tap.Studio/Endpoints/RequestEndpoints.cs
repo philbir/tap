@@ -53,7 +53,8 @@ public static class RequestEndpoints
                 Vars: req.Vars,
                 Source: svc.ReadSource(req.RelativePath),
                 Protocol: req.Protocol.ToWire(),
-                Transport: ToDto(req.Transport));
+                Transport: ToDto(req.Transport),
+                Assertions: AssertSpecMapper.ToDto(req.Assertions));
             return Results.Ok(dto);
         });
 

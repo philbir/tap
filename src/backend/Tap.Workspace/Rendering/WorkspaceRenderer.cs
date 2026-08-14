@@ -1,3 +1,4 @@
+using Tap.Workspace.Asserts;
 using Tap.Workspace.Model;
 using Tap.Workspace.Variables;
 
@@ -15,12 +16,18 @@ namespace Tap.Workspace.Rendering;
 /// </summary>
 public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProviderRegistry registry)
 {
+    /// <param name="templateOverrides">Overrides whose <em>values</em> are templates, expanded
+    /// against everything below them before they join the cascade. A flow step's <c>vars:</c>
+    /// arrive here: <c>id: '{{orderId}}'</c> has to see the value an earlier step bound, and a
+    /// plain override would land in the cascade unexpanded and go out on the wire verbatim.
+    /// Applied after <paramref name="overrides"/>, in order, each seeing the ones before it.</param>
     public async ValueTask<ResolvedRequest> RenderAsync(
         RequestFile request,
         EnvFile? env,
         IReadOnlyDictionary<string, string>? overrides,
         CancellationToken ct,
-        string? stageName = null)
+        string? stageName = null,
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
     {
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
         var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
@@ -43,17 +50,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             auth = workspace.Resolve(collection.DefaultAuth, collectionDir) as AuthFile;
         }
 
-        // Cascade: workspace < collection < stage < env < request < overrides.
-        var cascade = new Dictionary<string, string>(StringComparer.Ordinal);
-        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars);
-        if (collection is not null) MergeVars(cascade, collection.Vars);
-        if (stage is not null) MergeVars(cascade, stage.Vars);
-        if (env is not null) MergeVars(cascade, env.Vars);
-        MergeVars(cascade, request.Vars);
-        if (overrides is not null)
-        {
-            foreach (var (k, v) in overrides) cascade[k] = v;
-        }
+        var (cascade, secretNames) = BuildCascade(request, collection, stage, env, overrides);
+        await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
 
         var expandedBlock = await Interpolation.ExpandAsync(request.HttpBlock, cascade, registry, ct).ConfigureAwait(false);
         var parsed = HttpBlockParser.Parse(expandedBlock);
@@ -108,6 +106,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             HttpBlockParser.EnsureNoLineBreaks($"The '{k}' header value", v);
         }
 
+        var assertions = await RenderAssertionsAsync(request.Assertions, cascade, secretNames, ct).ConfigureAwait(false);
+
         return new ResolvedRequest
         {
             Method = parsed.Method,
@@ -116,6 +116,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             Body = parsed.Body,
             Protocol = request.Protocol,
             Transport = transport,
+            Assertions = assertions,
             Metadata = new ResolvedRequestMetadata
             {
                 SourceRequestPath = request.RelativePath,
@@ -126,12 +127,202 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         };
     }
 
-    private static void MergeVars(Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src)
+    /// <summary>
+    /// Renders only a request's assertions. Used by the Studio's re-check path, which
+    /// evaluates edited assertions against the response already on screen — same cascade,
+    /// same providers, same secret tracking as a real execution, minus the request itself.
+    /// </summary>
+    /// <param name="tolerant">When true, an assertion that fails to expand (an unknown
+    /// variable, most often a half-typed token) is returned carrying a
+    /// <see cref="ResolvedAssert.RenderError"/> instead of taking the whole batch down with
+    /// it. The interactive path wants this; an execution does not.</param>
+    public async ValueTask<IReadOnlyList<ResolvedAssert>> RenderAssertionsAsync(
+        RequestFile request,
+        EnvFile? env,
+        IReadOnlyList<AssertSpec> assertions,
+        CancellationToken ct,
+        string? stageName = null,
+        bool tolerant = false,
+        IReadOnlyDictionary<string, string>? overrides = null,
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+    {
+        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
+        var (cascade, secretNames) = BuildCascade(request, collection, stage, env, overrides);
+        await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
+        return await RenderAssertionsAsync(assertions, cascade, secretNames, ct, tolerant).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Folds template-valued overrides into a built cascade. Each is expanded against the
+    /// cascade as it stands, so a later one can read an earlier one, and a value that pulled in
+    /// something secret is marked so an assertion built from it reports <c>***</c>.
+    /// </summary>
+    private async ValueTask ApplyTemplateOverridesAsync(
+        Dictionary<string, string> cascade,
+        HashSet<string> secretNames,
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides,
+        CancellationToken ct)
+    {
+        if (templateOverrides is not { Count: > 0 }) return;
+
+        foreach (var (name, template) in templateOverrides)
+        {
+            var (value, secret) = await ExpandTrackingSecretsAsync(template, cascade, secretNames, ct)
+                .ConfigureAwait(false);
+            cascade[name] = value;
+            if (secret) secretNames.Add(name);
+            else secretNames.Remove(name);
+        }
+    }
+
+    /// <summary>Composes the variable cascade — workspace &lt; collection &lt; stage &lt; env
+    /// &lt; request &lt; overrides — along with the set of names whose winning definition is
+    /// marked secret.</summary>
+    private (Dictionary<string, string> Cascade, HashSet<string> SecretNames) BuildCascade(
+        RequestFile request,
+        CollectionFile? collection,
+        CollectionStage? stage,
+        EnvFile? env,
+        IReadOnlyDictionary<string, string>? overrides)
+    {
+        var cascade = new Dictionary<string, string>(StringComparer.Ordinal);
+        // Sensitivity is tracked alongside the values because merging keeps only the value —
+        // and an assertion needs to know whether the expected value it just expanded is safe
+        // to echo back into a results pane.
+        var secretNames = new HashSet<string>(StringComparer.Ordinal);
+
+        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames);
+        if (collection is not null) MergeVars(cascade, collection.Vars, secretNames);
+        if (stage is not null) MergeVars(cascade, stage.Vars, secretNames);
+        if (env is not null) MergeVars(cascade, env.Vars, secretNames);
+        MergeVars(cascade, request.Vars, secretNames);
+
+        if (overrides is not null)
+        {
+            foreach (var (k, v) in overrides)
+            {
+                cascade[k] = v;
+                // A per-run override is a literal the caller just typed, not a secret lookup.
+                secretNames.Remove(k);
+            }
+        }
+
+        return (cascade, secretNames);
+    }
+
+    private static void MergeVars(
+        Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src, HashSet<string> secretNames)
     {
         foreach (var (k, v) in src)
         {
-            if (v.Default is { } d) dest[k] = d;
+            if (v.Default is not { } d) continue;
+            dest[k] = d;
+            // A later scope redefining the name also redefines its sensitivity — an env that
+            // overrides a secret with a literal test value is no longer holding a secret.
+            if (v.Secret) secretNames.Add(k);
+            else secretNames.Remove(k);
         }
+    }
+
+    /// <summary>
+    /// Expands the selectors and expected values of a request's assertions. Runs against the
+    /// same cascade and registry as the request body, so <c>equals: "{{user.email}}"</c>
+    /// compares against the very value the request was built with.
+    ///
+    /// <para>Sensitivity is tracked on the expected side only, and only to decide whether the
+    /// reported expectation is masked. Selectors — a header name, a path expression — stay
+    /// visible; they are structural, and no more revealing than the fully-expanded URL and
+    /// headers the Request tab already shows.</para>
+    /// </summary>
+    private async ValueTask<IReadOnlyList<ResolvedAssert>> RenderAssertionsAsync(
+        IReadOnlyList<AssertSpec> assertions,
+        IReadOnlyDictionary<string, string> cascade,
+        IReadOnlySet<string> secretNames,
+        CancellationToken ct,
+        bool tolerant = false)
+    {
+        if (assertions.Count == 0) return [];
+
+        var resolved = new List<ResolvedAssert>(assertions.Count);
+        foreach (var assertion in assertions)
+        {
+            if (tolerant)
+            {
+                try
+                {
+                    resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, ct).ConfigureAwait(false));
+                }
+                catch (WorkspaceParseException ex)
+                {
+                    resolved.Add(new ResolvedAssert(assertion, false, ex.Error.Message));
+                }
+                continue;
+            }
+            resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, ct).ConfigureAwait(false));
+        }
+        return resolved;
+    }
+
+    private async ValueTask<ResolvedAssert> RenderOneAsync(
+        AssertSpec assertion,
+        IReadOnlyDictionary<string, string> cascade,
+        IReadOnlySet<string> secretNames,
+        CancellationToken ct)
+    {
+        var selector = assertion.Selector is null
+            ? null
+            : await Interpolation.ExpandAsync(assertion.Selector, cascade, registry, ct).ConfigureAwait(false);
+
+        var secret = false;
+        string? expected = null;
+        if (assertion.Expected is not null)
+        {
+            (expected, secret) = await ExpandTrackingSecretsAsync(assertion.Expected, cascade, secretNames, ct)
+                .ConfigureAwait(false);
+        }
+
+        IReadOnlyList<string>? expectedList = null;
+        if (assertion.ExpectedList is { Count: > 0 } list)
+        {
+            var expandedList = new List<string>(list.Count);
+            foreach (var item in list)
+            {
+                var (value, itemSecret) = await ExpandTrackingSecretsAsync(item, cascade, secretNames, ct)
+                    .ConfigureAwait(false);
+                expandedList.Add(value);
+                secret |= itemSecret;
+            }
+            expectedList = expandedList;
+        }
+
+        return new ResolvedAssert(
+            assertion with { Selector = selector, Expected = expected, ExpectedList = expectedList },
+            secret);
+    }
+
+    /// <summary>Expands a template and reports whether anything secret went into it — either a
+    /// cascade variable declared <c>secret: true</c> or a provider lookup the registry flagged.</summary>
+    private async ValueTask<(string Value, bool Secret)> ExpandTrackingSecretsAsync(
+        string input,
+        IReadOnlyDictionary<string, string> cascade,
+        IReadOnlySet<string> secretNames,
+        CancellationToken ct)
+    {
+        var traceBefore = registry.Trace.Count;
+        var value = await Interpolation.ExpandAsync(input, cascade, registry, ct).ConfigureAwait(false);
+
+        foreach (var name in Interpolation.ReferencedNames(input))
+        {
+            if (secretNames.Contains(name)) return (value, true);
+        }
+
+        for (var i = traceBefore; i < registry.Trace.Count; i++)
+        {
+            if (registry.Trace[i].IsSecret) return (value, true);
+        }
+
+        return (value, false);
     }
 
     private static void ApplyAuthHeaders(AuthFile? auth, IDictionary<string, string> headers)

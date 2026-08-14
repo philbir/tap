@@ -1,5 +1,3 @@
-using System.Reflection;
-
 namespace Tap.Studio;
 
 /// <summary>
@@ -18,14 +16,5 @@ internal static class StudioVersion
     public static string UserAgent { get; } = $"tap-studio/{Value}";
 
     private static string Resolve()
-    {
-        var asm = typeof(StudioVersion).Assembly;
-        var info = asm.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
-        if (string.IsNullOrWhiteSpace(info))
-            return asm.GetName().Version?.ToString(3) ?? "0.0.0";
-
-        // "<version>+<commit sha>" — the sha is useful in logs, noise in a User-Agent.
-        var plus = info.IndexOf('+');
-        return plus >= 0 ? info[..plus] : info;
-    }
+        => Tap.Execution.ExecutionIdentity.Resolve(typeof(StudioVersion).Assembly);
 }

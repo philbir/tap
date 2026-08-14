@@ -3,10 +3,14 @@ using Tap.Studio.Contracts;
 using Tap.Studio.Specs;
 using Tap.Studio.Variables;
 using Tap.Workspace;
+using Tap.Workspace.Asserts;
 using Tap.Workspace.Model;
 using Tap.Workspace.Parsing;
 using Tap.Workspace.Rendering;
 using Tap.Workspace.Variables;
+using Tap.Execution.Workspace;
+using Tap.Execution.Auth;
+using Tap.Execution.Variables;
 
 namespace Tap.Studio;
 
@@ -21,7 +25,7 @@ namespace Tap.Studio;
 /// outputs (e.g. azkv's SecretClient) are not pooled, which is acceptable for desktop-scale
 /// traffic — revisit when shared infra calls for it.</para>
 /// </summary>
-public sealed class WorkspaceService : IDisposable
+public sealed class WorkspaceService : IWorkspaceHost, IDisposable
 {
     private readonly ILogger<WorkspaceService> _logger;
     private readonly KnownWorkspaceStore _knownWorkspaces;
@@ -30,6 +34,8 @@ public sealed class WorkspaceService : IDisposable
     private readonly ProviderRegistryBuilder _registryBuilder;
     private readonly SystemSettingsStore _systemSettings;
     private readonly AuthTokenStore _tokens;
+    private readonly CachedAuthTokenSource _tokenSource;
+    private readonly RequestPipeline _pipeline;
     private FileSystemWatcher? _watcher;
     private string _root;
     private LoadedWorkspace _workspace;
@@ -50,12 +56,27 @@ public sealed class WorkspaceService : IDisposable
         _root = knownWorkspaces.ActivePath;
         _workspace = Load(_root);
         _watcher = StartWatcher(_root);
+        _tokenSource = new CachedAuthTokenSource(tokens, () => RootDirectory);
+        _pipeline = new RequestPipeline(this);
     }
 
     public LoadedWorkspace Current
     {
         get { lock (_gate) return _workspace; }
     }
+
+    // --- IWorkspaceHost -------------------------------------------------------------------
+    // The engine sees a workspace, a registry factory, and a token source. Everything else
+    // this class does — watching, switching, saving, the known-workspace list — is Studio's
+    // business and deliberately invisible from there.
+
+    LoadedWorkspace IWorkspaceHost.Workspace => Current;
+
+    IAuthTokenSource IWorkspaceHost.Tokens => _tokenSource;
+
+    /// <summary>The render path, shared with the CLI. Built once — it is stateless over the
+    /// host, and the host re-reads its workspace on every access.</summary>
+    public RequestPipeline Pipeline => _pipeline;
 
     public string RootDirectory
     {
@@ -174,30 +195,43 @@ public sealed class WorkspaceService : IDisposable
         }
     }
 
-    public async ValueTask<ResolvedRequest> RenderAsync(string requestPath, string? envPath,
+    /// <param name="templateOverrides">Overrides whose values are templates — a flow step's
+    /// <c>vars:</c>, which have to see what earlier steps bound. See
+    /// <see cref="WorkspaceRenderer.RenderAsync"/>.</param>
+    public ValueTask<ResolvedRequest> RenderAsync(string requestPath, string? envPath,
         IReadOnlyDictionary<string, string>? overrides, CancellationToken ct,
-        string? stageName = null, RequestSpecDto? draftSpec = null)
+        string? stageName = null, RequestSpecDto? draftSpec = null,
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
     {
-        var ws = Current;
-        var req = ResolveRequestFile(ws, requestPath, draftSpec);
+        // Resolving an unsaved editor draft is the one part of the render path that is purely
+        // Studio's — the engine only ever sees a RequestFile.
+        var req = ResolveRequestFile(Current, requestPath, draftSpec);
+        return _pipeline.RenderAsync(req, envPath, overrides, ct, stageName, templateOverrides);
+    }
 
-        EnvFile? env = null;
+
+    /// <summary>
+    /// Expands a set of assertions against the scope a request would execute in, without
+    /// building or sending the request. Backs <c>POST /api/assertions/evaluate</c>, which
+    /// re-checks edited assertions against a response the client already has.
+    /// </summary>
+    public ValueTask<IReadOnlyList<ResolvedAssert>> RenderAssertionsAsync(
+        IReadOnlyList<AssertSpec> assertions, string? requestPath, string? envPath, string? stageName,
+        CancellationToken ct, bool tolerant = false,
+        IReadOnlyDictionary<string, string>? overrides = null,
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        => _pipeline.RenderAssertionsAsync(
+            assertions, requestPath, envPath, stageName, ct, tolerant, overrides, templateOverrides);
+
+    private static EnvFile? ResolveEnv(LoadedWorkspace ws, string? envPath)
+    {
         if (envPath is not null)
         {
             if (ws.FindByPath(envPath) is not EnvFile e)
                 throw new FileNotFoundException($"Env '{envPath}' not in workspace.");
-            env = e;
+            return e;
         }
-        else if (ws.Manifest?.DefaultEnv is { } defaultRef)
-        {
-            env = ws.Resolve(defaultRef) as EnvFile;
-        }
-
-        var registry = CreateRegistry(env);
-        var renderer = new WorkspaceRenderer(ws, registry);
-        var rendered = await renderer.RenderAsync(req, env, overrides, ct, stageName).ConfigureAwait(false);
-        rendered = ResolveBinaryRef(req, rendered);
-        return InjectAuthToken(ws, req, rendered, env?.RelativePath);
+        return ws.Manifest?.DefaultEnv is { } defaultRef ? ws.Resolve(defaultRef) as EnvFile : null;
     }
 
     /// <summary>
@@ -241,7 +275,7 @@ public sealed class WorkspaceService : IDisposable
             // refs that escape the workspace; let the executor render the body verbatim
             // (i.e. send the literal "< …" string) so the failure mode is visible.
             var combined = string.IsNullOrEmpty(requestDir) ? relPath : $"{requestDir}/{relPath}";
-            if (WorkspacePathResolver.TryResolve(_root, combined, out var fullPath, out _)
+            if (WorkspacePaths.TryResolve(_root, combined, out var fullPath, out _)
                 && File.Exists(fullPath))
             {
                 var bytes = File.ReadAllBytes(fullPath);
@@ -253,7 +287,7 @@ public sealed class WorkspaceService : IDisposable
 
     /// <summary>Match <c>&lt; ./path</c> or <c>&lt; path</c> as the entire body. Whitespace
     /// trimmed. Returns the path with any leading <c>./</c> stripped — the resolver
-    /// rejects <c>.</c> segments, so they have to come off before <see cref="WorkspacePathResolver.TryResolve"/>.</summary>
+    /// rejects <c>.</c> segments, so they have to come off before <see cref="WorkspacePaths.TryResolve"/>.</summary>
     private static bool TryParseBinaryRef(string? body, out string relativePath)
     {
         relativePath = string.Empty;
@@ -419,14 +453,14 @@ public sealed class WorkspaceService : IDisposable
     /// before <see cref="File.ReadAllText(string)"/> sees it.</summary>
     public string ReadSource(string relativePath)
     {
-        if (!WorkspacePathResolver.TryResolve(RootDirectory, relativePath, out var full, out var err))
+        if (!WorkspacePaths.TryResolve(RootDirectory, relativePath, out var full, out var err))
             throw new InvalidOperationException(err);
         return File.ReadAllText(full);
     }
 
     public void Save(string relativePath, string content)
     {
-        if (!WorkspacePathResolver.TryResolve(RootDirectory, relativePath, out var full, out var err))
+        if (!WorkspacePaths.TryResolve(RootDirectory, relativePath, out var full, out var err))
             throw new InvalidOperationException(err);
 
         var fileName = Path.GetFileName(relativePath);

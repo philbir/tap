@@ -22,6 +22,9 @@ plain text in your git repo.
 - [Install and run](#install-and-run)
 - [The workspace](#the-workspace)
 - [Composing a request](#composing-a-request)
+- [Assertions](#assertions)
+- [Tests and flows](#tests-and-flows)
+- [Running tests from CI](#running-tests-from-ci)
 - [Authentication](#authentication)
 - [Variables, environments, and secrets](#variables-environments-and-secrets)
 - [AI assistant](#ai-assistant)
@@ -101,7 +104,7 @@ scripts/build-desktop.sh --dev    # publish sidecar + tauri dev
 ## The workspace
 
 A workspace is a directory containing a `tap.md` manifest. Everything in it is meant to be
-committed. Five file kinds, all Markdown + YAML frontmatter:
+committed. Seven file kinds, all Markdown + YAML frontmatter:
 
 | Kind | File | Owns |
 |---|---|---|
@@ -110,6 +113,8 @@ committed. Five file kinds, all Markdown + YAML frontmatter:
 | `request` | `*.req.md` | One HTTP (or WebSocket) call, as a fenced `http` block. |
 | `auth` | `auth/*.auth.md` or `collections/<slug>/*.auth.md` | A reusable authentication profile — shared workspace-wide, or owned by one collection. |
 | `env` | `environments/*.env.md` | A named set of variables. |
+| `flow` | `tests/*.flow.md` | Requests run in order, passing values from one response to the next. |
+| `test` | `tests/*.test.md` | A set of checks, each running one request or one flow. |
 
 ```
 my-service/
@@ -122,6 +127,9 @@ my-service/
     ├── environments/
     │   ├── local.env.md
     │   └── prod.env.md
+    ├── tests/
+    │   ├── billing.test.md   ← a set of checks
+    │   └── checkout.flow.md  ← requests in order, values carried across
     └── collections/
         └── stripe/
             ├── _collection.md    ← baseUrl, stages, default auth/headers
@@ -179,6 +187,276 @@ frame and inbound frames append as they arrive.
 
 **GraphQL.** The GraphQL body mode fetches the endpoint's schema, so queries, mutations, and
 variables get completion and validation against the live server.
+
+---
+
+## Assertions
+
+A request can declare what a passing response looks like. The **Asserts** tab holds one row
+per expectation, built from dropdowns rather than free text: pick what to read from the
+response (status, duration, a header, the body, a JSONPath, an XPath), pick how to compare
+it, and give the expected value.
+
+```yaml
+assertions:
+- status: 2xx
+- header: content-type
+  contains: application/json
+- jsonpath: $.order.id
+  matches: ^ord-\d+$
+- duration:
+    lt: 800
+```
+
+Expected values are ordinary Studio inputs, so `{{variables}}` work there too — and they
+expand through the same cascade that built the request. `equals: '{{user.email}}'` therefore
+reads as *"the response came back carrying whatever we actually sent"*, without hard-coding
+the value or duplicating it between the request and its check.
+
+**The authoring loop is the point.** Send once, then open the Asserts tab and shape the rows
+against the real response: each verdict re-computes as you type, without sending anything
+again. The re-check runs on the server through the very same evaluator a Send uses, so what
+you tune against is what a later run — or, eventually, a headless one — will decide.
+
+Assertions never change what is sent and never fail the request. They annotate the result:
+the response panel gains an **Asserts** tab with a pass/fail line per row, showing expected
+vs actual on the ones that failed. A request that is *supposed* to 404 asserts `status: 404`
+and passes.
+
+Two behaviours worth knowing:
+
+- A wrong body type is a failed assertion, not an error — a JSONPath against an HTML body
+  fails with *the response body is not valid JSON*, and the run continues.
+- When an expected value resolves through a variable marked secret, the reported expectation
+  is masked as `***`, so a results pane never becomes somewhere secrets surface.
+
+The full grammar — every extractor, matcher, and modifier, plus the cardinality and coercion
+rules — is in [the workspace format spec](workspace-format.md).
+
+---
+
+## Tests and flows
+
+Assertions answer *"did this response look right?"*. The **Testing** tab answers the two
+questions above that: *"do these requests still pass?"* and *"does this multi-step exchange
+still work end to end?"* — with two file kinds, both living in `tests/`.
+
+### Flows — requests in order, values carried across
+
+A **flow** (`*.flow.md`) runs requests in sequence and passes values from one response into
+the next. Each step names a request, may override its variables, and may **extract** values
+out of its response for the steps below:
+
+```yaml
+kind: flow
+name: Checkout
+steps:
+- name: Create the order
+  request: ../collections/demo/create-order.req.md
+  extract:
+  - var: orderId
+    jsonpath: $.order.id
+- name: Read it back
+  request: ../collections/demo/get-order.req.md
+  vars:
+    id: '{{orderId}}'
+```
+
+That is the whole mechanism: step 1 binds `orderId`, step 2's variables read it as
+`{{orderId}}`. In the editor each step is a card that reads in the order things happen —
+which request, what goes in, what comes out, what has to be true — and the extraction row
+reads left to right as the sentence it is: **variable ← source (selector)**.
+
+Extract from a JSONPath, an XPath, a header, the status, the duration, the whole body, or a
+regex capture group. A value that doesn't turn up **fails the step** rather than quietly
+binding nothing — the next request is about to send `{{orderId}}` unexpanded, and saying so
+here beats a strange URL two steps later. Use `default:` or the required toggle when a value
+is genuinely optional.
+
+**Neither request knows it is in a flow.** They are the same files the Requests tab sends,
+with the same assertions; the flow only supplies variables and carries one value across. A
+failed step stops the flow, because everything after it would run against a state that never
+happened.
+
+### Test sets — a group of checks
+
+A **test set** (`*.test.md`) is a list of tests, each running either one request or one whole
+flow, plus variables that apply to the entire run:
+
+```yaml
+kind: test
+name: Order API
+vars:
+  customer: cus_demo
+tests:
+- name: Rejects an unknown SKU
+  request: ../collections/demo/create-order.req.md
+  vars: { item: nope }
+  assertions:
+  - status: 404
+- name: Full checkout
+  flow: ./checkout.flow.md
+```
+
+Set variables are the last word on what the requests see — above the environment, above the
+request's own — which is what lets one set pin an identity for every check inside it. A test
+can add assertions on top of whatever its target already declares; for a flow entry those
+check the last step's response, the one a caller of the flow sees.
+
+By default a failing test doesn't stop the others (**Keep going**) — one broken endpoint
+shouldn't hide the state of the rest. Switch to **Stop the set** for tests that build on each
+other.
+
+### Running
+
+Hit **Run**. Results stream in as they happen rather than appearing all at once at the end,
+so a ten-entry set against a slow API reports progress. Each row expands to the request that
+ran, every assertion verdict, the values a step bound, and the response body. Failures open
+themselves. A single test can be re-run on its own from its row, without re-firing everything
+else at the upstream.
+
+Runs use what is on disk, so Run is disabled while there are unsaved edits — the alternative
+is a green result for a file that doesn't exist yet.
+
+Nothing is persisted: a run annotates the screen, it doesn't write to your workspace, and an
+extracted value lives only for the length of the run.
+
+---
+
+## Running tests from CI
+
+The same runs, headless, through a .NET tool:
+
+```bash
+dotnet tool install --global Tap.Studio.Cli
+tap-studio test "Demo API smoke"
+```
+
+`tap-studio` is a separate package from the `tap` tunnel CLI — different product, different
+command, both installable side by side. It carries the execution engine and nothing that
+serves a UI, so it stays small enough to install on every runner.
+
+**It is the same engine.** The Studio's API and the CLI both call `Tap.Execution`; a verdict
+from a pipeline and a verdict from the Testing tab are the same computation over the same
+files, not two implementations that drift apart.
+
+### Commands
+
+| | |
+|---|---|
+| `tap-studio test <name>` | Run a test set or a flow. |
+| `tap-studio send <name>` | Send one request and evaluate its assertions. |
+| `tap-studio lint` | Parse the workspace and report what doesn't load. |
+| `tap-studio vars` | Print the resolved variable cascade, secrets masked. |
+
+`<name>` is a path, the `name:` from the frontmatter, or the filename stem — so the thing you
+read off the Testing tab is the thing you can type. `--list` shows what's available. The
+workspace is found by walking up from the working directory to the nearest `tap.md`.
+
+### Selecting what runs
+
+```bash
+tap-studio test --tag smoke                  # every test set and flow tagged smoke
+tap-studio test --tag smoke --tag graphql    # either tag — repeated tags union
+tap-studio test "Order API" --filter refund  # just the tests whose name contains "refund"
+tap-studio test "Order API" --only 2         # one entry, by index
+```
+
+`--tag` replaces the name argument rather than narrowing it; passing both is an error instead
+of a precedence rule to memorise. Repeated tags union, because "run the smoke tests and the
+graphql tests" is what the flag reads like.
+
+**A selection that matches nothing is an error (exit 2), never an empty green run.** A
+misspelled `--tag` that silently ran zero tests would leave a pipeline passing forever with
+nothing in the output to notice it by — so an unmatched tag lists the tags that do exist, and
+an unmatched `--filter` says how many tests it looked at.
+
+`--filter` narrows the tests inside a set. It doesn't apply to a flow: its steps are a chain,
+and dropping one cuts what a later step depends on, so the CLI says so rather than running a
+broken sequence.
+
+### Input variables
+
+```bash
+tap-studio test "Order API" --var customer=cus_ci --var-file ci.env
+```
+
+`--var` lands in the same tier the UI's per-run overrides use — above every file scope — so it
+is the last word on what the requests see. Later `--var-file`s beat earlier ones, and `--var`
+beats all of them.
+
+### A pipeline
+
+```yaml
+- run: dotnet tool install --global Tap.Studio.Cli
+- run: tap-studio test "Demo API smoke" --env ci --output junit --output-file results.xml
+  env:
+    TAP_SECRETS_ALLOWED: "DEMO_*_TOKEN"
+    DEMO_API_TOKEN: ${{ secrets.DEMO_API_TOKEN }}
+```
+
+`--output` takes `junit`, `trx`, `json`, or `markdown`.
+
+| Format | For |
+|---|---|
+| `junit` | Every CI system ingests it without a plugin, so a failed assertion shows up as a failed test in the UI rather than a line in a log. A `--tag` run writes one `<testsuite>` per target inside a single `<testsuites>` — the shape the format was designed for. |
+| `trx` | Azure DevOps' native reporting. Several targets merge into one `TestRun`. |
+| `json` | Scripting. Always an envelope — `{ ok, passed, failed, skipped, durationMs, runs: [...] }` — whatever the target count, so nothing has to branch on how the run was selected. |
+| `markdown` | The places a human reads: a GitHub job summary, a PR comment, an artifact someone opens. |
+
+The Markdown report leads with the verdict, then **failures in full**, then a table per target —
+someone opening a summary because a build went red wants the reason on the screen they land on.
+Passing targets collapse into a `<details>`; failing ones stay open. When everything passed
+there is no failure section at all.
+
+For a GitHub job summary, append rather than write directly, so it can't clobber what another
+step put there:
+
+```yaml
+- run: |
+    tap-studio test --tag smoke --output markdown --output-file summary.md
+    cat summary.md >> "$GITHUB_STEP_SUMMARY"
+```
+
+This repo runs its own sample set that way on every push — see
+[`.github/workflows/workspace-tests.yml`](../.github/workflows/workspace-tests.yml).
+
+### Exit codes
+
+| Code | Meaning |
+|---|---|
+| 0 | Everything that ran, passed. |
+| 1 | A test or assertion failed. |
+| 2 | Usage error — unknown or ambiguous name, bad option. |
+| 3 | Workspace error — no `tap.md`, a file that doesn't parse. |
+| 4 | Auth couldn't be acquired without a human. |
+| 130 | Cancelled. |
+
+`1` versus everything above it is the distinction worth having: a red build because the API
+misbehaved is a different situation from a red build because the runner couldn't do its job,
+and one exit code for both makes them indistinguishable from a dashboard.
+
+### Secrets and auth without a browser
+
+Secrets reach a headless run through the same variable providers the UI uses. The `env`
+provider is the natural CI path — deny-by-default, with `TAP_SECRETS_ALLOWED` /
+`TAP_VARS_ALLOWED` naming what a workspace may read. `azkv` works with workload identity.
+
+Auth profiles split three ways:
+
+| Works headlessly | Doesn't |
+|---|---|
+| `bearer`, `basic`, `apiKey`, `custom`, `aws-sigv4`, `github` (PAT) — the renderer builds these inline | `oauth2` authorization_code / PKCE / device_code |
+| `oauth2` client_credentials and ROPC | `github` oauth |
+| `azure-cli`, when `az` is signed in — federated credentials work | |
+
+An interactive grant **fails immediately** with exit 4, naming the profile and the
+alternatives. The failure it replaces — a job blocked on a sign-in prompt nobody can see until
+the timeout — is far worse than an error message.
+
+The token cache at `~/.tap/auth-tokens.json` that the Studio fills when you complete a sign-in
+is **not** consulted unless you pass `--use-cached-tokens`. A CI run that passes because
+someone's laptop had a warm token is a test that didn't really run.
 
 ---
 

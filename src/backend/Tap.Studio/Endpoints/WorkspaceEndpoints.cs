@@ -1,6 +1,7 @@
 using Tap.Studio.Contracts;
 using Tap.Workspace;
 using Tap.Workspace.Model;
+using Tap.Execution.Workspace;
 
 namespace Tap.Studio.Endpoints;
 
@@ -244,7 +245,7 @@ public static class WorkspaceEndpoints
 
     private static bool TryResolveWorkspacePath(WorkspaceService svc, string relative,
         out string full, out string error)
-        => WorkspacePathResolver.TryResolve(svc, relative, out full, out error);
+        => WorkspacePaths.TryResolve(svc.RootDirectory, relative, out full, out error);
 
     /// <summary>Re-runs <see cref="GitInspector.Inspect(string)"/> so branch + remote URLs
     /// are fresh on every list call. Falls back to the workspace path when no persisted git

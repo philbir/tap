@@ -2,7 +2,8 @@ import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { api, subscribeWorkspaceChanges } from '../api/client'
 import type {
-  AuthSummary, CollectionSummary, EnvSummary, KnownWorkspace, TreeNode, WorkspaceFileKind, WorkspaceInfo,
+  AuthSummary, CollectionSummary, EnvSummary, FlowSummary, KnownWorkspace, TestSetSummary, TreeNode,
+  WorkspaceFileKind, WorkspaceInfo,
 } from '../api/types'
 
 /** One open file in the tab bar. */
@@ -36,6 +37,10 @@ export interface TapStore {
   envs: EnvSummary[]
   collections: CollectionSummary[]
   auths: AuthSummary[]
+  /** Test sets and flows, for the Testing view. Both are cheap listings — a workspace has
+   *  far fewer of them than requests. */
+  testSets: TestSetSummary[]
+  flows: FlowSummary[]
   knownWorkspaces: KnownWorkspace[]
   /** Increments after every successful reload. Editors `useEffect` on this to refetch. */
   generation: number
@@ -80,6 +85,8 @@ export const useTapStore = create<TapStore>()(
       envs: [],
       collections: [],
       auths: [],
+      testSets: [],
+      flows: [],
       knownWorkspaces: [],
       generation: 0,
       loadError: null,
@@ -90,13 +97,15 @@ export const useTapStore = create<TapStore>()(
 
       reload: async () => {
         try {
-          const [w, t, e, k, c, au] = await Promise.all([
+          const [w, t, e, k, c, au, ts, fl] = await Promise.all([
             api.workspace(),
             api.tree(),
             api.environments(),
             api.knownWorkspaces(),
             api.collections(),
             api.auths(),
+            api.testSets(),
+            api.flows(),
           ])
           const previousRoot = get().info?.root ?? null
           const prevActiveEnv = previousRoot ? get().activeEnvByRoot[previousRoot] : null
@@ -110,6 +119,8 @@ export const useTapStore = create<TapStore>()(
               knownWorkspaces: k,
               collections: c,
               auths: au,
+              testSets: ts,
+              flows: fl,
               generation: state.generation + 1,
               loadError: null,
               activeEnvByRoot: { ...state.activeEnvByRoot, [w.root]: nextActiveEnv },

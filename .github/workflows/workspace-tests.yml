@@ -1,0 +1,90 @@
+name: Workspace tests
+
+# Runs the sample workspace's test set through the CLI the way a consumer would — built from
+# source rather than installed from NuGet, so a regression in the engine fails here before it
+# reaches a package.
+#
+# Doubles as the worked example the docs point at: this is what `tap-studio` in CI looks like.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: write        # publishing the JUnit report as a check run
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
+        with:
+          dotnet-version: "10.0.x"
+
+      - name: Lint the workspace
+        # Cheap, needs no network, and catches a malformed file before anything is sent.
+        run: >
+          dotnet run --project src/backend/Tap.Studio.Cli -- lint
+          --workspace samples/sample-workspace
+
+      - name: Start the demo API
+        run: |
+          dotnet run --project samples/Demo.Api --urls http://localhost:5399 &
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:5399/demo/index > /dev/null; then
+              echo "demo api up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "demo api did not come up in 60s"; exit 1
+
+      - name: Run the tagged test sets
+        env:
+          # The `env` variable provider is deny-by-default; a workspace can only read the
+          # names listed here. This is the CI path for getting values in without a secret
+          # store — see docs/studio.md.
+          DEMO_API_URL: localhost:5399
+          TAP_VARS_ALLOWED: "DEMO_API_URL,USER"
+        # --tag rather than a name: adding a tagged test set to the workspace makes it run
+        # here without anyone remembering to edit this file. A tag that matches nothing is an
+        # error, so this can't silently degrade into testing zero things.
+        run: >
+          dotnet run --project src/backend/Tap.Studio.Cli -- test --tag smoke
+          --workspace samples/sample-workspace
+          --env local
+          --output junit
+          --output-file test-results.xml
+
+      # A second, cheap pass purely for the human-readable summary. `--only`-free and already
+      # warm, so it costs a few hundred milliseconds; appended rather than written directly to
+      # $GITHUB_STEP_SUMMARY so it never clobbers what another step put there.
+      - name: Add the run to the job summary
+        if: always()
+        env:
+          DEMO_API_URL: localhost:5399
+          TAP_VARS_ALLOWED: "DEMO_API_URL,USER"
+        run: |
+          dotnet run --project src/backend/Tap.Studio.Cli -- test --tag smoke \
+            --workspace samples/sample-workspace \
+            --env local \
+            --output markdown \
+            --output-file summary.md || true
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      # `if: always()` so a failing run still publishes its report — the report is most
+      # useful precisely when the step before it failed.
+      - name: Publish the report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: workspace-test-results
+          path: test-results.xml
+          retention-days: 14
+          if-no-files-found: warn

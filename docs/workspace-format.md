@@ -14,7 +14,7 @@ This document is the authoritative spec for the on-disk format. The Tap parser (
 2. **Composable.** A runnable request is the composition of *workspace + collection (+ stage) + auth + environment + request*. No single file is the whole story.
 3. **Readable on GitHub.** Frontmatter is the structured part; the body is human prose. A request file is a documentation page that happens to be executable.
 4. **Secret-safe by construction.** A literal secret cannot occur in a workspace file. Frontmatter values that look like `${{provider:path}}` are *references* and are never resolved at parse time.
-5. **One format, five shapes.** Every file is `Markdown + YAML frontmatter`. The `kind` field plus the filename suffix tell the parser what shape to expect.
+5. **One format, a handful of shapes.** Every file is `Markdown + YAML frontmatter`. The `kind` field plus the filename suffix tell the parser what shape to expect.
 6. **No required tooling to read.** Any text editor or any Markdown renderer can display a workspace. Tap adds editing, validation, execution, and live preview on top.
 
 ---
@@ -27,6 +27,8 @@ This document is the authoritative spec for the on-disk format. The Tap parser (
 | `auth` | `*.auth.md` | A reusable authentication profile (bearer, basic, OAuth2, custom). Lives either in `auth/` (workspace-scoped) or inside a collection (collection-scoped) — see §8.0. |
 | `env` | `*.env.md` | A named environment (set of variables and secret bindings). |
 | `collection` | `_collection.md` *(at `collections/<slug>/`)* | A top-level group of requests. Owns the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. |
+| `flow` | `*.flow.md` | An ordered sequence of requests where each step can extract values from its response for the steps after it. Lives in `tests/` — see §10. |
+| `test` | `*.test.md` | A test set: named checks, each running one request or one flow, with set-scoped variables. Lives in `tests/` — see §11. |
 | `workspace` | `tap.md` *(at workspace root)* | Workspace-level config: name, default env, registered secret providers. |
 
 Sub-directories inside a collection are pure grouping for the explorer tree — they carry no metadata, no variables, and no inherited defaults. Every request below a collection inherits its baseUrl, stages, default auth, default headers, and variables; variable sharing across a group of requests lives on `_collection.md`.
@@ -54,6 +56,9 @@ my-service/
     │   ├── local.env.md
     │   ├── staging.env.md
     │   └── prod.env.md
+    ├── tests/                           ← test sets and flows
+    │   ├── billing.test.md
+    │   └── checkout.flow.md
     └── collections/
         └── stripe/
             ├── _collection.md        ← kind: collection (owns baseUrl, default auth/headers, stages)
@@ -65,11 +70,11 @@ my-service/
                 └── list.req.md
 ```
 
-The three top-level directories (`auth/`, `environments/`, `collections/`) are
-structural: `auth/` and `environments/` hold flat lists of typed files; `collections/`
-hosts one sub-directory per collection. Inside each collection, nested directories
-are freeform grouping with no metadata — variable sharing across a group of requests
-lives on `_collection.md`.
+The four top-level directories (`auth/`, `environments/`, `tests/`, `collections/`) are
+structural: `auth/`, `environments/`, and `tests/` hold flat lists of typed files;
+`collections/` hosts one sub-directory per collection. Inside each collection, nested
+directories are freeform grouping with no metadata — variable sharing across a group of
+requests lives on `_collection.md`.
 
 Auth profiles are the one kind that can live in either place. Put a profile in `auth/`
 when several collections share it; put it inside a collection when its endpoints or
@@ -100,7 +105,7 @@ These appear on every kind:
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `kind` | enum | yes | One of `request`, `auth`, `env`, `collection`, `workspace`. |
+| `kind` | enum | yes | One of `request`, `auth`, `env`, `collection`, `flow`, `test`, `workspace`. |
 | `id` | string | no | Stable identifier. Auto-generated as a [UUIDv7](https://uuid7.com) on first save if omitted. Used for cross-file refs that survive renames. |
 | `name` | string | no | Display name. Defaults to the filename stem if omitted. |
 | `tags` | string[] | no | Free-form labels for filtering. |
@@ -176,7 +181,7 @@ A single executable request. The most-edited file kind.
 | `protocol` | enum: `http` \| `websocket` | no | Wire protocol. Default `http`. `websocket` drives baseUrl scheme normalization (http→ws, https→wss) and switches the executor to a WebSocket transport. See §5.4. |
 | `vars` | map<string, var-spec> | no | Request-scoped variables (highest precedence except for explicit per-run overrides). |
 | `tags` | string[] | no | |
-| `assertions` | array of assertions | no | Reserved for v0.2. Ignored by v0 parser. |
+| `assertions` | array of assertions | no | Declared expectations about the response, evaluated after every run. See §5.5. |
 
 `var-spec` may be a literal string (becomes the default value) or an object:
 
@@ -262,6 +267,113 @@ hello
 ```
 
 With `baseUrl: "{{DEMO_API_URL}}"` on the collection and `DEMO_API_URL=localhost:5298`, this resolves to `ws://localhost:5298/demo/stream/ws?interval=1000`. The same collection + var also serve plain HTTP requests off `http://localhost:5298`.
+
+### 5.5 Assertions
+
+`assertions:` declares what a passing response looks like. Every entry is an **extractor**
+(what to read out of the response) paired with a **matcher** (how to compare it), plus
+optional modifiers:
+
+```yaml
+assertions:
+- status: 2xx
+- header: content-type
+  contains: application/json
+- jsonpath: $.order.customer.email
+  equals: '{{user.email}}'
+- jsonpath: $.order.lines
+  count: 3
+- jsonpath: $.error
+  exists: false
+- xpath: /order/total
+  gt: 100
+- regex: '"id":\s*"ord-\d+"'
+- duration:
+    lt: 800
+- name: order id
+  jsonpath: $.order.id
+  matches: ^ord-\d+$
+  skip: true
+```
+
+Assertions never change what is sent and never fail the exchange — they annotate the
+result. A request that is *supposed* to 404 asserts `status: 404` and passes.
+
+#### Extractors — exactly one per entry
+
+| Key | Argument | Reads |
+|---|---|---|
+| `status` | — | Response status code, as a number. |
+| `duration` | — | Total elapsed milliseconds, including redirects. |
+| `header` | header name | First value of that header. Name match is case-insensitive. |
+| `body` | — | The decoded response body, as text. |
+| `jsonpath` | [RFC 9535](https://www.rfc-editor.org/rfc/rfc9535) expression | Nodelist from the JSON-parsed body. |
+| `xpath` | XPath 1.0 expression | Result of evaluating it over the XML-parsed body. |
+| `regex` | .NET regex pattern | **Shorthand** — normalizes to `body` + `matches`. |
+
+#### Matchers — at most one per entry
+
+| Matcher | Applies to | Notes |
+|---|---|---|
+| `equals` / `notEquals` | anything | Type-coerced — see below. |
+| `contains` / `notContains` | text, nodelist | Substring; over a multi-node result, membership. |
+| `startsWith` / `endsWith` | text | |
+| `matches` / `notMatches` | text | .NET regex, 2 s match timeout. |
+| `lt` / `lte` / `gt` / `gte` | numbers | Fails with an explanation if either side isn't numeric. |
+| `between` | numbers | Inclusive, two bounds: `between: [200, 299]`. |
+| `in` | anything | Membership: `in: [200, 201, 204]`. |
+| `exists` | `header`, `jsonpath`, `xpath` | `true` (the default) or `false`. |
+| `count` | `jsonpath`, `xpath` | Number of matched nodes. Valid on an empty result. |
+| `length` | everything but `status`/`duration` | Characters for text, elements for a JSON array, properties for an object, otherwise node count. |
+| `type` | `jsonpath` | `string` \| `number` \| `boolean` \| `object` \| `array` \| `null`. |
+
+Three shorthands cover the common cases:
+
+- a scalar on an argument-less extractor means `equals` — `- status: 200`;
+- an argument-taking extractor alone means `exists` — `- header: etag`;
+- `regex:` means `body` + `matches`.
+
+Because `header`, `jsonpath`, and `xpath` need the key's value slot for their selector,
+their matcher goes alongside as a sibling key. The others have that slot free, so the
+matcher goes into it (`- duration:` then an indented `lt: 800`). Both layouts parse
+either way — the difference is only indentation, and it is invisible in an editor.
+
+#### Modifiers
+
+| Key | Meaning |
+|---|---|
+| `name` | Display label. Generated from the assertion when absent. |
+| `skip` | `true` — listed but not evaluated; counts as neither passed nor failed. |
+| `ignoreCase` | `true` — case-insensitive string comparison. |
+
+#### Semantics
+
+- **Coercion.** Expected values are always strings — a `{{var}}` can only expand to one.
+  So if both sides parse as numbers they compare as numbers (`equals: '129.50'` matches
+  the JSON number `129.5`); if both parse as booleans, as booleans; otherwise as text.
+- **Status classes.** For `status` only, an expected value of `2xx` / `20x` matches with
+  `x` as a wildcard digit. Everywhere else `x` is just a letter.
+- **JSONPath cardinality.** Zero nodes: only `exists: false` and `count: 0` pass; anything
+  else fails with *did not match anything*. One node: the matcher applies to its value, and
+  a JSON string compares as its contents rather than its quoted literal. Several nodes:
+  `count`, `length`, `contains`, and `notContains` work; the rest fail with
+  *matched N nodes*, rather than silently picking the first.
+- **A wrong body type is a failed assertion, not an error.** `jsonpath` against a non-JSON
+  body, a malformed selector, an invalid regex, a regex that times out — each fails that
+  one assertion with an explanation. The evaluator never throws.
+- **Variables.** Selectors and expected values expand through the same cascade as the
+  request itself (§3), so `equals: '{{user.email}}'` compares against the very value the
+  request was built with. When an expected value resolves through something marked secret,
+  the reported expectation is masked as `***`.
+- **Truncated bodies.** Response capture stops at 2 MiB. Past that, body/`jsonpath`/
+  `xpath`/`regex` assertions fail with *body truncated* rather than matching a prefix and
+  claiming a pass the full response might not have earned.
+- **Streams.** For `text/event-stream`, status/header/duration assertions behave normally
+  and body-family assertions run against the captured stream text once it ends.
+- **WebSocket** requests (§5.4) parse and keep their assertions but report them as skipped —
+  frame assertions are not modelled yet.
+- Errors in an `assertions:` block are reported as `E_ASSERT_INVALID`, naming the offending
+  entry by position.
 
 ---
 
@@ -517,11 +629,213 @@ See §6 — collections own the base URL, default headers, default auth, stages,
 
 ---
 
-## 10. Secret providers
+## 10. `flow` — `*.flow.md`
+
+A **flow** runs several requests in order and carries values from one response into the next.
+It is the answer to "does this multi-step exchange still work" — create an order, read the id
+out of the response, fetch the order back by that id.
+
+Flows live in `tests/` beside test sets (§11). A flow references requests from any collection,
+so it isn't owned by one.
+
+### 10.1 Frontmatter
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `kind` | `"flow"` | yes | |
+| `name` | string | no | |
+| `id` | uuid | no | |
+| `vars` | map<string, var-spec> | no | Flow-scoped variables. Sit above every file scope in the cascade — see §10.5. |
+| `steps` | sequence of step | no | Ordered. Absent or empty is a flow nobody has finished writing — it loads, and running it does nothing. |
+| `tags` | string[] | no | |
+
+### 10.2 Steps
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `request` | path \| id-ref | yes | The request this step sends. Path is relative to the flow file. A step never inlines a request. |
+| `name` | string | no | Display label. Defaults to the referenced request's name. |
+| `vars` | map<string, string> | no | Per-step overrides. Values are templates, expanded against the run bag *before* the request renders — this is what lets `id: '{{orderId}}'` read an earlier step's output. |
+| `extract` | array of extractions | no | Binds response values to variable names for the steps that follow. See §10.3. |
+| `assertions` | array of assertions | no | The §5.5 grammar, evaluated against this step's response *in addition to* the ones the request file declares. |
+| `continueOnFailure` | bool | no | `true` keeps the flow going after this step fails. Default `false`. |
+| `skip` | bool | no | `true` — listed but not run, and it binds nothing. |
+
+```yaml
+---
+kind: flow
+name: Checkout
+vars:
+  sku: ABC-1
+steps:
+- name: Create order
+  request: ../collections/demo/create-order.req.md
+  vars:
+    item: '{{sku}}'
+  extract:
+  - var: orderId
+    jsonpath: $.order.id
+  - var: etag
+    header: etag
+  assertions:
+  - status: 201
+- name: Fetch it back
+  request: ../collections/demo/get-order.req.md
+  vars:
+    id: '{{orderId}}'
+  assertions:
+  - jsonpath: $.order.id
+    equals: '{{orderId}}'
+---
+```
+
+A failed step stops the flow: everything after it would run against a state that never
+happened. `continueOnFailure: true` opts one step out of that.
+
+### 10.3 Extractions
+
+An `extract:` entry is a `var` — the name it binds — plus **exactly one source**. The sources
+are the assertion extractors of §5.5, so there is one vocabulary to learn:
+
+| Key | Argument | Binds |
+|---|---|---|
+| `status` | — | The status code. |
+| `duration` | — | Elapsed milliseconds. |
+| `header` | header name | That header's first value. |
+| `body` | — | The whole decoded body. |
+| `jsonpath` | [RFC 9535](https://www.rfc-editor.org/rfc/rfc9535) expression | The matched node as text — a JSON string binds its contents, not its quoted literal. |
+| `xpath` | XPath 1.0 expression | The matched node's value. |
+| `regex` | .NET pattern | A capture group of the first match. |
+
+| Modifier | Meaning |
+|---|---|
+| `group` | `regex` only — which capture group to bind. Default 1, or 0 when the pattern declares no groups. |
+| `default` | Value bound when the source matches nothing, instead of failing the step. |
+| `required` | `false` — bind nothing and carry on when the source matches nothing. |
+
+```yaml
+extract:
+- var: orderId
+  jsonpath: $.order.id
+- var: token
+  regex: 'session=([^;]+)'
+  group: 1
+- var: page
+  header: x-page
+  default: '1'
+```
+
+A missing value is a **step failure**, not an annotation — unlike an assertion. The next step
+is about to send `{{orderId}}`, and reporting that at the extraction beats reporting it as a
+strange URL two steps later. `default:` and `required: false` are the two ways to say the value
+is genuinely optional. A JSONPath matching several nodes is an error rather than a silent
+first-node pick — the same rule §5.5 applies.
+
+Bound values are **run-scoped**: nothing is written back to a file or a variable provider.
+
+### 10.4 Variable names
+
+A bound name enters the run bag and is read as an ordinary `{{name}}` token by every later
+step — in its request's URL, headers, body, assertions, and its own `vars:`. Binding a name
+that also exists in a file scope shadows it for the rest of the run.
+
+### 10.5 Precedence
+
+The cascade of §7.3 is unchanged; a run supplies its top tier — the overrides. Within that
+tier, later wins:
+
+1. test-set `vars` (§11), when the flow runs inside one
+2. the test entry's `vars:` (§11.2), when one named this flow
+3. flow `vars`
+4. values bound by `extract:` as the run progresses
+5. the step's own `vars:`
+
+Entry variables land below extraction on purpose: a flow whose extracted id could be
+overridden by the set that called it isn't a flow any more. Pin a value by not extracting
+over it.
+
+Extraction beating the static tiers is the point: step 2 has to see step 1's output. An author
+who wants a value pinned simply doesn't extract over it.
+
+---
+
+## 11. `test` — `*.test.md`
+
+A **test set** is a named group of checks: set-scoped variables plus a list of tests, each of
+which runs either one request or one flow, and passes when nothing it asserts fails.
+
+Test sets live in `tests/` at the workspace root.
+
+### 11.1 Frontmatter
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `kind` | `"test"` | yes | |
+| `name` | string | no | |
+| `id` | uuid | no | |
+| `vars` | map<string, var-spec> | no | Set-scoped variables. Override every file scope — see §10.5. |
+| `onFailure` | enum: `continue` \| `stop` | no | `continue` (default) runs every test regardless. `stop` aborts the set at the first failure. |
+| `tests` | sequence of test | no | Ordered. Absent or empty is an unfinished set — it loads, and running it does nothing. |
+| `tags` | string[] | no | |
+
+### 11.2 Tests
+
+Each entry names **exactly one** of `request:` or `flow:`.
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `request` | path \| id-ref | one of | A request to send. Path is relative to the test file. |
+| `flow` | path \| id-ref | one of | A flow (§10) to run. |
+| `name` | string | no | Display label. Defaults to the referenced file's name. |
+| `vars` | map<string, string> | no | Per-test overrides. Templates, expanded against the run bag first. |
+| `assertions` | array of assertions | no | The §5.5 grammar. For a `request:` entry, checked against its response; for a `flow:` entry, against the **last step's** response — the one a caller of the flow sees. |
+| `skip` | bool | no | `true` — listed but not run. |
+
+```yaml
+---
+kind: test
+name: Order API
+vars:
+  customer: cus_demo
+onFailure: continue
+tests:
+- name: Rejects an unknown SKU
+  request: ../collections/demo/create-order.req.md
+  vars:
+    item: nope
+  assertions:
+  - status: 404
+- name: Full checkout
+  flow: ./checkout.flow.md
+---
+```
+
+### 11.3 Semantics
+
+- A test **passes** when every assertion that ran passed and every step completed. Skipped
+  assertions count as neither.
+- A request's own `assertions:` and the entry's are both evaluated, the request's first. A
+  contradiction between them is reported as a failure rather than silently resolved — if a
+  request asserts `status: 2xx` and a test asserts `status: 404`, one of them is wrong and
+  the author should see which.
+- Extractions belong to flows. A `request:` entry has nothing to feed, so it declares none.
+- A request that fails to render or never reaches the wire fails its test; its assertions are
+  reported as not run.
+- Errors in a `tests:` or `steps:` block are reported as `E_TEST_INVALID` (test sets) or
+  `E_FLOW_INVALID` (flows), naming the offending entry by position. A malformed *assertion*
+  inside one keeps its own `E_ASSERT_INVALID` — the code names the actual defect — with the
+  entry's position prefixed to the message.
+- **WebSocket requests** (§5.4) can't be run from a flow or a test set yet: frame assertions
+  aren't modelled, so a step targeting one fails with an explanation rather than pretending.
+- A run stops after 500 requests. A test set that large is really several.
+
+---
+
+## 12. Secret providers
 
 A **secret provider** resolves `${{scheme:path}}` references at execute time. Providers are registered in the workspace's `tap.md` `providers:` array (§4.2). Each provider is identified by its `scheme`; references and providers are bound by exact scheme match.
 
-### 10.1 Built-in providers (v0)
+### 12.1 Built-in providers (v0)
 
 | Scheme | Source | Reference example |
 |---|---|---|
@@ -554,7 +868,7 @@ If neither variable is set, the `env` provider denies every reference and the Sy
 empty — deny-by-default is the safe default. References to names that don't match either
 pattern list fail with `E_SECRET_RESOLUTION_FAILED`.
 
-### 10.2 Resolution rules
+### 12.2 Resolution rules
 
 - A reference resolves to a string. Non-string secret values are an error.
 - Tap caches resolutions in memory for the duration of a render. Two references to the same secret within one execute call hit the provider once.
@@ -562,13 +876,13 @@ pattern list fail with `E_SECRET_RESOLUTION_FAILED`.
 - Failed resolution (provider down, ref missing) produces `E_SECRET_RESOLUTION_FAILED`; Tap surfaces which ref failed but never the partial value.
 - Resolved values are redacted from execution history. Only the ref text is recorded.
 
-### 10.3 Adding a custom provider
+### 12.3 Adding a custom provider
 
 Tap will support out-of-tree providers via a plugin model (post-v0). For v0 the built-in set is the supported surface.
 
 ---
 
-## 11. Rendering: from files to a ResolvedRequest
+## 13. Rendering: from files to a ResolvedRequest
 
 `Tap.Workspace.Rendering.WorkspaceRenderer.RenderAsync(requestRef, envRef, overrides)` produces a `ResolvedRequest`:
 
@@ -601,7 +915,7 @@ Executors may add their own defaults on top of the resolved headers. Tap Studio 
 
 ---
 
-## 12. References between files
+## 14. References between files
 
 Two ways to point from one file to another:
 
@@ -612,7 +926,7 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 
 ---
 
-## 13. Versioning, IDs, and stability
+## 15. Versioning, IDs, and stability
 
 - A new file with no `id:` gets a UUIDv7 assigned by the writer on first save.
 - The id is the durable identity. Renaming the file preserves the id.
@@ -621,7 +935,7 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 
 ---
 
-## 14. Parse errors (canonical)
+## 16. Parse errors (canonical)
 
 | Code | Meaning |
 |---|---|
@@ -639,18 +953,25 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 | `E_SECRET_RESOLUTION_FAILED` | A registered provider rejected the reference. |
 | `E_AUTH_TYPE_INVALID` | Auth `type:` is not a recognized value. |
 | `E_HTTP_BLOCK_SYNTAX` | The fenced `http` block fails to parse as VS Code REST Client syntax. |
+| `E_ASSERT_INVALID` | An entry under `assertions:` is not a usable (extractor, matcher) pair — see §5.5. |
+| `E_FLOW_INVALID` | A `steps:` entry is malformed — no `request:`, two extraction sources, an unknown key. See §10. |
+| `E_TEST_INVALID` | A `tests:` entry is malformed — neither or both of `request:`/`flow:`, an unknown key. See §11. |
 | `E_WORKSPACE_LOAD_FAILED` | The workspace root could not be read at all. The workspace loads empty carrying this error rather than failing the host. |
 | `E_WORKSPACE_SCAN_TRUNCATED` | The folder walk hit its budget (20s / 25 000 folders) and the workspace is only partially loaded — the root is far too broad. Walks skip `node_modules`, `.git`, `.hg`, `.svn`, `.venv`, `__pycache__`, `bin`, `obj`, `target`, and never follow symlinked directories. |
 
 ---
 
-## 15. Out of scope for v0
+## 17. Out of scope for v0
 
 The following are deliberate omissions, slated for later versions:
 
-- **Assertions / tests** on responses (`assertions:` is reserved but ignored).
+- Assertions on responses: now a first-class request field via `assertions:` (§5.5). Still
+  out of scope — collection-level default assertions and assertions on WebSocket frames.
+- Request chaining: now a first-class kind via `*.flow.md` (§10), grouped into test sets by
+  `*.test.md` (§11). Still out of scope — parallel execution, data-driven tests (one test × N
+  rows of variables), extracting a value back into a variable provider, per-step retry /
+  wait-for polling, and a headless runner that turns a test set into a CI report.
 - **Pre-request and post-response scripts** (planned: a `scripts/` directory with TypeScript modules referenced from request frontmatter).
-- **Request chaining** (composite "flow" files that orchestrate multiple requests).
 - **GraphQL request type** (handled today via the standard `application/json` body; a first-class GraphQL kind is a v0.2 candidate).
 - **gRPC** as a first-class kind — captured read-only by the Tap tunnel for now.
 - **SSE** as a first-class kind — `text/event-stream` responses on regular HTTP requests are already parsed and surfaced; no separate request type is needed.
@@ -659,7 +980,7 @@ The following are deliberate omissions, slated for later versions:
 
 ---
 
-## 16. Worked example: end-to-end
+## 18. Worked example: end-to-end
 
 Given the workspace from §2.1 and the files in §4.2, §5.3, §6.2, §7.2, §8.2:
 

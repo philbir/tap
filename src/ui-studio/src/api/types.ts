@@ -1,6 +1,8 @@
 // Mirrors src/backend/Tap.Studio/Contracts/Dtos.cs. Keep in lockstep with the C# DTOs.
 
-export type WorkspaceFileKind = 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'folder' | 'settings' | 'git-diff'
+export type WorkspaceFileKind =
+  | 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'flow' | 'test'
+  | 'folder' | 'settings' | 'git-diff'
 
 export interface WorkspaceInfo {
   name: string
@@ -111,6 +113,291 @@ export interface TlsDiagnosis {
  *  scheme normalization and the executor's transport selection. */
 export type RequestProtocol = 'http' | 'websocket'
 
+/** What part of the response an assertion reads. */
+export type AssertSource = 'status' | 'duration' | 'header' | 'body' | 'jsonpath' | 'xpath'
+
+/** How the extracted value is compared. Not every matcher applies to every source —
+ *  {@link MATCHERS_FOR_SOURCE} carries the server's rules so the editor can't build a
+ *  combination the parser would reject. */
+export type AssertOp =
+  | 'equals' | 'notEquals'
+  | 'contains' | 'notContains'
+  | 'startsWith' | 'endsWith'
+  | 'matches' | 'notMatches'
+  | 'lt' | 'lte' | 'gt' | 'gte'
+  | 'between' | 'in'
+  | 'exists' | 'count' | 'length' | 'type'
+
+/** One declared expectation about a response. Always the normalized (extractor, matcher)
+ *  pair — the file format's shorthands are applied server-side on save. */
+export interface AssertSpec {
+  /** Display label. Null means "let the server describe it". */
+  name?: string | null
+  source: AssertSource
+  /** Header name or path expression. Unused by status/duration/body. */
+  selector?: string | null
+  op: AssertOp
+  expected?: string | null
+  /** Values for `in` / `between`. */
+  expectedList?: string[] | null
+  ignoreCase?: boolean
+  skip?: boolean
+}
+
+/** Outcome of one assertion. Produced only by the server — the UI never re-implements
+ *  matcher semantics, so what you see while authoring is what a later run will decide. */
+export interface AssertResult {
+  /** Position in the request's assertion list; pairs a result back to its editor row. */
+  index: number
+  name: string
+  ok: boolean
+  skipped: boolean
+  actual: string | null
+  expected: string | null
+  message: string | null
+}
+
+export interface AssertSummary {
+  ok: boolean
+  passed: number
+  failed: number
+  skipped: number
+}
+
+/** Which matchers the server accepts for each extractor. Mirrors
+ *  `AssertSpec.ValidateCombination` in `Tap.Workspace` — keeping the editor's dropdown in
+ *  step with it means an unsavable assertion can't be built by pointing and clicking. */
+export const MATCHERS_FOR_SOURCE: Record<AssertSource, readonly AssertOp[]> = {
+  status: ['equals', 'notEquals', 'in', 'between', 'lt', 'lte', 'gt', 'gte', 'matches', 'notMatches'],
+  duration: ['lt', 'lte', 'gt', 'gte', 'between', 'equals', 'notEquals', 'in'],
+  header: ['exists', 'equals', 'notEquals', 'contains', 'notContains', 'startsWith', 'endsWith',
+    'matches', 'notMatches', 'length', 'in', 'lt', 'lte', 'gt', 'gte', 'between'],
+  body: ['contains', 'notContains', 'matches', 'notMatches', 'equals', 'notEquals',
+    'startsWith', 'endsWith', 'length'],
+  jsonpath: ['equals', 'notEquals', 'exists', 'contains', 'notContains', 'matches', 'notMatches',
+    'startsWith', 'endsWith', 'lt', 'lte', 'gt', 'gte', 'between', 'in', 'count', 'length', 'type'],
+  xpath: ['equals', 'notEquals', 'exists', 'contains', 'notContains', 'matches', 'notMatches',
+    'startsWith', 'endsWith', 'lt', 'lte', 'gt', 'gte', 'between', 'in', 'count', 'length'],
+}
+
+/** Sources whose YAML key carries a selector rather than the expected value. */
+export const SOURCE_TAKES_SELECTOR: Record<AssertSource, boolean> = {
+  status: false, duration: false, body: false, header: true, jsonpath: true, xpath: true,
+}
+
+/** Matchers whose expected value is a list. */
+export const OP_TAKES_LIST: ReadonlySet<AssertOp> = new Set<AssertOp>(['in', 'between'])
+
+/** Matchers that carry no expected value in the UI (`exists` is a two-state toggle). */
+export const OP_TAKES_NO_VALUE: ReadonlySet<AssertOp> = new Set<AssertOp>(['exists'])
+
+/** JSON types accepted by the `type` matcher. */
+export const ASSERT_JSON_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'null'] as const
+
+// --- Testing: flows (*.flow.md) and test sets (*.test.md) ---------------------------
+
+/** What part of a response an extraction reads. Same vocabulary as {@link AssertSource},
+ *  plus `regex` — which assertions only expose as shorthand but extraction needs as a
+ *  source of its own so it can bind a capture group. */
+export type ExtractSource = 'status' | 'duration' | 'header' | 'body' | 'jsonpath' | 'xpath' | 'regex'
+
+/** Sources whose YAML key carries an argument (`header: etag`). The rest are bare markers. */
+export const EXTRACT_TAKES_SELECTOR: Record<ExtractSource, boolean> = {
+  status: false, duration: false, body: false, header: true, jsonpath: true, xpath: true, regex: true,
+}
+
+/** One binding of a response value to a variable the later steps read. */
+export interface ExtractSpec {
+  /** The variable name this binds. */
+  var: string
+  source: ExtractSource
+  /** Header name, path expression, or regex pattern. Unused by status/duration/body. */
+  selector?: string | null
+  /** Capture group for a `regex` source. Null means group 1, or the whole match when the
+   *  pattern declares none. */
+  group?: number | null
+  /** Bound when the source matches nothing, instead of failing the step. */
+  default?: string | null
+  /** False lets a step carry on when the source matches nothing. */
+  required?: boolean
+}
+
+export interface FlowStepSpec {
+  /** Ref to the request this step sends — path relative to the flow file, or `id:<uuid>`. */
+  request: string
+  name?: string | null
+  /** Per-step overrides. Values are templates expanded against the run bag first, which is
+   *  how a step reads what an earlier one bound. */
+  vars?: Record<string, string> | null
+  extract?: ExtractSpec[] | null
+  /** Assertions layered on top of the ones the referenced request declares. */
+  assertions?: AssertSpec[] | null
+  continueOnFailure?: boolean
+  skip?: boolean
+}
+
+export interface FlowSummary {
+  path: string
+  name: string
+  id: string | null
+  stepCount: number
+  tags: string[]
+}
+
+export interface FlowDetail {
+  path: string
+  name: string
+  id: string | null
+  vars: Record<string, VarSpec>
+  steps: FlowStepSpec[]
+  tags: string[]
+  body: string
+  source: string
+}
+
+export interface FlowSpec {
+  path: string
+  id: string | null
+  name: string
+  vars?: Record<string, string>
+  /** Names of flow-scoped variables marked secret. */
+  secrets?: string[]
+  tags?: string[]
+  body?: string
+  steps: FlowStepSpec[]
+}
+
+/** What a run does when one of its entries fails. */
+export type TestFailureMode = 'continue' | 'stop'
+
+/** One check in a test set. Exactly one of `request` and `flow` is set. */
+export interface TestEntrySpec {
+  name?: string | null
+  request?: string | null
+  flow?: string | null
+  vars?: Record<string, string> | null
+  /** For a request entry these check its response; for a flow entry, the last step's. */
+  assertions?: AssertSpec[] | null
+  skip?: boolean
+}
+
+export interface TestSetSummary {
+  path: string
+  name: string
+  id: string | null
+  testCount: number
+  tags: string[]
+}
+
+export interface TestSetDetail {
+  path: string
+  name: string
+  id: string | null
+  vars: Record<string, VarSpec>
+  onFailure: TestFailureMode
+  tests: TestEntrySpec[]
+  tags: string[]
+  body: string
+  source: string
+}
+
+export interface TestSetSpec {
+  path: string
+  id: string | null
+  name: string
+  vars?: Record<string, string>
+  /** Names of set-scoped variables marked secret. */
+  secrets?: string[]
+  onFailure?: TestFailureMode
+  tags?: string[]
+  body?: string
+  tests: TestEntrySpec[]
+}
+
+// --- Testing: run results ------------------------------------------------------------
+
+/** One value a step bound into the run bag. `error` is set when the source matched nothing
+ *  and the extraction wasn't optional — which fails the step. */
+export interface ExtractedValue {
+  var: string
+  value: string | null
+  error: string | null
+}
+
+/** Outcome of one request inside a run. A request-backed test has exactly one; a
+ *  flow-backed one has a step per flow step. */
+export interface TestStepResult {
+  index: number
+  name: string
+  requestPath: string | null
+  method: string
+  url: string
+  status: number
+  statusText: string | null
+  contentType: string | null
+  /** Truncated server-side — enough to diagnose a failure, not the whole 2 MiB. */
+  responseBody: string | null
+  responseBodyBytes: number
+  durationMs: number
+  assertions: AssertResult[]
+  assertSummary: AssertSummary | null
+  extracted: ExtractedValue[]
+  ok: boolean
+  skipped: boolean
+  /** Why it failed, when the failure wasn't an assertion. On a skipped step this carries
+   *  the reason it didn't run instead. */
+  error: string | null
+}
+
+export interface TestEntryResult {
+  index: number
+  name: string
+  targetKind: 'request' | 'flow'
+  targetPath: string | null
+  steps: TestStepResult[]
+  ok: boolean
+  skipped: boolean
+  durationMs: number
+  error: string | null
+}
+
+/** The skeleton of a run, sent before anything executes so every row can render as
+ *  pending rather than appearing one at a time. */
+export interface TestRunPlanEntry {
+  index: number
+  name: string
+  targetKind: 'request' | 'flow'
+  targetPath: string | null
+  skip: boolean
+}
+
+export interface TestRunStart {
+  path: string
+  kind: 'test' | 'flow'
+  name: string
+  env: string | null
+  stage: string | null
+  entries: TestRunPlanEntry[]
+}
+
+export interface TestRunStepEvent {
+  entryIndex: number
+  step: TestStepResult
+}
+
+export interface TestRunResult {
+  path: string
+  kind: 'test' | 'flow'
+  name: string
+  entries: TestEntryResult[]
+  ok: boolean
+  passed: number
+  failed: number
+  skipped: number
+  durationMs: number
+  error: string | null
+}
+
 export interface RequestDetail extends RequestSummary {
   method: string
   url: string
@@ -121,6 +408,7 @@ export interface RequestDetail extends RequestSummary {
   source: string
   protocol: RequestProtocol
   transport: RequestTransportSettings | null
+  assertions: AssertSpec[]
 }
 
 export interface RequestSpec {
@@ -140,6 +428,8 @@ export interface RequestSpec {
   /** Omitted when `http` (default). `websocket` triggers ws scheme normalization + ws transport. */
   protocol?: RequestProtocol
   transport?: RequestTransportSettings
+  /** Omitted when empty so dirty-tracking stays quiet on requests that declare none. */
+  assertions?: AssertSpec[]
 }
 
 /** One named stage inside a collection. Stage fields override the parent collection's
@@ -766,6 +1056,10 @@ export interface ExecutionResult {
   authStatus?: AuthStatus
   sseEvents?: SseEvent[]
   wsFrames?: WsFrame[]
+  /** One entry per declared assertion, in file order. Arrives on the stream's `done` event. */
+  assertions?: AssertResult[]
+  /** Null when the request declares no assertions — the UI shows no pass/fail chrome at all. */
+  assertSummary?: AssertSummary | null
 }
 
 export type AuthStatusSource = 'cached' | 'expired' | 'static' | 'missing' | 'none'

@@ -3,7 +3,8 @@ import {
   SimpleGrid, Stack, Text, TextInput, UnstyledButton,
 } from '@mantine/core'
 import {
-  IconAlertCircle, IconFolders, IconLock, IconPlus, IconSend, IconUpload, IconWorld,
+  IconAlertCircle, IconArrowsSplit2, IconChecklist, IconFolders, IconLock, IconPlus, IconSend,
+  IconUpload, IconWorld,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -18,7 +19,7 @@ interface Props {
   onCreated: (path: string, kind: WorkspaceFileKind) => void
 }
 
-type CreatableKind = 'request' | 'auth' | 'env' | 'collection'
+type CreatableKind = 'request' | 'auth' | 'env' | 'collection' | 'test' | 'flow'
 
 interface KindOption {
   kind: CreatableKind
@@ -33,6 +34,8 @@ const KIND_OPTIONS: KindOption[] = [
   { kind: 'collection', label: 'Collection', description: 'A group of requests with a baseUrl, stages, default auth/headers, vars', icon: IconFolders, color: 'blue' },
   { kind: 'auth', label: 'Auth profile', description: 'Bearer, basic, OAuth2, AWS sigv4, …', icon: IconLock, color: 'orange' },
   { kind: 'env', label: 'Environment', description: 'Per-environment variables and secret refs', icon: IconWorld, color: 'grape' },
+  { kind: 'test', label: 'Test set', description: 'A group of checks, each running one request or one flow', icon: IconChecklist, color: 'teal' },
+  { kind: 'flow', label: 'Flow', description: 'Requests run in order, passing values from one response to the next', icon: IconArrowsSplit2, color: 'violet' },
 ]
 
 /** Collection sub-mode: from-scratch vs. import a Postman v2.1 export. */
@@ -116,6 +119,8 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
       case 'auth': return `${authDir}/${slug}.auth.md`
       case 'env': return `environments/${slug}.env.md`
       case 'collection': return `collections/${slug}/_collection.md`
+      case 'test': return `tests/${slug}.test.md`
+      case 'flow': return `tests/${slug}.flow.md`
     }
   }, [kind, slug, collectionSlug, subFolder, authDir])
 
@@ -206,6 +211,14 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
           break
         case 'collection':
           await api.saveCollectionSpec({ slug, id: null, name })
+          break
+        // Both start empty — the editor is where the steps/tests get added, and an empty
+        // file is a legal (if unfinished) one.
+        case 'test':
+          await api.saveTestSetSpec({ path: targetPath, id: null, name, tests: [] })
+          break
+        case 'flow':
+          await api.saveFlowSpec({ path: targetPath, id: null, name, steps: [] })
           break
       }
       await reload()

@@ -1,3 +1,4 @@
+using Tap.Workspace.Asserts;
 using Tap.Workspace.Model;
 using Tap.Workspace.Variables;
 
@@ -23,6 +24,11 @@ public sealed record ResolvedRequest
     /// request/response; <c>WebSocket</c> = the executor opens a ws connection at <see cref="Url"/>.</summary>
     public RequestProtocol Protocol { get; init; } = RequestProtocol.Http;
     public RequestTransportSettings Transport { get; init; } = new();
+
+    /// <summary>Assertions to evaluate once the response lands, with their selectors and
+    /// expected values already expanded through the same cascade as the request itself.</summary>
+    public IReadOnlyList<ResolvedAssert> Assertions { get; init; } = [];
+
     public required ResolvedRequestMetadata Metadata { get; init; }
 }
 

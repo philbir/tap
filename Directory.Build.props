@@ -28,7 +28,9 @@
 
   <!-- Pack the shared README + icon into every packable project so PackageReadmeFile
        and PackageIcon resolve. The Condition keeps non-packable projects out. -->
-  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+  <!-- Projects that ship their own README opt out by setting PackageReadmeFile themselves;
+       packing both to the same path is an error. -->
+  <ItemGroup Condition="'$(IsPackable)' == 'true' AND !Exists('$(MSBuildProjectDirectory)/README.md')">
     <None Include="$(MSBuildThisFileDirectory)README.md" Pack="true" PackagePath="\" />
   </ItemGroup>
 </Project>

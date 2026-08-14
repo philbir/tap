@@ -3,6 +3,7 @@ using System.Text.Json;
 using Tap.Studio.Auth;
 using Tap.Studio.Contracts;
 using Tap.Workspace.Model;
+using Tap.Execution.Auth;
 
 namespace Tap.Studio.Endpoints;
 

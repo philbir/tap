@@ -14,6 +14,7 @@
   <ItemGroup>
     <PackageReference Include="Markdig" />
     <PackageReference Include="YamlDotNet" />
+    <PackageReference Include="JsonPath.Net" />
   </ItemGroup>
 
 </Project>

@@ -24,6 +24,21 @@ public static class WorkspaceErrorCode
     public const string E_AUTH_TYPE_INVALID = nameof(E_AUTH_TYPE_INVALID);
     public const string E_HTTP_BLOCK_SYNTAX = nameof(E_HTTP_BLOCK_SYNTAX);
 
+    /// <summary>An entry under <c>assertions:</c> is not a usable (extractor, matcher) pair —
+    /// zero or several extractors, several matchers, an unknown key, or an operator that can
+    /// never apply to the chosen extractor. See §5.5 of <c>docs/workspace-format.md</c>.</summary>
+    public const string E_ASSERT_INVALID = nameof(E_ASSERT_INVALID);
+
+    /// <summary>A flow has no steps, or an entry under <c>steps:</c> is not usable — no
+    /// <c>request:</c>, an extraction with zero or several sources, an unknown key. See §10 of
+    /// <c>docs/workspace-format.md</c>.</summary>
+    public const string E_FLOW_INVALID = nameof(E_FLOW_INVALID);
+
+    /// <summary>A test set has no tests, or an entry under <c>tests:</c> is not usable —
+    /// neither or both of <c>request:</c>/<c>flow:</c>, an unknown key. See §11 of
+    /// <c>docs/workspace-format.md</c>.</summary>
+    public const string E_TEST_INVALID = nameof(E_TEST_INVALID);
+
     /// <summary>The folder walk hit its time / folder-count budget, so the workspace is only
     /// partially loaded. Almost always means the root is far too broad — see
     /// <see cref="Tap.Workspace.WorkspaceLoader.ScanBudget"/>.</summary>

@@ -3,6 +3,7 @@ using Tap.Studio.Postman;
 using Tap.Studio.Specs;
 using Tap.Workspace;
 using Tap.Workspace.Model;
+using Tap.Execution.Workspace;
 
 namespace Tap.Studio.Endpoints;
 
@@ -111,7 +112,7 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
                     "Collection slug must be alphanumeric, dashes, or underscores.", null, null));
 
-            if (!WorkspacePathResolver.TryResolve(svc, $"{CollectionsRoot}/{spec.Slug}",
+            if (!WorkspacePaths.TryResolve(svc.RootDirectory, $"{CollectionsRoot}/{spec.Slug}",
                     out var dirAbs, out var dirErr))
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
             Directory.CreateDirectory(dirAbs);
@@ -146,7 +147,7 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
                     $"Derived slug '{plan.Slug}' is not valid. Pass an explicit slug.", null, null));
 
-            if (!WorkspacePathResolver.TryResolve(svc, $"{CollectionsRoot}/{plan.Slug}",
+            if (!WorkspacePaths.TryResolve(svc.RootDirectory, $"{CollectionsRoot}/{plan.Slug}",
                     out var collectionDirAbs, out var dirErr))
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
 
@@ -200,7 +201,7 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
                     "Collection slug must be alphanumeric, dashes, or underscores.", null, null));
 
-            if (!WorkspacePathResolver.TryResolve(svc, $"{CollectionsRoot}/{slug}",
+            if (!WorkspacePaths.TryResolve(svc.RootDirectory, $"{CollectionsRoot}/{slug}",
                     out var dirAbs, out var dirErr))
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
             if (!Directory.Exists(dirAbs))

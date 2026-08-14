@@ -179,6 +179,11 @@ public sealed record RequestFile : WorkspaceFile
 
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
         new Dictionary<string, VarSpec>();
+
+    /// <summary>Declared expectations about the response, evaluated after every execution.
+    /// Assertions never change what is sent and never fail the exchange — they annotate the
+    /// result. See §5.5 of <c>docs/workspace-format.md</c>.</summary>
+    public IReadOnlyList<AssertSpec> Assertions { get; init; } = [];
 }
 
 /// <summary>Optional HTTP transport controls. A null value means inherit/use the executor default.</summary>

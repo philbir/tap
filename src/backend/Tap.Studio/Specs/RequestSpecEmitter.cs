@@ -41,6 +41,9 @@ public static class RequestSpecEmitter
         }
         fm.SetTransport(spec.Transport);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
+        // Mapped through the model so a client can't save an assertion the parser would
+        // reject — the PUT fails with E_ASSERT_INVALID instead of writing an unloadable file.
+        fm.SetAssertions(AssertSpecMapper.ToModel(spec.Assertions, spec.Path));
         fm.SetStringList("tags", spec.Tags);
 
         var http = BuildHttpBlock(spec);

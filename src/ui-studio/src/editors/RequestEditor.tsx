@@ -3,13 +3,13 @@ import {
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconExternalLink, IconFile, IconFileText, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
+  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileText, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { api, ApiError } from '../api/client'
+import { api, ApiError, type AssertResponseSnapshot } from '../api/client'
 import type {
-  CollectionDetail, CollectionSummary, ExecutionResult, HttpHeaderSpec, RenderedRequest, RequestDetail, RequestProtocol, RequestSpec, SseEvent, TlsDiagnosis, VariableContext, WsFrame,
+  AssertResult, AssertSummary, CollectionDetail, CollectionSummary, ExecutionResult, HttpHeaderSpec, RenderedRequest, RequestDetail, RequestProtocol, RequestSpec, SseEvent, TlsDiagnosis, VariableContext, WsFrame,
 } from '../api/types'
 import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
@@ -20,10 +20,12 @@ import {
   serializeMultipartBody, tryPrettyJson,
   RAW_SUB_LABELS, type BodyMode, type RawSubType,
 } from './body-mode'
+import { AdaptiveTabsList } from './AdaptiveTabsList'
 import { authSelectGroups, relativizeFrom } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
 import { GraphQLEditor } from './GraphQLEditor'
+import { AssertsPanel } from './AssertsPanel'
 import { KvTable, type KvRow } from './KvTable'
 import { MultipartTable } from './MultipartTable'
 import { RawBodyEditor } from './RawBodyEditor'
@@ -69,6 +71,12 @@ export function RequestEditor({ path }: Props) {
   const [diagnosing, setDiagnosing] = useState(false)
   const [varsOpened, varsCtl] = useDisclosure(false)
   const [assistantOpened, assistantCtl] = useDisclosure(false)
+  // Verdicts from re-checking the current assertions against the response already on
+  // screen. Lets someone shape an assertion and watch it flip without re-sending.
+  const [liveAsserts, setLiveAsserts] = useState<{ results: AssertResult[]; summary: AssertSummary } | null>(null)
+  // The assertions the last Send actually evaluated — re-checking those would just
+  // recompute what the server already told us.
+  const sentAssertionsRef = useRef<string>('')
   // Holds the in-flight stream controller so we can abort on Send-again / close.
   const streamCtrlRef = useRef<AbortController | null>(null)
   // Wall-clock start of the current Send — lets stop() fill in an approximate duration
@@ -149,6 +157,37 @@ export function RequestEditor({ path }: Props) {
     stage: effectiveStage ?? undefined,
   }), [path, activeEnv, effectiveStage])
 
+  const assertions = useMemo(() => spec?.assertions ?? [], [spec?.assertions])
+  const assertionsKey = useMemo(() => JSON.stringify(assertions), [assertions])
+
+  // Live re-check. While the Asserts tab is open and a response is on screen, edited
+  // assertions are re-evaluated against that response by the same server-side engine a
+  // Send uses — so the pass/fail you tune against is the one a real run will produce.
+  // Skipped when the assertions still match what the last Send already evaluated.
+  useEffect(() => {
+    if (tab !== 'asserts' || busy || !execution) return
+    if (assertionsKey === sentAssertionsRef.current) { setLiveAsserts(null); return }
+    if (assertions.length === 0) { setLiveAsserts(null); return }
+
+    let cancelled = false
+    const timer = setTimeout(() => {
+      api.evaluateAssertions(assertions, assertSnapshot(execution), {
+        path, env: activeEnv, stage: effectiveStage,
+      })
+        .then((r) => { if (!cancelled) setLiveAsserts({ results: r.results, summary: r.summary }) })
+        // A failed re-check is not worth an error bar — the next keystroke retries, and the
+        // authoritative verdict still arrives on the next Send.
+        .catch(() => { if (!cancelled) setLiveAsserts(null) })
+    }, 300)
+
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [tab, busy, execution, assertions, assertionsKey, path, activeEnv, effectiveStage])
+
+  // Verdicts to paint on the editor rows: the live re-check when it applies, otherwise
+  // whatever the last Send returned.
+  const assertResults = liveAsserts?.results ?? execution?.assertions ?? null
+  const assertSummary = liveAsserts?.summary ?? execution?.assertSummary ?? null
+
   function abortStream() {
     streamCtrlRef.current?.abort()
     streamCtrlRef.current = null
@@ -171,6 +210,8 @@ export function RequestEditor({ path }: Props) {
 
   async function send() {
     abortStream()
+    sentAssertionsRef.current = JSON.stringify(spec?.assertions ?? [])
+    setLiveAsserts(null)
     sendStartRef.current = Date.now()
     setBusy('send'); setActionError(null); setExecution(null); setStopped(false)
 
@@ -233,6 +274,8 @@ export function RequestEditor({ path }: Props) {
           snapshot.responseBodyBytes = ev.payload.responseBodyBytes || snapshot.responseBodyBytes
           snapshot.variablesUsed = ev.payload.variablesUsed
           snapshot.stage = ev.payload.stage
+          snapshot.assertions = ev.payload.assertions
+          snapshot.assertSummary = ev.payload.assertSummary
           if (ev.payload.error) snapshot.error = ev.payload.error
           setExecution({
             ...snapshot,
@@ -414,27 +457,33 @@ export function RequestEditor({ path }: Props) {
       </Group>
 
       <Tabs value={tab} onChange={setTab}>
-        <Tabs.List mb="md">
-          <Tabs.Tab value="params" leftSection={<IconParentheses size={14} />}>
-            Params <TabCount count={queryRows.length} />
-          </Tabs.Tab>
-          <Tabs.Tab value="headers" leftSection={<IconList size={14} />}>
-            Headers <TabCount count={headersOnly.length} />
-          </Tabs.Tab>
-          <Tabs.Tab value="body" leftSection={<IconBraces size={14} />}>Body</Tabs.Tab>
-          <Tabs.Tab value="auth" leftSection={<IconLock size={14} />}>
-            Auth <TabDot active={!!spec.auth && spec.auth !== 'none'} color="orange" />
-          </Tabs.Tab>
-          <Tabs.Tab value="transport" leftSection={<IconShieldCheck size={14} />}>Transport</Tabs.Tab>
-          <Tabs.Tab value="vars" leftSection={<IconVariable size={14} />}>
-            Variables <TabCount count={Object.keys(spec.vars ?? {}).length} />
-          </Tabs.Tab>
-          <Tabs.Tab value="meta" leftSection={<IconFlag size={14} />}>Meta</Tabs.Tab>
-          <Tabs.Tab value="docs" leftSection={<IconFileText size={14} />}>
-            Docs <TabDot active={!!spec.body && spec.body.trim().length > 0} />
-          </Tabs.Tab>
-          <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
-        </Tabs.List>
+        {/* Ordered left-to-right by how often a section is touched: the tail (Meta, Docs,
+            Source) is what AdaptiveTabsList strips down to icons first when space runs out. */}
+        <AdaptiveTabsList
+          mb="md"
+          tabs={[
+            { value: 'params', label: 'Params', icon: <IconParentheses size={14} />, adornment: <TabCount count={queryRows.length} /> },
+            { value: 'headers', label: 'Headers', icon: <IconList size={14} />, adornment: <TabCount count={headersOnly.length} /> },
+            { value: 'body', label: 'Body', icon: <IconBraces size={14} /> },
+            { value: 'auth', label: 'Auth', icon: <IconLock size={14} />, adornment: <TabDot active={!!spec.auth && spec.auth !== 'none'} color="orange" /> },
+            {
+              value: 'asserts',
+              label: 'Asserts',
+              icon: <IconCircleCheck size={14} />,
+              adornment: (
+                <>
+                  <TabCount count={assertions.length} />
+                  <TabDot active={!!assertSummary} color={assertSummary?.failed ? 'red' : 'green'} />
+                </>
+              ),
+            },
+            { value: 'transport', label: 'Transport', icon: <IconShieldCheck size={14} /> },
+            { value: 'vars', label: 'Variables', icon: <IconVariable size={14} />, adornment: <TabCount count={Object.keys(spec.vars ?? {}).length} /> },
+            { value: 'meta', label: 'Meta', icon: <IconFlag size={14} /> },
+            { value: 'docs', label: 'Docs', icon: <IconFileText size={14} />, adornment: <TabDot active={!!spec.body && spec.body.trim().length > 0} /> },
+            { value: 'source', label: 'Source', icon: <IconCode size={14} /> },
+          ]}
+        />
 
         <Tabs.Panel value="params">
           <Box maw={880}>
@@ -517,6 +566,24 @@ export function RequestEditor({ path }: Props) {
               })()}
             </Group>
           </Stack>
+        </Tabs.Panel>
+
+        <Tabs.Panel value="asserts">
+          <AssertsPanel
+            assertions={assertions}
+            onChange={(next) => update('assertions', next.length > 0 ? next : undefined)}
+            results={assertResults}
+            summary={assertSummary}
+            variableContext={variableContext}
+            onOpenVariables={varsCtl.open}
+            hint={
+              execution
+                ? liveAsserts
+                  ? 'Checked against the response below — edit and the verdicts follow.'
+                  : 'Verdicts from the last Send. Edit an assertion to re-check it against that response.'
+                : 'Send the request once, then edit these against the real response.'
+            }
+          />
         </Tabs.Panel>
 
         <Tabs.Panel value="transport">
@@ -972,6 +1039,21 @@ function parseBinaryRef(body: string): { ref: string; relPath: string; name: str
   return { ref: refForDisplay, relPath: rest, name }
 }
 
+/** The 2 MiB capture cap the server applies. Past it the body on screen is a prefix, and
+ *  body assertions refuse to run rather than match one. */
+const BODY_CAP_BYTES = 2 * 1024 * 1024
+
+/** Repackage an on-screen result as the snapshot the re-check endpoint evaluates against. */
+function assertSnapshot(execution: ExecutionResult): AssertResponseSnapshot {
+  return {
+    status: execution.status,
+    headers: Object.entries(execution.responseHeaders ?? {}).map(([name, value]) => ({ name, value })),
+    body: execution.responseBody,
+    bodyTruncated: execution.responseBodyBytes > BODY_CAP_BYTES,
+    durationMs: execution.durationMs,
+  }
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
@@ -1001,6 +1083,7 @@ function specFromDetail(d: RequestDetail, path: string): RequestSpec {
     // Default is `http` — omit from spec so dirty-tracking + emitter stay quiet.
     protocol: d.protocol === 'websocket' ? 'websocket' : undefined,
     transport: d.transport ?? undefined,
+    assertions: d.assertions && d.assertions.length > 0 ? d.assertions : undefined,
   }
 }
 

@@ -106,6 +106,35 @@ public static partial class Interpolation
         return sb.ToString();
     }
 
+    /// <summary>
+    /// The unprefixed <c>{{name}}</c> tokens a template references, without resolving
+    /// anything. Callers that need to reason about a template — "does this pull in a variable
+    /// the workspace marked secret?" — use this rather than re-deriving the token syntax.
+    /// Provider-prefixed tokens are excluded: those resolve through the registry, which
+    /// reports their sensitivity on <see cref="ResolvedRequestMetadata.VariablesUsed"/>.
+    /// </summary>
+    public static IReadOnlyList<string> ReferencedNames(string input)
+    {
+        if (string.IsNullOrEmpty(input) || !input.Contains("{{", StringComparison.Ordinal)) return [];
+
+        List<string> names = [];
+        try
+        {
+            foreach (Match m in TokenRegex().Matches(input))
+            {
+                if (m.Groups["provider"].Success) continue;
+                names.Add(m.Groups["name"].Value.Trim());
+            }
+        }
+        catch (RegexMatchTimeoutException)
+        {
+            // A template this pathological will fail loudly in ExpandAsync a moment later.
+            // Reporting "no names" here only affects a secrecy hint, so don't pre-empt it.
+            return [];
+        }
+        return names;
+    }
+
     /// <summary><c>\{{</c> is the escape for a literal <c>{{</c>.</summary>
     private static string Unescape(string literal) => literal.Replace(@"\{{", "{{");
 }

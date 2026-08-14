@@ -59,6 +59,8 @@ export function DuplicateRequestDialog({ open, onOpenChange, source, onCreated }
         headers: detail.headers && detail.headers.length > 0 ? detail.headers : undefined,
         requestBody: detail.requestBody ?? undefined,
         protocol: detail.protocol === 'websocket' ? 'websocket' : undefined,
+        transport: detail.transport ?? undefined,
+        assertions: detail.assertions && detail.assertions.length > 0 ? detail.assertions : undefined,
       }
       await api.saveRequestSpec(spec)
       await reload()

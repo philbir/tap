@@ -2,6 +2,7 @@ using Tap.Studio.Ai;
 using Tap.Studio.Contracts;
 using Tap.Workspace;
 using Tap.Workspace.Model;
+using Tap.Execution.Variables;
 
 namespace Tap.Studio.Endpoints;
 

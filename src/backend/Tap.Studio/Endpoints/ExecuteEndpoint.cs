@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Text;
 using Tap.Studio.Contracts;
 using Tap.Workspace.Model;
+using Tap.Execution.Asserts;
+using Tap.Execution.Http;
 
 namespace Tap.Studio.Endpoints;
 
@@ -65,6 +67,9 @@ public static class ExecuteEndpoint
                         summary.AppendLine();
                     }
 
+                    var (wsAsserts, wsAssertSummary) = AssertRunner.Run(
+                        rendered, captureStatus, capturedHeaders, summary.ToString(), bytes, swWs.Elapsed.TotalMilliseconds);
+
                     return Results.Ok(new ExecutionResultDto(
                         Status: captureStatus,
                         StatusText: captureStatusText,
@@ -82,7 +87,9 @@ public static class ExecuteEndpoint
                             .ToArray(),
                         Stage: rendered.Metadata.StageName,
                         Error: null,
-                        Protocol: rendered.Protocol.ToWire()));
+                        Protocol: rendered.Protocol.ToWire(),
+                        Assertions: wsAsserts,
+                        AssertSummary: wsAssertSummary));
                 }
 
                 using var req = HttpExecutionHelpers.BuildRequest(rendered);
@@ -114,6 +121,9 @@ public static class ExecuteEndpoint
                 var bodyText = HttpExecutionHelpers.TryDecodeBody(responseBytes, contentType, total);
                 var responseHeaders = HttpExecutionHelpers.FlattenHeaders(resp);
 
+                var (assertions, assertSummary) = AssertRunner.Run(
+                    rendered, (int)resp.StatusCode, responseHeaders, bodyText, total, sw.Elapsed.TotalMilliseconds);
+
                 return Results.Ok(new ExecutionResultDto(
                     Status: (int)resp.StatusCode,
                     StatusText: resp.ReasonPhrase,
@@ -131,7 +141,9 @@ public static class ExecuteEndpoint
                         .ToArray(),
                     Stage: rendered.Metadata.StageName,
                     Error: null,
-                    Protocol: rendered.Protocol.ToWire()));
+                    Protocol: rendered.Protocol.ToWire(),
+                    Assertions: assertions,
+                    AssertSummary: assertSummary));
             }
             catch (WorkspaceParseException ex)
             {
@@ -156,7 +168,9 @@ public static class ExecuteEndpoint
                     VariablesUsed: [],
                     Stage: null,
                     Error: HttpTransport.DescribeException(ex),
-                    Protocol: "http"));
+                    Protocol: "http",
+                    Assertions: [],
+                    AssertSummary: null));
             }
         });
 

@@ -1,3 +1,4 @@
+using Tap.Execution.Variables;
 namespace Tap.Studio.Ai;
 
 /// <summary>

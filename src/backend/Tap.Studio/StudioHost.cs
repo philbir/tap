@@ -8,6 +8,8 @@ using Tap.Studio.Endpoints;
 using Tap.Studio.Variables;
 using Tap.Workspace.Variables;
 using Tap.Workspace.Variables.Providers;
+using Tap.Execution.Variables;
+using Tap.Execution.Auth;
 
 namespace Tap.Studio;
 
@@ -73,6 +75,13 @@ public static class StudioHost
         }
 
         builder.Services.AddSingleton(options);
+        // The settings store moved to Tap.Execution so a headless run reads the same
+        // ~/.tap/system.json the UI edits; it takes its own options rather than the web host's.
+        builder.Services.AddSingleton(new SystemSettingsOptions
+        {
+            SystemDir = options.SystemDir,
+            SystemProviders = options.SystemProviders,
+        });
         builder.Services.AddSingleton<SystemSettingsStore>();
         builder.Services.AddSingleton<Tap.Studio.Ai.AiProviderFactory>();
         builder.Services.AddSingleton<KnownWorkspaceStore>();
@@ -92,6 +101,10 @@ public static class StudioHost
             sp.GetRequiredService<IHttpContextAccessor>(),
             sp.GetRequiredService<ILogger<AuthRunner>>()));
         builder.Services.AddSingleton<AuthFlowStore>();
+        builder.Services.AddSingleton(new AuthTokenStoreOptions
+        {
+            Directory = Path.GetDirectoryName(options.StatePath) ?? Path.GetTempPath(),
+        });
         builder.Services.AddSingleton<AuthTokenStore>();
 
         // Variable provider factories. Each registered factory adds support for one
@@ -170,6 +183,8 @@ public static class StudioHost
         StreamEndpoints.Map(app);
         ExecuteEndpoint.Map(app);
         ExecuteStreamEndpoint.Map(app);
+        AssertEndpoints.Map(app);
+        TestingEndpoints.Map(app);
         FileEndpoints.Map(app);
         FilesystemEndpoints.Map(app);
         GitEndpoints.Map(app);

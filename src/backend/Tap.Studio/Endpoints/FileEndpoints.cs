@@ -1,5 +1,6 @@
 using Tap.Studio.Contracts;
 using Tap.Workspace.Model;
+using Tap.Execution.Workspace;
 
 namespace Tap.Studio.Endpoints;
 
@@ -46,7 +47,7 @@ public static class FileEndpoints
                 ? $"{FilesDirectoryName}/{safeName}"
                 : $"{requestDir}/{FilesDirectoryName}/{safeName}";
 
-            if (!WorkspacePathResolver.TryResolve(svc, relInside, out var fullPath, out var err))
+            if (!WorkspacePaths.TryResolve(svc.RootDirectory, relInside, out var fullPath, out var err))
                 return Results.BadRequest(err);
 
             Directory.CreateDirectory(Path.GetDirectoryName(fullPath)!);

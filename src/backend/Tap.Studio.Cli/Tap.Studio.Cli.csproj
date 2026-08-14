@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Tap.Studio.Cli</RootNamespace>
+    <AssemblyName>tap-studio</AssemblyName>
+
+    <!-- .NET tool packaging. Deliberately a different package and command from the `tap`
+         tunnel/inspector CLI: different product, and both should be installable together. -->
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>tap-studio</ToolCommandName>
+    <IsPackable>true</IsPackable>
+    <PackageId>Tap.Studio.Cli</PackageId>
+    <Title>Tap Studio CLI</Title>
+    <Description>Run Tap workspace requests, flows, and test sets from a terminal or from CI. Install as a global .NET tool: `dotnet tool install -g Tap.Studio.Cli`, then `tap-studio test &lt;name&gt;`. Reports to the console, JUnit, TRX, or JSON, and exits non-zero when a test fails.</Description>
+    <PackageTags>tap;http-client;api-testing;ci;dotnet-tool;junit</PackageTags>
+    <!-- Overrides the shared root README from Directory.Build.props: someone landing on this
+         package's NuGet page wants the tool's usage, not the repo's overview. -->
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The engine, and nothing that serves a UI. No Kestrel, no React bundle, no Git —
+         this has to be cheap enough to install on every CI runner. -->
+    <ProjectReference Include="..\Tap.Execution\Tap.Execution.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Spectre.Console" />
+    <PackageReference Include="Spectre.Console.Cli" />
+  </ItemGroup>
+
+</Project>

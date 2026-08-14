@@ -4,12 +4,12 @@ import {
 import { useClipboard } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
-  IconAlertCircle, IconArrowDown, IconArrowRight, IconArrowUp, IconBolt, IconCheck, IconCopy, IconDots, IconDownload, IconExternalLink,
+  IconAlertCircle, IconArrowDown, IconArrowRight, IconArrowUp, IconBolt, IconCheck, IconCircleCheck, IconCircleCheckFilled, IconCircleMinus, IconCircleXFilled, IconCopy, IconDots, IconDownload, IconExternalLink,
   IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSend, IconTrash, IconX,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { AuthExecuteResponse, AuthStatus, AuthSummary, ExecutionResult, RenderedRequest, SseEvent, WsFrame } from '../api/types'
+import type { AssertResult, AssertSummary, AuthExecuteResponse, AuthStatus, AuthSummary, ExecutionResult, RenderedRequest, SseEvent, WsFrame } from '../api/types'
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useActiveEnv, useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
@@ -92,14 +92,18 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
 
   // Which tabs actually exist for the current response. `body` is HTTP-only; `events` /
   // `frames` / `cookies` are conditional. The rest are always present.
+  const assertResults = execution?.assertions ?? []
+  const assertSummary = execution?.assertSummary ?? null
+
   const availableTabs = useMemo(() => {
     const set = new Set(['headers', 'request', 'flow', 'secrets'])
     if (!isWs) set.add('body')
     if (hasSse) set.add('events')
     if (isWs) set.add('frames')
     if (cookies.length > 0) set.add('cookies')
+    if (assertResults.length > 0) set.add('asserts')
     return set
-  }, [isWs, hasSse, cookies.length])
+  }, [isWs, hasSse, cookies.length, assertResults.length])
 
   // Guard against a stale selection: switching from an SSE/WS result to a plain one (or
   // vice-versa) can leave `tab` pointing at a tab that no longer renders, blanking the
@@ -175,6 +179,18 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
               Cookies <Text component="span" c="dimmed" ml={6}>{cookies.length}</Text>
             </Tabs.Tab>
           )}
+          {assertResults.length > 0 && (
+            <Tabs.Tab value="asserts" py={6} leftSection={<IconCircleCheck size={12} />}>
+              Asserts
+              {assertSummary && (
+                <Text component="span" ml={6} c={assertSummary.failed > 0 ? 'red' : 'green'}>
+                  {assertSummary.failed > 0
+                    ? `${assertSummary.failed} failed`
+                    : `${assertSummary.passed}/${assertSummary.passed + assertSummary.failed}`}
+                </Text>
+              )}
+            </Tabs.Tab>
+          )}
           <Tabs.Tab value="request" py={6}>Request</Tabs.Tab>
           <Tabs.Tab value="flow" py={6}>Flow</Tabs.Tab>
           <Tabs.Tab value="secrets" py={6}>
@@ -225,6 +241,11 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
         <Tabs.Panel value="headers" h="100%">
           <HeaderTable headers={execution?.responseHeaders ?? {}} />
         </Tabs.Panel>
+        {assertResults.length > 0 && (
+          <Tabs.Panel value="asserts" h="100%">
+            <AssertResultsView results={assertResults} summary={assertSummary} />
+          </Tabs.Panel>
+        )}
         <Tabs.Panel value="request" h="100%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <RequestView rendered={rendered} execution={execution} />
         </Tabs.Panel>
@@ -744,6 +765,84 @@ function oneLinePreview(s: string): string {
 function guessEventLanguage(data: string): 'json' | 'text' {
   const trimmed = data.trimStart()
   return (trimmed.startsWith('{') || trimmed.startsWith('[')) ? 'json' : 'text'
+}
+
+// ---- Assertion results ---------------------------------------------------------------
+
+/**
+ * The verdict list for a run. Passing rows stay quiet — a name and a tick — because the
+ * only thing worth reading on a green run is that it was green. Failing rows spell out
+ * what was expected, what actually arrived, and the reason when there is one beyond a
+ * plain mismatch (a body that wasn't JSON, an expression that matched three nodes).
+ */
+function AssertResultsView({ results, summary }: { results: AssertResult[]; summary: AssertSummary | null }) {
+  if (results.length === 0) {
+    return <Center h="100%"><Text size="sm" c="dimmed">This request declares no assertions.</Text></Center>
+  }
+
+  return (
+    <ScrollArea h="100%">
+      <Box p="md">
+        {summary && (
+          <Group gap="xs" mb="sm" align="center">
+            <Badge
+              variant="light"
+              color={summary.failed > 0 ? 'red' : summary.passed > 0 ? 'green' : 'gray'}
+            >
+              {summary.failed > 0 ? `${summary.failed} failed` : 'all passed'}
+            </Badge>
+            <Text size="xs" c="dimmed">
+              {summary.passed} passed
+              {summary.failed > 0 && ` · ${summary.failed} failed`}
+              {summary.skipped > 0 && ` · ${summary.skipped} skipped`}
+            </Text>
+          </Group>
+        )}
+
+        <Stack gap={6}>
+          {results.map((result) => (
+            <Paper key={result.index} withBorder p="xs" radius="sm">
+              <Group gap="xs" align="flex-start" wrap="nowrap">
+                <Box mt={2} style={{ display: 'flex', flexShrink: 0 }}>
+                  {result.skipped
+                    ? <Text c="dimmed" component="span" style={{ display: 'flex' }}><IconCircleMinus size={16} /></Text>
+                    : result.ok
+                      ? <Text c="green" component="span" style={{ display: 'flex' }}><IconCircleCheckFilled size={16} /></Text>
+                      : <Text c="red" component="span" style={{ display: 'flex' }}><IconCircleXFilled size={16} /></Text>}
+                </Box>
+
+                <Box style={{ minWidth: 0, flex: 1 }}>
+                  <Text size="sm" ff="var(--mono)" style={{ wordBreak: 'break-word' }}>
+                    {result.name}
+                  </Text>
+
+                  {!result.ok && !result.skipped && (
+                    <Stack gap={2} mt={4}>
+                      {result.expected !== null && (
+                        <Text size="xs" c="dimmed">
+                          expected <Code>{result.expected}</Code>
+                        </Text>
+                      )}
+                      <Text size="xs" c="dimmed">
+                        got {result.actual === null
+                          ? <Text component="span" fs="italic">nothing</Text>
+                          : <Code>{result.actual}</Code>}
+                      </Text>
+                      {result.message && <Text size="xs" c="red">{result.message}</Text>}
+                    </Stack>
+                  )}
+
+                  {result.skipped && result.message && (
+                    <Text size="xs" c="dimmed" mt={2}>{result.message}</Text>
+                  )}
+                </Box>
+              </Group>
+            </Paper>
+          ))}
+        </Stack>
+      </Box>
+    </ScrollArea>
+  )
 }
 
 // ---- Headers table -------------------------------------------------------------------

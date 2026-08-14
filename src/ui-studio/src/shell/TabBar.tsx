@@ -1,6 +1,8 @@
 import { ActionIcon, Box, Group, Menu, ScrollArea, Text, UnstyledButton } from '@mantine/core'
 import {
+  IconArrowsSplit2,
   IconBrandGit,
+  IconChecklist,
   IconDotsVertical,
   IconFolder, IconFolders, IconLayoutDashboard, IconLock, IconSend, IconSettings, IconWorld, IconX,
   type Icon as TablerIcon,
@@ -17,6 +19,8 @@ const KIND_ICON: Record<WorkspaceFileKind, TablerIcon> = {
   auth: IconLock,
   env: IconWorld,
   collection: IconFolders,
+  flow: IconArrowsSplit2,
+  test: IconChecklist,
   folder: IconFolder,
   settings: IconSettings,
   'git-diff': IconBrandGit,
@@ -26,6 +30,8 @@ const KIND_COLOR: Partial<Record<WorkspaceFileKind, string>> = {
   collection: 'var(--mantine-color-blue-6)',
   auth: 'var(--mantine-color-orange-6)',
   env: 'var(--mantine-color-grape-6)',
+  flow: 'var(--mantine-color-violet-6)',
+  test: 'var(--mantine-color-teal-6)',
   settings: 'var(--mantine-color-gray-6)',
 }
 

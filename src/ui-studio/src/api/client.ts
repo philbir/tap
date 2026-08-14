@@ -1,4 +1,7 @@
 import type {
+  AssertResult,
+  AssertSpec,
+  AssertSummary,
   AuthDetail,
   AuthExecuteResponse,
   AuthSpec,
@@ -14,6 +17,9 @@ import type {
   EnvSummary,
   ExecutionResult,
   FileUploadResponse,
+  FlowDetail,
+  FlowSpec,
+  FlowSummary,
   GitInfo,
   GitBranch,
   GitCommandResult,
@@ -30,6 +36,13 @@ import type {
   RequestSpec,
   RequestSummary,
   TaggedItem,
+  TestEntryResult,
+  TestRunResult,
+  TestRunStart,
+  TestRunStepEvent,
+  TestSetDetail,
+  TestSetSpec,
+  TestSetSummary,
   TlsDiagnosis,
   VariableTrace,
   AzureKeyVault,
@@ -180,6 +193,24 @@ export const api = {
   request: (path: string) => get<RequestDetail>(`/api/requests/${encodePath(path)}`),
   saveRequestSpec: (spec: RequestSpec) => put('/api/requests/spec', spec),
 
+  /** Re-check assertions against a response the client already holds, without sending the
+   *  request again. Backs the Asserts tab's live pass/fail while you edit: the verdicts are
+   *  computed by the same server-side evaluator a real Send uses, so tuning against them is
+   *  tuning against the truth. `context` supplies the scope that `{{var}}` expected values
+   *  resolve through. Individual malformed assertions come back as failed rows rather than
+   *  failing the whole call. */
+  evaluateAssertions: (
+    assertions: AssertSpec[],
+    response: AssertResponseSnapshot,
+    context: { path?: string; env?: string | null; stage?: string | null },
+  ) => post<EvaluateAssertsResponse>('/api/assertions/evaluate', {
+    assertions,
+    response,
+    path: context.path,
+    env: context.env ?? undefined,
+    stage: context.stage ?? undefined,
+  }),
+
   /** Upload a binary payload to the workspace's sideband store. The server writes it
    *  under <c>.files/</c> next to the owning request and returns the ref string
    *  (e.g. <c>&lt; ./.files/foo.png</c>) that the editor embeds in the request body.
@@ -266,6 +297,37 @@ export const api = {
   ): AbortController {
     const ctrl = new AbortController()
     void runExecuteStream(path, env, stage, overrides, handler, ctrl.signal, spec)
+    return ctrl
+  },
+
+  // --- Testing ------------------------------------------------------------------------
+
+  flows: () => get<FlowSummary[]>('/api/flows'),
+  flow: (path: string) => get<FlowDetail>(`/api/flows/${encodePath(path)}`),
+  saveFlowSpec: (spec: FlowSpec) => put('/api/flows/spec', spec),
+
+  testSets: () => get<TestSetSummary[]>('/api/test-sets'),
+  testSet: (path: string) => get<TestSetDetail>(`/api/test-sets/${encodePath(path)}`),
+  saveTestSetSpec: (spec: TestSetSpec) => put('/api/test-sets/spec', spec),
+
+  /**
+   * Run a test set or a flow — `path` points at either kind and the server decides from the
+   * file. Streams a `start` (the plan), a `step` per request, an `entry` per test, then
+   * `done`; a ten-entry set against a real API takes real time and the caller wants to paint
+   * each row as it lands rather than after the last one.
+   *
+   * `only` narrows the run to a single entry by index, for re-running one failing test.
+   * Returns an `AbortController` so the caller can stop a run in flight.
+   */
+  runTests(
+    path: string,
+    env: string | null,
+    stage: string | null,
+    handler: (event: TestRunEvent) => void,
+    options?: { only?: number | null; overrides?: Record<string, string> },
+  ): AbortController {
+    const ctrl = new AbortController()
+    void runTestStream(path, env, stage, options, handler, ctrl.signal)
     return ctrl
   },
 
@@ -496,12 +558,33 @@ export interface StreamDone {
   variablesUsed: VariableTrace[]
   stage: string | null
   error: string | null
+  /** Assertion verdicts, evaluated server-side once the body is complete. */
+  assertions: AssertResult[]
+  assertSummary: AssertSummary | null
 }
 
-/** Parses chunked text from a fetch ReadableStream into discrete SSE frames and
- *  invokes `handler` for each one. Frames are separated by `\n\n`; field syntax is
- *  `event: name` / `data: payload`. We accumulate `data:` lines and JSON-decode the
- *  combined payload on the trailing blank line. */
+/** The captured response an {@link api.evaluateAssertions} call is checked against. */
+export interface AssertResponseSnapshot {
+  status: number
+  headers: { name: string; value: string }[]
+  body: string | null
+  bodyTruncated: boolean
+  durationMs: number
+}
+
+export interface EvaluateAssertsResponse {
+  results: AssertResult[]
+  summary: AssertSummary
+}
+
+/** Tagged union of events emitted by `/api/tests/run`. */
+export type TestRunEvent =
+  | { kind: 'start'; payload: TestRunStart }
+  | { kind: 'step'; payload: TestRunStepEvent }
+  | { kind: 'entry'; payload: TestEntryResult }
+  | { kind: 'done'; payload: TestRunResult }
+  | { kind: 'error'; payload: { message: string } }
+
 async function runExecuteStream(
   path: string,
   env: string | null,
@@ -511,17 +594,77 @@ async function runExecuteStream(
   signal: AbortSignal,
   spec?: RequestSpec,
 ): Promise<void> {
+  await postSse(
+    '/api/execute/stream',
+    { path, env, stage, overrides, spec },
+    signal,
+    (name, payload) => {
+      switch (name) {
+        case 'meta':  handler({ kind: 'meta',  payload: payload as StreamMeta }); break
+        case 'body':  handler({ kind: 'body',  payload: payload as StreamBody }); break
+        case 'sse':   handler({ kind: 'sse',   payload: payload as SseEvent }); break
+        case 'ws':    handler({ kind: 'ws',    payload: payload as WsFrame }); break
+        case 'done':  handler({ kind: 'done',  payload: payload as StreamDone }); break
+        case 'error': handler({ kind: 'error', payload: payload as { message: string } }); break
+      }
+    },
+    (message) => handler({ kind: 'error', payload: { message } }),
+  )
+}
+
+async function runTestStream(
+  path: string,
+  env: string | null,
+  stage: string | null,
+  options: { only?: number | null; overrides?: Record<string, string> } | undefined,
+  handler: (event: TestRunEvent) => void,
+  signal: AbortSignal,
+): Promise<void> {
+  await postSse(
+    '/api/tests/run',
+    { path, env, stage, only: options?.only ?? null, overrides: options?.overrides },
+    signal,
+    (name, payload) => {
+      switch (name) {
+        case 'start': handler({ kind: 'start', payload: payload as TestRunStart }); break
+        case 'step':  handler({ kind: 'step',  payload: payload as TestRunStepEvent }); break
+        case 'entry': handler({ kind: 'entry', payload: payload as TestEntryResult }); break
+        case 'done':  handler({ kind: 'done',  payload: payload as TestRunResult }); break
+        case 'error': handler({ kind: 'error', payload: payload as { message: string } }); break
+      }
+    },
+    (message) => handler({ kind: 'error', payload: { message } }),
+  )
+}
+
+/**
+ * POSTs `body` and parses the `text/event-stream` response into discrete frames, invoking
+ * `onFrame(eventName, decodedJson)` for each. Frames are separated by a blank line; field
+ * syntax is `event: name` / `data: payload`, and `data:` lines accumulate until the blank
+ * line closes the frame.
+ *
+ * Shared by every streaming endpoint the Studio talks to — the framing is identical, only
+ * the event vocabulary differs, and two copies of a hand-rolled SSE parser is one too many.
+ */
+async function postSse(
+  url: string,
+  body: unknown,
+  signal: AbortSignal,
+  onFrame: (event: string, payload: unknown) => void,
+  onError: (message: string) => void,
+): Promise<void> {
   try {
-    const resp = await fetch('/api/execute/stream', {
+    const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
-      body: JSON.stringify({ path, env, stage, overrides, spec }),
+      body: JSON.stringify(body),
       signal,
     })
     if (!resp.ok || !resp.body) {
-      handler({ kind: 'error', payload: { message: `${resp.status} ${resp.statusText}` } })
+      onError(`${resp.status} ${resp.statusText}`)
       return
     }
+
     const reader = resp.body.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -538,28 +681,19 @@ async function runExecuteStream(
       const ev = currentEvent
       currentEvent = 'message'
       try {
-        const parsed = JSON.parse(data)
-        switch (ev) {
-          case 'meta':  handler({ kind: 'meta',  payload: parsed as StreamMeta  }); break
-          case 'body':  handler({ kind: 'body',  payload: parsed as StreamBody  }); break
-          case 'sse':   handler({ kind: 'sse',   payload: parsed as SseEvent    }); break
-          case 'ws':    handler({ kind: 'ws',    payload: parsed as WsFrame     }); break
-          case 'done':  handler({ kind: 'done',  payload: parsed as StreamDone  }); break
-          case 'error': handler({ kind: 'error', payload: parsed as { message: string } }); break
-        }
+        onFrame(ev, JSON.parse(data))
       } catch (e) {
         // A malformed frame shouldn't kill the stream — log and keep going.
-        console.warn('[execute/stream] failed to parse frame', ev, data, e)
+        console.warn(`[${url}] failed to parse frame`, ev, data, e)
       }
     }
 
-    // eslint-disable-next-line no-constant-condition
-    while (true) {
+    for (;;) {
       const { value, done } = await reader.read()
       if (done) { flush(); break }
       buffer += decoder.decode(value, { stream: true })
 
-      // Process complete lines; keep the trailing partial line for next iteration.
+      // Process complete lines; keep the trailing partial line for the next chunk.
       let newlineIdx: number
       while ((newlineIdx = buffer.indexOf('\n')) !== -1) {
         const line = buffer.slice(0, newlineIdx).replace(/\r$/, '')
@@ -575,6 +709,6 @@ async function runExecuteStream(
     }
   } catch (e) {
     if (signal.aborted) return
-    handler({ kind: 'error', payload: { message: e instanceof Error ? e.message : String(e) } })
+    onError(e instanceof Error ? e.message : String(e))
   }
 }

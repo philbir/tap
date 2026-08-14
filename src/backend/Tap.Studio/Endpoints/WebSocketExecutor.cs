@@ -4,6 +4,7 @@ using System.Net.WebSockets;
 using System.Text;
 using Tap.Studio.Contracts;
 using Tap.Workspace.Rendering;
+using Tap.Execution.Http;
 
 namespace Tap.Studio.Endpoints;
 

@@ -8,10 +8,12 @@ import { AuthEditor } from './editors/AuthEditor'
 import { CollectionEditor } from './editors/CollectionEditor'
 import { CreateNewDialog } from './editors/CreateNewDialog'
 import { EnvEditor } from './editors/EnvEditor'
+import { FlowEditor } from './editors/FlowEditor'
 import { GitDiffEditor } from './editors/GitDiffEditor'
 import shellStyles from './editors/EditorShell.module.css'
 import { RequestEditor } from './editors/RequestEditor'
 import { SettingsEditor } from './editors/SettingsEditor'
+import { TestSetEditor } from './editors/TestSetEditor'
 import { WorkspaceEditor } from './editors/WorkspaceEditor'
 import { collectionDirOf } from './shell/explorerTree'
 import { Header } from './shell/Header'
@@ -64,7 +66,7 @@ export function App() {
   }, [openTab])
 
   const openByPathKind = useCallback((path: string, kind: WorkspaceFileKind) => {
-    const label = path.split('/').pop()?.replace(/\.(req|auth|env)\.md$/, '') ?? path
+    const label = path.split('/').pop()?.replace(/\.(req|auth|env|test|flow)\.md$/, '') ?? path
     openTab({ path, kind, label })
   }, [openTab])
 
@@ -139,6 +141,8 @@ export function App() {
                 {active?.kind === 'auth' && <AuthEditor key={active.path} path={active.path} />}
                 {active?.kind === 'env' && <EnvEditor key={active.path} path={active.path} />}
                 {active?.kind === 'collection' && <CollectionEditor key={active.path} path={active.path} />}
+                {active?.kind === 'test' && <TestSetEditor key={active.path} path={active.path} />}
+                {active?.kind === 'flow' && <FlowEditor key={active.path} path={active.path} />}
                 {active?.kind === 'settings' && <SettingsEditor />}
                 {active?.kind === 'git-diff' && <GitDiffEditor key={active.path} path={active.path} />}
               </Box>

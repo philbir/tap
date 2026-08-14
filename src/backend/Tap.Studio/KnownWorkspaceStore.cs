@@ -3,6 +3,7 @@ using System.Text.Json.Serialization;
 using Tap.Studio.Contracts;
 using Tap.Studio.Specs;
 using Tap.Workspace;
+using Tap.Execution.IO;
 
 namespace Tap.Studio;
 

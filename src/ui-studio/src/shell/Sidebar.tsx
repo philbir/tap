@@ -5,8 +5,8 @@ import {
 import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
 import {
-  IconAlertCircle, IconBrandGit, IconCopy, IconEdit, IconFilePlus, IconFolderPlus, IconFolderShare,
-  IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
+  IconAlertCircle, IconBrandGit, IconChecklist, IconCopy, IconEdit, IconFilePlus, IconFolderPlus,
+  IconFolderShare, IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -21,13 +21,15 @@ import { GitView } from './GitView'
 import { NewFolderDialog } from './NewFolderDialog'
 import { PierreFileTree } from './PierreFileTree'
 import { TagsView } from './TagsView'
+import { TestingView } from './TestingView'
 import { makeTapTreeIcons, TAP_ICONS, TAP_TREE_UNSAFE_CSS } from './treeIcons'
 
-type Filter = 'requests' | 'auth' | 'tags' | 'fs' | 'git'
+type Filter = 'requests' | 'auth' | 'testing' | 'tags' | 'fs' | 'git'
 
 const BASE_FILTER_TABS: { value: Filter; label: string; icon: TablerIcon }[] = [
   { value: 'requests', label: 'Requests', icon: IconSend },
   { value: 'auth', label: 'Auth', icon: IconLock },
+  { value: 'testing', label: 'Testing', icon: IconChecklist },
   { value: 'tags', label: 'Tags', icon: IconTag },
   { value: 'fs', label: 'Filesystem', icon: IconFolderShare },
 ]
@@ -399,6 +401,14 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
               onActivateFile={authActivate}
               onContextMenuRequest={authContextMenu}
             />
+      )}
+
+      {filter === 'testing' && (
+        <TestingView
+          search={search}
+          activePath={activePath}
+          onOpen={(path, kind, name) => openTab({ path, kind, label: name })}
+        />
       )}
 
       {filter === 'fs' && (

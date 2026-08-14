@@ -12,7 +12,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - SDK is pinned in `global.json` to .NET 10 (`10.0.201`). Targets `net10.0` everywhere.
 - `TreatWarningsAsErrors` is enabled globally (`Directory.Build.props`) — warnings break the build.
 - Solution file is `Tap.slnx` (modern XML format). Use `dotnet restore Tap.slnx` only for an explicit restore; do not use `dotnet build` to run or debug the application.
-- Only when no AppHost is already running, start the app with `aspire start --non-interactive --apphost <apphost.csproj>`. There is no test project yet.
+- Only when no AppHost is already running, start the app with `aspire start --non-interactive --apphost <apphost.csproj>`.
+- Tests live in `src/backend/Tap.Tests` (xunit v3). Run them with `dotnet test src/backend/Tap.Tests/Tap.Tests.csproj -p:SkipStudioUiBuild=true` (the skip flag avoids a full Vite build on every run). They cover the workspace parser/emitter round-trips (requests, assertions, flows, test sets), the assertion evaluator, and the response-value extractor — all pure functions, no AppHost needed.
+- The `tap-studio` CLI lives in `src/backend/Tap.Studio.Cli` and ships as the `Tap.Studio.Cli` dotnet tool. Run it from source with `dotnet run --project src/backend/Tap.Studio.Cli -- test <name> --workspace samples/sample-workspace`; pack it with `dotnet pack src/backend/Tap.Studio.Cli -c Release`. It never needs the AppHost — it talks to the upstream directly, not to `studio-api`.
 - After a backend change, use `aspire resource <resource-name> rebuild --apphost <apphost.csproj> --non-interactive`; this rebuilds and restarts the resource.
 - `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire start --non-interactive` from inside `samples/` selects it automatically.
 - `cloudflared` must be on PATH at AppHost start time (`brew install cloudflared` / `winget install Cloudflare.cloudflared`). The lifecycle hook shells out and fails fast if it's missing.
@@ -37,7 +39,33 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
-Tap is two NuGet-style packages plus a sample, glued together by Aspire:
+Two product families share one repo. **Inspector** (`Tap.Hosting` + `Tap.Server` + the `Tap`
+CLI) watches traffic arriving at your machine; **Studio** (`Tap.Workspace` + `Tap.Execution` +
+`Tap.Studio` + the `Tap.Studio.Cli` tool) is where you author and send it. They share nothing
+at runtime.
+
+### Studio layering — the rule that matters
+
+```
+Tap.Workspace    parse · render · assert · extract     ← pure, no I/O beyond the loader
+     ▲
+Tap.Execution    send · auth · run flows & test sets   ← no ASP.NET Core, no Git, no UI
+     ▲                        ▲
+Tap.Studio              Tap.Studio.Cli
+  REST + SSE + React UI    `tap-studio` dotnet tool (CI)
+```
+
+`Tap.Execution` is the engine **both** front ends run on, so a verdict from CI and a verdict
+from the UI are the same computation. Two consequences to respect when editing:
+
+- **Nothing may flow downhill.** The engine must not reference `Tap.Studio` — if a piece of
+  execution logic needs something from the host, it goes behind `IWorkspaceHost` /
+  `IAuthTokenSource` (`Tap.Execution/Workspace/`). `WorkspaceService` implements the former.
+- **`Tap.Execution/Contracts/` is a shared public API.** The Studio serializes those records
+  straight onto its SSE stream and the CLI renders them to JUnit; changing one is a breaking
+  change to both. Studio-only wire shapes stay in `Tap.Studio/Contracts/Dtos.cs`.
+
+The rest of the repo:
 
 - **`Tap.Hosting`** (library, namespace `Aspire.Hosting`) — extension methods consumers call from their own AppHost. Primary surface: `AddTap<T>`, `AddTapContainer`, `WithTap`, `tap.WithTunnel(name, configure)`, `tap.WithQuickTunnel`, `tap.WithTailscaleFunnel`, `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon`/`WithEphemeralDaemon`/`WithFunnelPort` (Tailscale). Low-level escape hatches still public: `AddCloudflaredTunnel`, `AddTailscaleFunnel`, `WithCloudflareTunnel`, `WithTailscaleFunnel(target, tunnel)`. No runtime; pure AppHost wiring.
 - **Tunnel abstraction** lives in `src/backend/Tap.Hosting/Tunnels/` (`TapTunnelResource` base, `TapTunnelAnnotation`, `TapTunnelIngress`). `CloudflaredTunnelResource` (multi-host) and `TailscaleFunnelResource` (single endpoint) both inherit `TapTunnelResource`. `TapHandle.AttachedTunnel` is the base type; `WithTap<T>` dispatches to provider-specific attach via `is`-check on the runtime type.

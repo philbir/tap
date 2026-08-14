@@ -49,6 +49,8 @@ public static class FileParser
             WorkspaceKind.Env => ParseEnv(common, split.Frontmatter),
             WorkspaceKind.Collection => ParseCollection(common, split.Frontmatter, split.Body, relativePath),
             WorkspaceKind.Workspace => ParseWorkspace(common, split.Frontmatter),
+            WorkspaceKind.Flow => ParseFlow(common, split.Frontmatter, split.Body, relativePath),
+            WorkspaceKind.Test => ParseTestSet(common, split.Frontmatter, split.Body, relativePath),
             _ => throw new InvalidOperationException(),
         };
     }
@@ -91,6 +93,7 @@ public static class FileParser
             HttpBlock = block.Content,
             HttpBlockStartLine = block.StartLine,
             Vars = fm.VarSpecMap("vars"),
+            Assertions = AssertParser.Parse(fm, relativePath),
         };
     }
 
@@ -219,6 +222,37 @@ public static class FileParser
             Vars = fm.VarSpecMap("vars"),
             Stages = stages,
             DefaultStage = defaultStage,
+        };
+    }
+
+    private static FlowFile ParseFlow(Common c, YamlMappingNode fm, string body, string relativePath)
+    {
+        return new FlowFile
+        {
+            Kind = c.Kind,
+            RelativePath = c.RelativePath,
+            Id = c.Id,
+            Name = c.Name,
+            Tags = c.Tags,
+            Body = body,
+            Vars = fm.VarSpecMap("vars"),
+            Steps = FlowParser.ParseSteps(fm, relativePath),
+        };
+    }
+
+    private static TestSetFile ParseTestSet(Common c, YamlMappingNode fm, string body, string relativePath)
+    {
+        return new TestSetFile
+        {
+            Kind = c.Kind,
+            RelativePath = c.RelativePath,
+            Id = c.Id,
+            Name = c.Name,
+            Tags = c.Tags,
+            Body = body,
+            Vars = fm.VarSpecMap("vars"),
+            OnFailure = TestSetParser.ParseOnFailure(fm, relativePath),
+            Tests = TestSetParser.ParseTests(fm, relativePath),
         };
     }
 

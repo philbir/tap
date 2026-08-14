@@ -23,6 +23,10 @@ public static class KindResolver
             return WorkspaceKind.Auth;
         if (fileName.EndsWith(".env.md", StringComparison.OrdinalIgnoreCase))
             return WorkspaceKind.Env;
+        if (fileName.EndsWith(".flow.md", StringComparison.OrdinalIgnoreCase))
+            return WorkspaceKind.Flow;
+        if (fileName.EndsWith(".test.md", StringComparison.OrdinalIgnoreCase))
+            return WorkspaceKind.Test;
 
         return null;
     }
@@ -34,6 +38,8 @@ public static class KindResolver
         WorkspaceKind.Env => "env",
         WorkspaceKind.Collection => "collection",
         WorkspaceKind.Workspace => "workspace",
+        WorkspaceKind.Flow => "flow",
+        WorkspaceKind.Test => "test",
         _ => throw new ArgumentOutOfRangeException(nameof(kind)),
     };
 
@@ -44,6 +50,8 @@ public static class KindResolver
         "env" => WorkspaceKind.Env,
         "collection" => WorkspaceKind.Collection,
         "workspace" => WorkspaceKind.Workspace,
+        "flow" => WorkspaceKind.Flow,
+        "test" => WorkspaceKind.Test,
         _ => null,
     };
 }

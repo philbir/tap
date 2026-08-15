@@ -6,6 +6,7 @@ import {
   IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileText, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
+import { notifications } from '@mantine/notifications'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, type AssertResponseSnapshot } from '../api/client'
 import type {
@@ -106,6 +107,17 @@ export function RequestEditor({ path }: Props) {
     setSaving(true); setError(null)
     try {
       await api.saveRequestSpec(spec)
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e))
+      setSaving(false)
+      return
+    }
+
+    // The spec is on disk from here on. Renaming the file that holds it is a separate,
+    // best-effort step — a collision on the target name must not leave the editor looking
+    // unsaved, so it reports through a notification instead of the save error bar.
+    const label = spec.name || basename(spec.path)
+    try {
       // When the request was renamed, keep the on-disk filename in step with the new
       // name (the explorer shows the spec name, so a stale filename would only surface
       // in git / the filesystem view). Falls back to a no-op when the slug is unchanged
@@ -113,15 +125,26 @@ export function RequestEditor({ path }: Props) {
       const renamedPath = await syncFilenameToName(spec, savedSpec)
       if (renamedPath && renamedPath !== spec.path) {
         const moved = { ...spec, path: renamedPath }
-        renameTab(spec.path, renamedPath, spec.name || basename(renamedPath))
+        // Rename before the reload: the tab (and the editor keyed off it) has to follow the
+        // file to its new path in the same commit the explorer learns about the move, or the
+        // editor refetches a path that no longer exists.
+        renameTab(spec.path, renamedPath, label)
         setSpec(moved); setSavedSpec(moved)
         await reload()
       } else {
+        // Same file, possibly a new name — the tab still carries the old label.
+        renameTab(spec.path, spec.path, label)
         setSavedSpec(spec)
       }
-    }
-    catch (e) { setError(e instanceof ApiError ? e.message : String(e)) }
-    finally { setSaving(false) }
+    } catch (e) {
+      renameTab(spec.path, spec.path, label)
+      setSavedSpec(spec)
+      notifications.show({
+        color: 'yellow',
+        title: 'Saved, but the file kept its name',
+        message: e instanceof ApiError ? e.message : String(e),
+      })
+    } finally { setSaving(false) }
   }
 
   /** If the request's name changed this session, rename the underlying `*.req.md` file to
@@ -713,9 +736,17 @@ function CollectionLinkChip({ summary, stage, onStageChange, variableContext, on
   }, [detail, stage, summary.baseUrl])
   const display = useMemo(() => resolveTokens(baseTemplate, vars), [baseTemplate, vars])
   const hasUnresolved = /\{\{[^}]+\}\}/.test(display)
-  const tooltip = baseTemplate === display
-    ? summary.name
-    : `${summary.name} — template: ${baseTemplate}`
+  // The chip is width-capped so a long base URL can't crowd out the path input, so the
+  // tooltip carries the full URL (and the raw template when tokens were substituted).
+  const tooltip = (
+    <Stack gap={2}>
+      <Text size="xs">Open collection · {summary.name}</Text>
+      <Text size="xs" ff="var(--mono)">{display || '(no baseUrl)'}</Text>
+      {baseTemplate !== display && (
+        <Text size="xs" c="dimmed" ff="var(--mono)">template: {baseTemplate}</Text>
+      )}
+    </Stack>
+  )
 
   return (
     <Group
@@ -727,7 +758,7 @@ function CollectionLinkChip({ summary, stage, onStageChange, variableContext, on
         overflow: 'hidden',
       }}
     >
-      <Tooltip label={`Open collection · ${tooltip}`} withArrow openDelay={400}>
+      <Tooltip label={tooltip} withArrow openDelay={400}>
         <UnstyledButton
           onClick={onOpen}
           px="sm"
@@ -736,8 +767,15 @@ function CollectionLinkChip({ summary, stage, onStageChange, variableContext, on
             height: 34, color: 'var(--mantine-color-text)',
           }}
         >
-          <IconFolders size={13} opacity={0.6} />
-          <Text component="span" size="sm" ff="var(--mono)" c={hasUnresolved ? 'dimmed' : undefined}>
+          <IconFolders size={13} opacity={0.6} style={{ flexShrink: 0 }} />
+          <Text
+            component="span"
+            size="sm"
+            ff="var(--mono)"
+            w={100}
+            truncate
+            c={hasUnresolved ? 'dimmed' : undefined}
+          >
             {display || '(no baseUrl)'}
           </Text>
         </UnstyledButton>

@@ -241,6 +241,8 @@ Assertions answer *"did this response look right?"*. The **Testing** tab answers
 questions above that: *"do these requests still pass?"* and *"does this multi-step exchange
 still work end to end?"* — with two file kinds, both living in `tests/`.
 
+![The Testing tab running a test set, with results streaming below](../assets/screenshots/studio-testing.png)
+
 ### Flows — requests in order, values carried across
 
 A **flow** (`*.flow.md`) runs requests in sequence and passes values from one response into

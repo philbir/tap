@@ -9,7 +9,7 @@ import {
   IconFolderShare, IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
 import { useTapStore } from '../store'
@@ -459,7 +459,9 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
 
 /** Cursor-anchored floating context menu — handles its own outside-click dismissal
  *  and ESC. Rendered in a portal-style `position: fixed` so it overlays the sidebar.
- *  Item set depends on whether the row is a directory or a file. */
+ *  Measures itself before paint and flips above / left of the cursor when it would
+ *  otherwise overflow the viewport, so rows near the bottom of the tree still get a
+ *  fully visible menu. Item set depends on whether the row is a directory or a file. */
 function FloatingCtxMenu({
   ctx, onClose, onNewRequest, onNewFolder, onDeleteDir, onDeleteFile, onDuplicateFile, onEditCollection,
 }: {
@@ -472,6 +474,26 @@ function FloatingCtxMenu({
   onDuplicateFile: (file: FileContext) => void
   onEditCollection: (dir: DirContext) => void
 }) {
+  const menuRef = useRef<HTMLDivElement>(null)
+  const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null)
+
+  // Runs before paint, so the flipped position is the first thing the user sees.
+  useLayoutEffect(() => {
+    const el = menuRef.current
+    if (!ctx || !el) { setPlacement(null); return }
+    const margin = 8
+    const { width, height } = el.getBoundingClientRect()
+    // Flip up when the menu would run past the bottom edge; clamp so a menu taller
+    // than the space above the cursor still starts inside the viewport.
+    const top = ctx.y + height > window.innerHeight - margin
+      ? Math.max(margin, ctx.y - height)
+      : ctx.y
+    const left = ctx.x + width > window.innerWidth - margin
+      ? Math.max(margin, ctx.x - width)
+      : ctx.x
+    setPlacement({ left, top })
+  }, [ctx])
+
   useEffect(() => {
     if (!ctx) return
     const onDown = (e: MouseEvent) => {
@@ -491,6 +513,7 @@ function FloatingCtxMenu({
   const isDir = ctx.row.row === 'dir'
   return (
     <Paper
+      ref={menuRef}
       data-tap-ctx-menu
       shadow="md"
       radius="sm"
@@ -498,8 +521,8 @@ function FloatingCtxMenu({
       miw={180}
       style={{
         position: 'fixed',
-        left: ctx.x,
-        top: ctx.y,
+        left: placement?.left ?? ctx.x,
+        top: placement?.top ?? ctx.y,
         zIndex: 9999,
         background: 'var(--mantine-color-body)',
         border: '1px solid var(--mantine-color-default-border)',

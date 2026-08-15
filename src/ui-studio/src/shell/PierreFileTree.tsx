@@ -78,6 +78,13 @@ export function PierreFileTree(props: Props) {
   // model.resetPaths / setGitStatus on prop changes.
   const onSelChangeRef = useRef(onSelectionChange)
   const onActivateRef = useRef(onActivateFile)
+  // Selection reaches `onSelectionChange` from two sources: the user (click / arrow keys)
+  // and our own writes into the model (resetPaths after a reload, the controlled
+  // `selectedPath` sync). Only the first is an "open this file" gesture. pierre emits
+  // synchronously from whatever mutated the selection, so a flag around our own calls
+  // separates the two — without it, syncing selection after a rename re-activates the
+  // row we just moved away from and re-opens the file's stale path as a tab.
+  const syncing = useRef(false)
   const onContextRef = useRef(onContextMenuRequest)
   const dragRef = useRef(dragAndDrop)
   useEffect(() => { onSelChangeRef.current = onSelectionChange }, [onSelectionChange])
@@ -138,6 +145,7 @@ export function PierreFileTree(props: Props) {
     initialSelectedPaths: selectedPath ? [selectedPath] : undefined,
     onSelectionChange: (selected) => {
       onSelChangeRef.current?.(selected)
+      if (syncing.current) return
       // Treat a single-leaf selection as "activate this file" — directories
       // can't be activated (no onclick semantics in the file tree itself).
       if (selected.length === 1) {
@@ -147,8 +155,10 @@ export function PierreFileTree(props: Props) {
     },
   })
 
-  // Push prop updates into the imperative model.
-  useEffect(() => { model.resetPaths(Array.from(paths)) }, [model, paths])
+  // Push prop updates into the imperative model. Dropping the row that is currently
+  // selected (a delete, or the source side of a rename) moves the selection, which pierre
+  // reports like any other change — hence the guard.
+  useEffect(() => { withoutActivation(syncing, () => model.resetPaths(Array.from(paths))) }, [model, paths])
   useEffect(() => { model.setGitStatus(gitStatus ? Array.from(gitStatus) : undefined) }, [model, gitStatus])
   // `icons` is only read at model creation, and the requests/auth views key their icon
   // overrides on display basenames — so a row added after mount (e.g. "New request" from
@@ -156,13 +166,18 @@ export function PierreFileTree(props: Props) {
   useEffect(() => { model.setIcons(icons) }, [model, icons])
   useEffect(() => {
     // Keep selection in sync with the controlled prop. If the host clears it
-    // (selectedPath === null), deselect the currently-selected item.
-    if (selectedPath) {
-      const handle = model.getItem(selectedPath)
-      if (handle && !handle.isSelected()) handle.select()
-    } else {
-      for (const p of model.getSelectedPaths()) model.getItem(p)?.deselect()
-    }
+    // (selectedPath === null), deselect the currently-selected item. `select()` adds to
+    // the selection rather than replacing it, so stale rows are dropped first — otherwise
+    // a renamed file stays selected under both its old and its new row.
+    withoutActivation(syncing, () => {
+      for (const p of model.getSelectedPaths()) {
+        if (p !== selectedPath) model.getItem(p)?.deselect()
+      }
+      if (selectedPath) {
+        const handle = model.getItem(selectedPath)
+        if (handle && !handle.isSelected()) handle.select()
+      }
+    })
   }, [model, selectedPath])
 
   // Subscribe to selection for re-renders that depend on it (e.g. external
@@ -186,6 +201,13 @@ export function PierreFileTree(props: Props) {
       style={{ ...sizingStyle, ...style }}
     />
   )
+}
+
+/** Run a model mutation with selection-driven activation suppressed. pierre notifies its
+ *  subscribers synchronously, so the flag only has to survive the call itself. */
+function withoutActivation(flag: React.RefObject<boolean>, mutate: () => void) {
+  flag.current = true
+  try { mutate() } finally { flag.current = false }
 }
 
 /** Resolve a pierre drop target to the display path of the destination directory

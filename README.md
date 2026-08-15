@@ -39,7 +39,7 @@ Tap is two products, one for each half:
 | | | |
 |---|---|---|
 | 🔌 | **[Tap Tunnel + Inspector](#-tap-tunnel--inspector)** | Give localhost a real public URL through Cloudflare Tunnel or Tailscale, and capture every request, response, SSE event, and WebSocket frame that flows through it. Runs as the `tap` CLI or as .NET Aspire resources. |
-| 🧪 | **[Tap Studio](#-tap-studio)** | An HTTP workbench: compose requests, run real authentication flows, execute, and keep the whole workspace in your git repo as Markdown. Ships as a desktop app, with an AI assistant built in. |
+| 🧪 | **[Tap Studio](#-tap-studio)** | An HTTP workbench: compose requests, run real authentication flows, execute, chain them into flows and test sets that also run in CI, and keep the whole workspace in your git repo as Markdown. Ships as a desktop app, with an AI assistant built in. |
 
 They share a philosophy more than they share code:
 
@@ -197,8 +197,10 @@ plain Markdown.
 | **Real responses** | Status, duration, size, syntax-highlighted body with image and binary previews, plus **Headers**, the exact **Request** that went on the wire, the auth/variable **Flow**, and which **Secrets** were resolved. |
 | **Streaming** | SSE responses stream in live; requests marked `protocol: websocket` open a real socket and append frames as they arrive. |
 | **Many authentication flows** | OAuth 2.0 / OIDC (authorization code + PKCE, client credentials, ROPC, device code), Microsoft Entra, Azure CLI (direct + on-behalf-of), GitHub (PAT / `gh` CLI / GitHub App / OAuth App), AWS SigV4, signed JWT, bearer, basic, API key, and custom headers. |
+| **Flows and test sets** | A **flow** (`*.flow.md`) runs requests in order and carries values out of one response into the next; a **test set** (`*.test.md`) groups checks that each run one request or one whole flow. The **Testing** tab authors both and streams every result as it lands. |
+| **The same verdict in CI** | The `tap-studio` .NET tool runs those flows and test sets headlessly — JUnit, TRX, JSON, or Markdown reports, and exit codes a pipeline can branch on. Same engine as the UI, so a pull-request check and the Testing tab are one computation. |
 | **AI assistance** | Hand the request to GitHub Copilot CLI or Claude Code — running locally, with your existing CLI login — and get a proposed edit you review before saving. |
-| **Git-native workspace** | Requests, collections, auth profiles, and environments are Markdown files. Built-in branch, diff, stage, and commit. |
+| **Git-native workspace** | Requests, collections, auth profiles, environments, flows, and test sets are Markdown files. Built-in branch, diff, stage, and commit. |
 | **Variables and secrets** | A six-level cascade (workspace → collection → stage → environment → request → per-run) over pluggable providers: process env with allowlists, an encrypted workspace file, Azure Key Vault, and machine-local system variables. |
 
 ### Authentication, properly
@@ -241,6 +243,9 @@ decide whether to keep it. Secrets are always referenced as `{{variables}}`, nev
 ├── tap.md                                ← workspace: name, providers, default env
 ├── auth/corp-entra.auth.md               ← auth profile shared by every collection
 ├── environments/local.env.md             ← named variable set
+├── tests/
+│   ├── checkout.flow.md                  ← requests in order, values carried across
+│   └── billing.test.md                   ← a set of checks over requests and flows
 └── collections/billing/
     ├── _collection.md                    ← baseUrl, stages, default auth/headers
     ├── billing-oauth.auth.md             ← auth profile scoped to this collection
@@ -250,6 +255,63 @@ decide whether to keep it. Secrets are always referenced as `{{variables}}`, nev
 Because a request is a couple of lines of Markdown, review, blame, cherry-pick, and revert all
 work the way they do for code. Studio is the only thing that writes the YAML — editors PUT a
 typed spec and the server re-emits the file — so what lands in your diff is predictable.
+
+### Testing, and the same verdict in CI
+
+Assertions answer whether one response looked right. Flows and test sets answer the two
+questions above that: does this multi-step exchange still work end to end, and do these
+requests still pass?
+
+![The Testing tab running a test set, with results streaming below](assets/screenshots/studio-testing.png)
+
+```yaml
+kind: flow
+name: Checkout
+steps:
+- name: Create the order
+  request: ../collections/demo/create-order.req.md
+  extract:
+  - var: orderId                          # bind it out of the response…
+    jsonpath: $.order.id
+- name: Read it back
+  request: ../collections/demo/get-order.req.md
+  vars:
+    id: '{{orderId}}'                     # …and the next step reads it
+```
+
+That is the whole mechanism. Extract from a JSONPath, an XPath, a header, the status, the
+duration, the whole body, or a regex capture group; a value that doesn't turn up **fails the
+step** rather than quietly binding nothing. Neither request knows it is in a flow — they are
+the same files the Requests tab sends, carrying the same assertions.
+
+A **test set** lists tests that each run one request or one whole flow, plus variables that
+apply to the entire run. Results stream into the Testing tab as they land, each row expanding
+to the request that ran, every assertion verdict, and the values a step bound.
+
+The same runs go headless through a separate .NET tool:
+
+```bash
+dotnet tool install --global Tap.Studio.Cli
+
+tap-studio test "Demo API smoke"                    # a test set, a flow, by name or path
+tap-studio test --tag smoke --output junit          # everything carrying a tag
+tap-studio send "Create customer"                   # one request + its assertions
+tap-studio lint                                     # what doesn't parse
+tap-studio vars --env ci                            # the resolved cascade, secrets masked
+```
+
+`tap-studio` is a different package from the `tap` tunnel CLI — different product, different
+command, both installable side by side. Both it and the Studio's API call `Tap.Execution`, so
+a verdict from a pipeline and a verdict from the Testing tab are the same computation over the
+same files. `--output` takes `junit`, `trx`, `json`, or `markdown`; exit `1` means a test
+failed, while `2`/`3`/`4` mean usage, workspace, and auth problems — so a red build caused by
+an API is distinguishable from one caused by a broken runner. A selection matching nothing is
+an error, never a green run over zero tests.
+
+This repo runs its own sample set that way on every push — see
+[`.github/workflows/workspace-tests.yml`](.github/workflows/workspace-tests.yml). Full guide:
+[docs/studio.md](docs/studio.md#tests-and-flows) ·
+[CLI reference](src/backend/Tap.Studio.Cli/README.md).
 
 ### Install and run
 
@@ -278,10 +340,15 @@ dotnet restore Tap.slnx
 dotnet build   Tap.slnx
 dotnet run --project samples/Sample.AppHost   # tunnels + inspector scenarios
 cd samples && aspire run                      # Tap Studio
+
+dotnet test src/backend/Tap.Tests/Tap.Tests.csproj -p:SkipStudioUiBuild=true
 ```
 
 The SDK is pinned in `global.json` to .NET 10 and `TreatWarningsAsErrors` is on globally, so
-warnings break the build. There is no test project yet.
+warnings break the build. The tests cover the workspace parser/emitter round-trips (requests,
+assertions, flows, test sets), the assertion evaluator, the response-value extractor, and the
+CLI's variable inputs, target resolution, and report writers — all pure functions, no AppHost
+needed. The skip flag avoids a full Vite build on every run.
 
 Two independent UIs, both yarn 4 (Berry):
 
@@ -307,7 +374,10 @@ src/backend/Tap.Hosting/      Aspire integration and lifecycle hooks
 src/backend/Tap.Server/       Capture server, YARP proxy, SSE/WS API, bundled Inspector UI
 src/backend/Tap.Cli/          CLI host for the inspector server
 src/backend/Tap.Studio/       Studio backend (REST + SSE, auth runner, AI, git)
+src/backend/Tap.Studio.Cli/   `tap-studio` dotnet tool — headless test runs for terminals and CI
+src/backend/Tap.Execution/    Execution engine: send, auth, run flows and test sets
 src/backend/Tap.Workspace/    Workspace parsing, variable providers, and rendering
+src/backend/Tap.Tests/        xunit v3 tests for the parsers, evaluators, and the CLI
 src/ui-inspector/             Vite + React Inspector UI
 src/ui-studio/                Vite + React Studio UI
 src/desktop/                  Tauri desktop shell for Studio
@@ -322,6 +392,7 @@ samples/                      Sample AppHosts, the demo API, and a sample worksp
 | [docs/studio.md](docs/studio.md) | Workspace model, request composer, authentication flows, variables and secrets, AI assistant, git, desktop app. |
 | [docs/workspace-format.md](docs/workspace-format.md) | The authoritative on-disk format spec for Studio workspaces. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Deep technical background on the capture path and tunnel providers. |
+| [src/backend/Tap.Studio.Cli/README.md](src/backend/Tap.Studio.Cli/README.md) | The `tap-studio` CLI: commands, selection, report formats, exit codes, headless auth. |
 | [src/desktop/README.md](src/desktop/README.md) | Desktop shell internals, build, signing, and release pipeline. |
 | [docs/release-notes/](docs/release-notes/) | Per-release notes. |
 

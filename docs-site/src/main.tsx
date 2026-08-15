@@ -109,8 +109,18 @@ const studioFeatures: Feature[] = [
     glyph: "S",
   },
   {
+    title: "Flows and test sets",
+    text: "A flow runs requests in order and carries values out of one response into the next. A test set groups checks that each run one request or one whole flow. Both are Markdown in tests/, and the Testing tab streams every result as it lands.",
+    glyph: "T",
+  },
+  {
+    title: "The same verdict in CI",
+    text: "The tap-studio .NET tool runs those flows and test sets headlessly and reports JUnit, TRX, JSON, or Markdown, with exit codes a pipeline can branch on. It calls the same engine the UI does, so a pull-request check and the Testing tab are one computation.",
+    glyph: "CI",
+  },
+  {
     title: "Git-native workspace",
-    text: "Every request, collection, auth profile, and environment is a Markdown file in your repo. Branch, diff, stage, and commit without leaving the app.",
+    text: "Every request, collection, auth profile, flow, and test set is a Markdown file in your repo. Branch, diff, stage, and commit without leaving the app.",
     glyph: "G",
   },
   {
@@ -211,6 +221,20 @@ const docs: DocSection[] = [
     body: "Auth profiles are reusable files. Start from a template, fill only the fields that flow needs, and prove it works before wiring it to a request.",
   },
   {
+    id: "studio-testing",
+    product: "studio",
+    eyebrow: "Testing",
+    title: "Flows and test sets",
+    body: "Assertions answer whether one response looked right. Flows and test sets answer the two questions above that: does this multi-step exchange still work end to end, and do these requests still pass?",
+  },
+  {
+    id: "studio-cli",
+    product: "studio",
+    eyebrow: "Pipelines",
+    title: "The tap-studio CLI",
+    body: "The same runs, headless, through a .NET tool. It carries the execution engine and nothing that serves a UI, so it stays small enough to install on every runner.",
+  },
+  {
     id: "studio-ai",
     product: "studio",
     eyebrow: "Assist",
@@ -222,7 +246,7 @@ const docs: DocSection[] = [
     product: "studio",
     eyebrow: "Format",
     title: "The workspace is your repo",
-    body: "Five file kinds, all Markdown with YAML frontmatter. A runnable request is the composition of workspace, collection, stage, auth, environment, and request.",
+    body: "Seven file kinds, all Markdown with YAML frontmatter. A runnable request is the composition of workspace, collection, stage, auth, environment, and request.",
   },
   {
     id: "studio-variables",
@@ -418,6 +442,75 @@ vars:
   api.baseUrl: https://api.stripe.com
   STRIPE_KEY: '{{vault:stripe-live-key}}'
 ---`,
+  studioFlow: `---
+kind: flow
+name: Checkout
+steps:
+- name: Create the order
+  request: ../collections/demo/create-order.req.md
+  extract:
+  - var: orderId
+    jsonpath: $.order.id
+- name: Read it back
+  request: ../collections/demo/get-order.req.md
+  vars:
+    id: '{{orderId}}'
+  assertions:
+  - jsonpath: $.order.status
+    equals: open
+tags: [demo, smoke]
+---`,
+  studioTestSet: `---
+kind: test
+name: Order API
+vars:
+  customer: cus_demo
+tests:
+- name: Rejects an unknown SKU
+  request: ../collections/demo/create-order.req.md
+  vars: { item: nope }
+  assertions:
+  - status: 404
+- name: Full checkout
+  flow: ./checkout.flow.md
+onFailure: continue
+tags: [demo, smoke]
+---`,
+  studioCliInstall: `dotnet tool install --global Tap.Studio.Cli
+
+# run a test set, a flow, or a single request
+tap-studio test "Demo API smoke"
+tap-studio test tests/checkout.flow.md
+tap-studio send "Create customer"`,
+  studioCliSelect: `# every test set and flow carrying the tag — repeated tags union
+tap-studio test --tag smoke --tag graphql
+
+# just the tests inside a set whose name contains "refund"
+tap-studio test "Order API" --filter refund
+
+# one entry by index, or list what is available
+tap-studio test "Order API" --only 2
+tap-studio test --list`,
+  studioCliVars: `tap-studio test "Order API" \\
+  --env ci --stage uat \\
+  --var customer=cus_ci \\
+  --var-file ci.env
+
+# what would the requests actually see?
+tap-studio vars --env ci
+tap-studio lint`,
+  studioCliCi: `- run: dotnet tool install --global Tap.Studio.Cli
+
+- run: tap-studio test "Demo API smoke" --env ci \\
+    --output junit --output-file results.xml
+  env:
+    TAP_SECRETS_ALLOWED: "DEMO_*_TOKEN"
+    DEMO_API_TOKEN: \${{ secrets.DEMO_API_TOKEN }}
+
+- run: |
+    tap-studio test --tag smoke \\
+      --output markdown --output-file summary.md
+    cat summary.md >> "$GITHUB_STEP_SUMMARY"`,
   studioAllowlist: `# Names whose values the UI may show in clear text
 export TAP_VARS_ALLOWED="DEMO_*,ASPNETCORE_ENVIRONMENT"
 
@@ -556,6 +649,8 @@ const SiteNav = () => (
       <a href="#tailscale">Tailscale</a>
       <a href="#studio">Studio</a>
       <a href="#studio-auth">Auth flows</a>
+      <a href="#studio-testing">Testing</a>
+      <a href="#studio-cli">CI</a>
       <a href="#studio-providers">Variables</a>
       <a href="#studio-ai">AI</a>
       <a className="nav-cta" href={repoUrl}>
@@ -598,6 +693,7 @@ const Hero = () => (
         <span>Tailscale Serve</span>
         <span>OAuth 2.0 / OIDC</span>
         <span>AI assistant</span>
+        <span>Tests in CI</span>
         <span>Git-native</span>
         <span>Free as tap water</span>
       </div>
@@ -647,8 +743,9 @@ const ProductSplit = () => (
         <h3>Tap Studio</h3>
         <p>
           An HTTP workbench: full request composition, a catalogue of real authentication flows,
-          an AI assistant running on your own machine, and a workspace that lives in your git
-          repo as Markdown. Ships as a desktop app.
+          multi-step flows and test sets that also run headlessly in CI, an AI assistant running
+          on your own machine, and a workspace that lives in your git repo as Markdown. Ships as a
+          desktop app.
         </p>
         <div className="product-tags">
           <span>Desktop</span>
@@ -658,6 +755,9 @@ const ProductSplit = () => (
           <span>GraphQL</span>
           <span>Key Vault</span>
           <span>1Password</span>
+          <span>Flows</span>
+          <span>Tests</span>
+          <span>CI</span>
           <span>AI</span>
         </div>
         <a className="button primary" href="#studio">
@@ -744,7 +844,8 @@ const StudioProduct = () => (
         <p>
           Studio is the other direction of travel: you are the client. It composes the call,
           runs the authentication flow behind it, executes it, and stores the result as text
-          your team can review.
+          your team can review — then keeps proving it works, from the Testing tab and from
+          your pipeline.
         </p>
       </div>
       <div className="feature-grid">
@@ -1386,6 +1487,161 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     );
   }
 
+  if (doc.id === "studio-testing") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-testing.png"
+          alt="The Tap Studio Testing tab running a test set, with results streaming below"
+          caption="A test set's entries above, the run below. Results stream in as they land — and the last entry here runs a whole flow, expanded to its steps, the request each one sent, and every assertion verdict."
+        />
+        <div className="config-table" role="table" aria-label="Testing file kinds">
+          {[
+            ["*.flow.md", "A flow: an ordered list of steps. Each step names an existing request, may override its variables, and may extract values out of its response for the steps below."],
+            ["*.test.md", "A test set: variables that apply to the whole run, plus a list of tests that each run one request or one whole flow, with extra assertions layered on the target's own."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="tests/checkout.flow.md" code={commands.studioFlow} />
+          <CodeBlock title="tests/order-api.test.md" code={commands.studioTestSet} />
+        </div>
+        <div className="callout">
+          <strong>Step one binds it, step two reads it</strong>
+          <p>
+            That is the whole mechanism. Extract from a JSONPath, an XPath, a header, the status,
+            the duration, the whole body, or a regex capture group — and in the editor the row
+            reads left to right as the sentence it is: variable, arrow, source. A value that
+            doesn't turn up fails the step rather than quietly binding nothing, because the next
+            request is about to send an unexpanded token and saying so here beats a strange URL
+            two steps later. Mark it optional with a default when it genuinely is.
+          </p>
+        </div>
+        <div className="mode-grid section-gap">
+          {[
+            ["Neither request knows it is in a flow", "Steps point at the same files the Requests tab sends, carrying the same assertions. The flow only supplies variables and carries values across. A failed step stops the flow, because everything after it would run against a state that never happened."],
+            ["Set variables are the last word", "A test set's variables sit above the environment and above the request's own, which is what lets one set pin an identity for every check inside it. Values bound by extract beat even those — a flow whose id could be overridden by its caller is no longer a flow."],
+            ["Keep going, or stop the set", "By default a failing test doesn't stop the others; one broken endpoint shouldn't hide the state of the rest. Switch onFailure to stop for entries that build on each other."],
+            ["A flow is a test target", "A test entry runs either a request or a whole flow. Assertions on a flow entry check the last step's response — the one a caller of the flow actually sees."],
+            ["Results stream as they land", "A ten-entry set against a slow API reports progress instead of appearing all at once. Each row expands to the request that ran, every assertion verdict, the values a step bound, and the response body. Failures open themselves, and one test can be re-run from its own row."],
+            ["Runs read what is on disk", "Run is disabled while there are unsaved edits — the alternative is a green result for a file that doesn't exist yet. Nothing is persisted either: a run annotates the screen, and an extracted value lives only for the length of it."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/studio.md#tests-and-flows">
+          Read the testing guide
+        </a>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-cli") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <CodeBlock title="Install and run" code={commands.studioCliInstall} />
+        <div className="config-table section-gap" role="table" aria-label="tap-studio commands">
+          {[
+            ["tap-studio test", "Run a test set or a flow."],
+            ["tap-studio send", "Send one request and evaluate its assertions."],
+            ["tap-studio lint", "Parse the workspace and report what doesn't load."],
+            ["tap-studio vars", "Print the resolved variable cascade, secrets masked."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="callout">
+          <strong>It is the same engine</strong>
+          <p>
+            The Studio's API and the CLI both call Tap.Execution, so a verdict from a pipeline and
+            a verdict from the Testing tab are the same computation over the same files — not two
+            implementations that drift apart. tap-studio is a separate package from the tap tunnel
+            CLI: different product, different command, both installable side by side.
+          </p>
+        </div>
+        <div className="mode-grid section-gap">
+          {[
+            ["Name it the way you read it", "A target is a workspace-relative path, the name from the file's frontmatter, or its filename stem — so the thing on the Testing tab is the thing you can type. An ambiguous name lists the candidates instead of guessing."],
+            ["The workspace finds itself", "Discovery walks up from the working directory to the nearest tap.md, the way git finds a repo. Pass --workspace to override it."],
+            ["A selection that matches nothing is an error", "A misspelled --tag that quietly ran zero tests would leave a pipeline passing forever with nothing in the output to notice it by. So an unmatched tag lists the tags that do exist, and exits 2."],
+            ["Input variables win", "--var and --var-file land in the same tier the UI's per-run overrides use, above every file scope. Later files beat earlier ones, and --var beats all of them."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="Selecting what runs" code={commands.studioCliSelect} />
+          <CodeBlock title="Environment, stage, and input variables" code={commands.studioCliVars} />
+        </div>
+        <CodeBlock title=".github/workflows/api-tests.yml" code={commands.studioCliCi} />
+        <div className="config-table section-gap" role="table" aria-label="Report formats">
+          {[
+            ["--output junit", "Ingested by GitHub Actions, GitLab, Azure DevOps, and Jenkins without a plugin, so a failed assertion is a failed test in the UI rather than a line in a log. A tagged run writes one testsuite per target."],
+            ["--output trx", "Azure DevOps' native reporting. Several targets merge into one TestRun."],
+            ["--output json", "Scripting. Always an envelope — ok, passed, failed, skipped, durationMs, runs — whatever the target count, so nothing has to branch on how the run was selected."],
+            ["--output markdown", "The places a human reads. Verdict first, then failures in full, then a table per target; passing targets collapse into a details block and failing ones stay open."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="config-table section-gap" role="table" aria-label="Exit codes">
+          {[
+            ["0", "Everything that ran, passed."],
+            ["1", "A test or assertion failed."],
+            ["2", "Usage error — unknown or ambiguous name, bad option, a selection matching nothing."],
+            ["3", "Workspace error — no tap.md, or a file that doesn't parse."],
+            ["4", "Auth couldn't be acquired without a human."],
+            ["130", "Cancelled."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <p className="doc-note">
+          One versus everything above it is the distinction worth having: a red build because the
+          API misbehaved is a different situation from a red build because the runner couldn't do
+          its job, and a single exit code for both makes them indistinguishable from a dashboard.
+        </p>
+        <div className="callout">
+          <strong>Auth that refuses rather than hangs</strong>
+          <p>
+            Bearer, basic, API key, custom, AWS SigV4, GitHub PAT, OAuth 2.0 client credentials and
+            ROPC, and Azure CLI all mint without a human — federated credentials included. An
+            interactive grant fails immediately with exit 4, naming the profile and the
+            alternatives, instead of blocking the job on a sign-in prompt nobody can see. Secrets
+            reach the run through the same variable providers the UI uses; the env provider is the
+            natural CI path, deny-by-default behind TAP_SECRETS_ALLOWED. The developer token cache
+            is ignored unless you pass --use-cached-tokens, because a run that passes on a warm
+            token from someone's laptop is a test that didn't really run.
+          </p>
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/studio.md#running-tests-from-ci">
+          Read the CI guide
+        </a>
+      </section>
+    );
+  }
+
   if (doc.id === "studio-ai") {
     return (
       <section className="doc-block" id={doc.id}>
@@ -1430,6 +1686,8 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             ["*.req.md", "One request, as a fenced http block plus Markdown documentation."],
             ["*.auth.md", "A reusable authentication profile."],
             ["*.env.md", "A named environment: a set of variables and secret references."],
+            ["*.flow.md", "A flow: requests in order, with values carried from one response into the next."],
+            ["*.test.md", "A test set: run-wide variables plus a list of tests, each running a request or a flow."],
           ].map(([key, value]) => (
             <div className="config-row" role="row" key={key}>
               <code role="cell">{key}</code>

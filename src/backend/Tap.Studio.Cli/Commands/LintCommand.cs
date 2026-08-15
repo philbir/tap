@@ -20,7 +20,7 @@ public sealed class LintCommand : Command<LintCommand.Settings>
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-w|--workspace <DIR>")]
-        [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md.")]
+        [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
         public string? WorkspaceDirectory { get; init; }
 
         [CommandOption("--no-color")]

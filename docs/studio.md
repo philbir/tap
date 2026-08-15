@@ -362,7 +362,10 @@ stdout — the mode built for scripts and AI agents. See [agent-surface.md](agen
 
 `<name>` is a path, the `name:` from the frontmatter, or the filename stem — so the thing you
 read off the Testing tab is the thing you can type. `--list` shows what's available. The
-workspace is found by walking up from the working directory to the nearest `tap.md`.
+workspace is found by walking up from the working directory to the nearest `tap.md` — or,
+when no ancestor has one, by taking the first workspace beneath the working directory
+(shallowest first, then alphabetical, to a bounded depth). Standing at a repo root whose
+workspace lives in a subfolder therefore just works; `--workspace` pins it explicitly.
 
 ### Selecting what runs
 

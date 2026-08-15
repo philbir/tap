@@ -20,7 +20,9 @@ dotnet run --project src/backend/Tap.Studio.Cli -- <command> --workspace samples
 ```
 
 Elsewhere, it's the `tap-studio` dotnet tool. `--workspace` defaults to the nearest
-ancestor directory containing `tap.md`, so inside a workspace you can omit it.
+ancestor directory containing `tap.md` — or, when no ancestor has one, the first
+workspace found beneath the working directory (shallowest, then alphabetical; capped
+depth). Inside or above a workspace you can simply omit it.
 
 ## The loop: discover → describe → run
 

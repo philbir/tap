@@ -45,7 +45,7 @@ public sealed class AgentInitCommand : Command<AgentInitCommand.Settings>
         public string ProjectDir { get; init; } = ".";
 
         [CommandOption("-w|--workspace <DIR>")]
-        [Description("Workspace the project-scope MCP registration points at. Defaults to the nearest ancestor containing tap.md.")]
+        [Description("Workspace the project-scope MCP registration points at. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
         public string? WorkspaceDirectory { get; init; }
 
         [CommandOption("--force")]

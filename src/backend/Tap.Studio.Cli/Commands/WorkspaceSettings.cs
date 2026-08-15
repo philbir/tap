@@ -10,7 +10,7 @@ namespace Tap.Studio.Cli.Commands;
 public class WorkspaceSettings : CommandSettings
 {
     [CommandOption("-w|--workspace <DIR>")]
-    [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md.")]
+    [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
     public string? WorkspaceDirectory { get; init; }
 
     [CommandOption("-e|--env <NAME|PATH>")]

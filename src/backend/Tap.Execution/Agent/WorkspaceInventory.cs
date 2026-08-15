@@ -25,10 +25,15 @@ public static class WorkspaceInventory
                 Stages: c.Stages.Select(s => s.Name).ToArray(),
                 DefaultStage: c.DefaultStage,
                 Tags: c.Tags,
-                RequestCount: workspace.Requests.Count(r => IsInCollection(workspace, r, c))))
+                RequestCount: workspace.Requests.Count(r => IsInCollection(workspace, r, c)),
+                AgentEnabled: c.Agent.Enabled))
             .ToArray();
 
+        // Requests in agent-disabled collections are left out entirely: discovery lists
+        // what an agent may use, and the collection row's AgentEnabled=false explains the
+        // gap. The count on the collection still tells the truth about what exists.
         var requests = workspace.Requests
+            .Where(r => AgentAccess.IsEnabled(workspace, r))
             .OrderBy(r => r.RelativePath, StringComparer.Ordinal)
             .Select(r => Summarize(workspace, r))
             .ToArray();

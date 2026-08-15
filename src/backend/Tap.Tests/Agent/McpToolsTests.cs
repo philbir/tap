@@ -106,6 +106,47 @@ public sealed class McpToolsTests : IDisposable
     }
 
     [Fact]
+    public async Task An_agent_disabled_collection_refuses_describe_send_and_call()
+    {
+        Write("collections/locked/_collection.md", """
+            ---
+            kind: collection
+            name: Locked
+            baseUrl: http://127.0.0.1:9
+            agent: false
+            ---
+            """);
+        Write("collections/locked/secret-op.req.md", """
+            ---
+            kind: request
+            name: Secret op
+            ---
+
+            ```http
+            GET /admin
+            ```
+            """);
+
+        Assert.Contains("agent access disabled",
+            Assert.Throws<McpException>(() => _tools.DescribeRequest("Secret op")).Message);
+        Assert.Contains("agent access disabled",
+            (await Assert.ThrowsAsync<McpException>(() => _tools.SendRequest(
+                "Secret op", cancellationToken: TestContext.Current.CancellationToken))).Message);
+        Assert.Contains("agent access disabled",
+            (await Assert.ThrowsAsync<McpException>(() => _tools.CallRequest(
+                "Locked", "GET", "/x", cancellationToken: TestContext.Current.CancellationToken))).Message);
+
+        // And the inventory shows the collection, flagged, without its request.
+        var inventory = Parse(_tools.WorkspaceInventory());
+        var locked = inventory.GetProperty("collections").EnumerateArray()
+            .Single(c => c.GetProperty("name").GetString() == "Locked");
+        Assert.False(locked.GetProperty("agentEnabled").GetBoolean());
+        Assert.DoesNotContain(
+            inventory.GetProperty("requests").EnumerateArray(),
+            r => r.GetProperty("path").GetString()!.StartsWith("collections/locked/"));
+    }
+
+    [Fact]
     public void The_tools_see_edits_made_after_the_server_started()
     {
         Write("collections/demo/post.req.md", """

@@ -54,6 +54,11 @@ tap-studio call POST /upload -c demo -d @payload.json --json
 ```
 
 - `--collection` is required; find names with `list collections --json`.
+- A collection can opt out of agent use (`agent: false` in its `_collection.md`, or the
+  "Agent access" switch in the Studio). Such collections show `agentEnabled: false` in the
+  inventory, their requests are omitted from discovery, and describe/send/call refuse with
+  `E_AGENT_ACCESS_DISABLED`. Don't work around it (e.g. via curl) — ask the user to enable
+  the collection if the call is genuinely wanted.
 - The URL must be **relative** — it is joined onto the collection's baseUrl. Absolute URLs
   are refused (exit 2 / a failed step) because the request carries the collection's
   credentials. `--allow-any-url` overrides this; treat it as a dangerous flag: never pass

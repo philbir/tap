@@ -26,7 +26,13 @@ public sealed record CollectionSummaryDto(
     IReadOnlyList<string> Stages,
     string? DefaultStage,
     IReadOnlyList<string> Tags,
-    int RequestCount);
+    /// <summary>Members of the collection, whether or not they are listed under
+    /// <see cref="WorkspaceInventoryDto.Requests"/> — a disabled collection still truthfully
+    /// reports how many requests it holds.</summary>
+    int RequestCount,
+    /// <summary>The collection's <c>agent:</c> option. When false, its requests are omitted
+    /// from the inventory and the agent surfaces refuse to describe, send, or call into it.</summary>
+    bool AgentEnabled);
 
 public sealed record RequestSummaryDto(
     string Name,

@@ -58,6 +58,11 @@ public static class WorkspaceErrorCode
     /// headers were malformed (empty, or carrying line breaks that would smuggle extra lines
     /// into the synthesized http block).</summary>
     public const string E_DYNAMIC_REQUEST_INVALID = nameof(E_DYNAMIC_REQUEST_INVALID);
+
+    /// <summary>An agent surface tried to use a collection whose <c>agent:</c> option
+    /// disables agent access. Policy set by the collection's author in
+    /// <c>_collection.md</c>; the human-facing Studio and CLI commands ignore it.</summary>
+    public const string E_AGENT_ACCESS_DISABLED = nameof(E_AGENT_ACCESS_DISABLED);
 }
 
 public sealed record WorkspaceError(

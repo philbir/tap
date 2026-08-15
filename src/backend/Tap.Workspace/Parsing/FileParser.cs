@@ -222,7 +222,44 @@ public static class FileParser
             Vars = fm.VarSpecMap("vars"),
             Stages = stages,
             DefaultStage = defaultStage,
+            Agent = ParseAgent(fm, relativePath),
         };
+    }
+
+    /// <summary>Accepts both the shorthand (<c>agent: false</c>) and the structured form
+    /// (<c>agent: { enabled: false }</c>) — the latter is where finer-grained agent policy
+    /// will grow without another format change. Absent means enabled.</summary>
+    private static CollectionAgentOptions ParseAgent(YamlMappingNode fm, string relativePath)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("agent"), out var node))
+            return new CollectionAgentOptions();
+
+        if (node is YamlScalarNode scalar)
+        {
+            if (bool.TryParse(scalar.Value, out var enabled))
+                return new CollectionAgentOptions { Enabled = enabled };
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                $"'agent: {scalar.Value}' is not valid. Use true, false, or a mapping like 'agent: {{ enabled: false }}'.",
+                relativePath));
+        }
+
+        if (node is YamlMappingNode map)
+        {
+            var enabledRaw = map.String("enabled");
+            if (enabledRaw is null) return new CollectionAgentOptions();
+            if (bool.TryParse(enabledRaw, out var enabled))
+                return new CollectionAgentOptions { Enabled = enabled };
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                $"'agent.enabled: {enabledRaw}' is not valid. Use true or false.",
+                relativePath));
+        }
+
+        throw new WorkspaceParseException(new WorkspaceError(
+            WorkspaceErrorCode.E_UNKNOWN_FIELD,
+            "'agent:' must be a bool or a mapping (agent: { enabled: false }).",
+            relativePath));
     }
 
     private static FlowFile ParseFlow(Common c, YamlMappingNode fm, string body, string relativePath)

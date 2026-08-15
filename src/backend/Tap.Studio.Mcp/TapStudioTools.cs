@@ -180,7 +180,16 @@ public sealed class TapStudioTools(IMcpWorkspaceProvider provider)
     {
         if (!TargetResolver.TryResolve(host.Workspace, target, [WorkspaceKind.Request], out var resolved, out var error))
             throw new McpException(error);
-        return (RequestFile)host.Workspace.FindByPath(resolved.Path)!;
+        var request = (RequestFile)host.Workspace.FindByPath(resolved.Path)!;
+        try
+        {
+            AgentAccess.EnsureAllowed(host.Workspace, request);
+        }
+        catch (WorkspaceParseException ex)
+        {
+            throw new McpException(ex.Error.Message);
+        }
+        return request;
     }
 
     private static string? ResolveEnv(IWorkspaceHost host, string? env)

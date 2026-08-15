@@ -218,7 +218,9 @@ public sealed record CollectionDetailDto(
     string Body,
     string Source,
     IReadOnlyList<CollectionStageDto> Stages,
-    string? DefaultStage);
+    string? DefaultStage,
+    /// <summary>The collection's <c>agent:</c> option — whether agent surfaces may use it.</summary>
+    bool AgentEnabled);
 
 /// <summary>Structured PUT spec for a collection. The server resolves the on-disk path
 /// from <see cref="Slug"/> and writes canonical YAML via <c>CollectionSpecEmitter</c>.</summary>
@@ -238,6 +240,9 @@ public sealed record CollectionSpecDto
     public IReadOnlyList<string>? Tags { get; init; }
     public IReadOnlyList<CollectionStageSpecDto>? Stages { get; init; }
     public string? DefaultStage { get; init; }
+    /// <summary>The <c>agent:</c> option. Null or true emits nothing (enabled is the
+    /// default); false emits <c>agent: false</c>.</summary>
+    public bool? AgentEnabled { get; init; }
     public string? Body { get; init; }
 }
 

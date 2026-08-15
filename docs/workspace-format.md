@@ -395,6 +395,7 @@ A top-level group of requests, owning the base URL, optional named stages, defau
 | `stages` | sequence of stage | no | Named per-stage overrides (e.g. `dev`/`staging`/`prod`). Each stage may override `baseUrl`, `defaultAuth`, and `vars`. |
 | `defaultStage` | string | no | Stage to preselect in the editor. |
 | `tags` | string[] | no | |
+| `agent` | bool \| mapping | no | Agent-surface policy. `agent: false` (or `agent: { enabled: false }`) fences the collection off from AI agents: its requests disappear from agent discovery, and the MCP tools and `tap-studio call` refuse to describe, send, or call into it. The Studio UI, `send`, and `test` are unaffected — this is policy for agents, not a sandbox. Absent means enabled. The mapping form is reserved for finer-grained controls later. |
 
 ### 6.2 Example
 

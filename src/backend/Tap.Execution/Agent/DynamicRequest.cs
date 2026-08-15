@@ -54,6 +54,7 @@ public static class DynamicRequestFactory
     public static RequestFile Create(LoadedWorkspace workspace, string collection, DynamicRequestSpec spec)
     {
         var owner = ResolveCollection(workspace, collection);
+        AgentAccess.EnsureAllowed(owner);
 
         EnsureSingleLine("method", spec.Method);
         EnsureSingleLine("url", spec.Url);

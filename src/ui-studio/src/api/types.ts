@@ -888,6 +888,8 @@ export interface CollectionDetail {
   source: string
   stages: CollectionStage[]
   defaultStage: string | null
+  /** The collection's `agent:` option — whether agent surfaces (MCP tools, `call`) may use it. */
+  agentEnabled: boolean
 }
 
 export interface CollectionSpec {
@@ -904,6 +906,8 @@ export interface CollectionSpec {
   tags?: string[]
   stages?: CollectionStageSpec[]
   defaultStage?: string
+  /** Only the opt-out travels: `false` emits `agent: false`, undefined leaves the file silent (enabled). */
+  agentEnabled?: boolean
   body?: string
 }
 

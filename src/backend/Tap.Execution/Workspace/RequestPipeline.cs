@@ -151,7 +151,9 @@ public sealed class RequestPipeline(IWorkspaceHost host)
         {
             ["Authorization"] = "Bearer " + minted.AccessToken,
         };
-        return rendered with { Headers = headers };
+        // The minted token joins the redaction set: Authorization is masked by name anyway,
+        // but the raw value must also never survive if it shows up anywhere else in an echo.
+        return rendered with { Headers = headers, Redactor = rendered.Redactor.With(minted.AccessToken) };
     }
 
     /// <summary>True when the profile's Authorization header can only come from a runtime

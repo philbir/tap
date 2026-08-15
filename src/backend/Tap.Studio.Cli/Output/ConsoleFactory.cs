@@ -15,11 +15,13 @@ namespace Tap.Studio.Cli.Output;
 /// </summary>
 public static class ConsoleFactory
 {
-    public static IAnsiConsole Create(bool noColor)
+    /// <param name="toStdErr">Route this console to stderr. The <c>--json</c> modes use it so
+    /// stdout stays a single parseable document while progress and errors remain visible.</param>
+    public static IAnsiConsole Create(bool noColor, bool toStdErr = false)
     {
         var suppress = noColor
             || Environment.GetEnvironmentVariable("NO_COLOR") is { Length: > 0 }
-            || Console.IsOutputRedirected;
+            || (toStdErr ? Console.IsErrorRedirected : Console.IsOutputRedirected);
 
         return AnsiConsole.Create(new AnsiConsoleSettings
         {
@@ -28,6 +30,7 @@ public static class ConsoleFactory
             // Interactivity gates prompts and animations. There is nothing to prompt for, and
             // a spinner redrawing itself a thousand times is exactly what a log doesn't need.
             Interactive = InteractionSupport.No,
+            Out = new AnsiConsoleOutput(toStdErr ? Console.Error : Console.Out),
         });
     }
 

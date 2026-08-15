@@ -241,9 +241,11 @@ public static class ReportWriter
     /// see one set of field names.
     ///
     /// <para>Always an envelope, even for one target. A script shouldn't have to branch on
-    /// whether the caller happened to pass <c>--tag</c>.</para>
+    /// whether the caller happened to pass <c>--tag</c>. Public because <c>test --json</c>
+    /// prints this same document to stdout; keep it on the default encoder so
+    /// <see cref="Tap.Workspace.Rendering.SecretRedactor"/>'s JSON-escaped variants match.</para>
     /// </summary>
-    private static string Json(IReadOnlyList<TestRunResultDto> runs)
+    public static string Json(IReadOnlyList<TestRunResultDto> runs)
         => JsonSerializer.Serialize(
             new JsonReport(
                 Ok: runs.All(r => r.Ok),

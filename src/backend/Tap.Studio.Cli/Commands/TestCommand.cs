@@ -58,11 +58,15 @@ public sealed class TestCommand : AsyncCommand<TestCommand.Settings>
         [CommandOption("--list")]
         [Description("List the test sets and flows in the workspace and exit.")]
         public bool List { get; init; }
+
+        [CommandOption("--json")]
+        [Description("Print the run result as JSON on stdout, secrets redacted. Progress and errors go to stderr.")]
+        public bool Json { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
-        var console = ConsoleFactory.Create(settings.NoColor);
+        var console = ConsoleFactory.Create(settings.NoColor, toStdErr: settings.Json);
         var reporter = new ConsoleReporter(console, settings.Verbose);
 
         if (!WorkspaceLocator.TryLocate(settings.WorkspaceDirectory, null, out var root, out var locateError))
@@ -85,7 +89,15 @@ public sealed class TestCommand : AsyncCommand<TestCommand.Settings>
             return ExitCode.WorkspaceError;
         }
 
-        if (settings.List) return ListTargets(console, host);
+        if (settings.List)
+        {
+            if (settings.Json)
+            {
+                JsonOutput.Write(Tap.Execution.Agent.WorkspaceInventory.Build(host.Workspace).Tests);
+                return ExitCode.Ok;
+            }
+            return ListTargets(console, host);
+        }
 
         var tags = settings.Tags ?? [];
         var named = !string.IsNullOrWhiteSpace(settings.Target);
@@ -143,7 +155,13 @@ public sealed class TestCommand : AsyncCommand<TestCommand.Settings>
 
         ExecutionIdentity.UserAgent = $"tap-studio-cli/{ExecutionIdentity.Version}";
 
-        var runner = new TestRunner(new RequestPipeline(host));
+        // One redactor accumulated across every step of every target, so the serialized JSON
+        // report can be scrubbed in a single pass at the end.
+        var redactor = Tap.Workspace.Rendering.SecretRedactor.None;
+        var runner = new TestRunner(new RequestPipeline(host))
+        {
+            OnRendered = rendered => redactor = redactor.Merge(rendered.Redactor),
+        };
         var results = new List<TestRunResultDto>(targets.Count);
 
         foreach (var target in targets)
@@ -194,6 +212,11 @@ public sealed class TestCommand : AsyncCommand<TestCommand.Settings>
         }
 
         reporter.Finished(results);
+
+        if (settings.Json)
+        {
+            Console.Out.WriteLine(redactor.Redact(ReportWriter.Json(results)));
+        }
 
         if (settings.Output is { Length: > 0 })
         {

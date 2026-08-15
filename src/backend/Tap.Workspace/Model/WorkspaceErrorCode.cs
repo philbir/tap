@@ -47,6 +47,17 @@ public static class WorkspaceErrorCode
     /// <summary>The workspace could not be read at all (missing folder, unreadable root). The
     /// workspace loads empty carrying this error rather than taking the host down with it.</summary>
     public const string E_WORKSPACE_LOAD_FAILED = nameof(E_WORKSPACE_LOAD_FAILED);
+
+    /// <summary>A dynamic (agent-supplied) request tried to leave its collection: the URL was
+    /// absolute, or rendered absolute through a variable, without the caller explicitly
+    /// allowing that. The guard exists because a dynamic URL combined with inherited auth
+    /// headers is a credential-exfiltration primitive — see <c>Tap.Execution.Agent</c>.</summary>
+    public const string E_DYNAMIC_URL_NOT_COLLECTION_SCOPED = nameof(E_DYNAMIC_URL_NOT_COLLECTION_SCOPED);
+
+    /// <summary>A dynamic request named a collection that doesn't exist, or its method / URL /
+    /// headers were malformed (empty, or carrying line breaks that would smuggle extra lines
+    /// into the synthesized http block).</summary>
+    public const string E_DYNAMIC_REQUEST_INVALID = nameof(E_DYNAMIC_REQUEST_INVALID);
 }
 
 public sealed record WorkspaceError(

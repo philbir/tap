@@ -22,8 +22,10 @@
 
   <ItemGroup>
     <!-- The engine, and nothing that serves a UI. No Kestrel, no React bundle, no Git —
-         this has to be cheap enough to install on every CI runner. -->
+         this has to be cheap enough to install on every CI runner. Tap.Studio.Mcp is the
+         shared MCP tool layer the `mcp` command serves over stdio. -->
     <ProjectReference Include="..\Tap.Execution\Tap.Execution.csproj" />
+    <ProjectReference Include="..\Tap.Studio.Mcp\Tap.Studio.Mcp.csproj" />
   </ItemGroup>
 
   <ItemGroup>

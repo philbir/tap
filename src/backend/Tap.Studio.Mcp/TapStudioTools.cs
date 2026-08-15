@@ -5,13 +5,10 @@ using Tap.Execution.Agent;
 using Tap.Execution.Contracts;
 using Tap.Execution.Testing;
 using Tap.Execution.Workspace;
-using Tap.Studio.Cli.Auth;
-using Tap.Studio.Cli.Output;
-using Tap.Studio.Cli.Workspace;
 using Tap.Workspace.Model;
 using Tap.Workspace.Rendering;
 
-namespace Tap.Studio.Cli.Mcp;
+namespace Tap.Studio.Mcp;
 
 /// <summary>
 /// The MCP face of the agent surface — thin adapters over exactly what the CLI's
@@ -19,23 +16,28 @@ namespace Tap.Studio.Cli.Mcp;
 /// redacted JSON documents. No tool here has logic of its own; a verdict from a tool call
 /// and a verdict from the CLI are the same computation, which is the property that makes
 /// either worth trusting.
+///
+/// <para>Served twice from one implementation: the CLI's stdio server (headless auth,
+/// workspace loaded per call) and the Studio's <c>/mcp</c> endpoint (live workspace, the
+/// user's interactively-minted tokens). The <see cref="IMcpWorkspaceProvider"/> seam carries
+/// that whole difference, so the tool contract cannot drift between the two.</para>
 /// </summary>
 [McpServerToolType]
-public sealed class TapStudioTools(McpRuntime runtime)
+public sealed class TapStudioTools(IMcpWorkspaceProvider provider)
 {
     [McpServerTool(Name = "workspace_inventory")]
     [Description("Everything in the Tap workspace: collections (with baseUrl template and stages), requests (method, URL template, effective auth profile name), environments, test sets/flows, and auth profiles (name + type only — fields are never exposed). Call this first to discover what exists.")]
     public string WorkspaceInventory()
-        => JsonOutput.Serialize(Tap.Execution.Agent.WorkspaceInventory.Build(runtime.LoadHost().Workspace));
+        => AgentJson.Serialize(Tap.Execution.Agent.WorkspaceInventory.Build(provider.GetHost().Workspace));
 
     [McpServerTool(Name = "describe_request")]
     [Description("One request's full template surface before running it: method, URL template, headers, body template, referenced {{variables}}, the auth profile it rides on (name + type only), collection stages, and its assertions. Nothing is rendered, so nothing secret can appear.")]
     public string DescribeRequest(
         [Description("The request: a workspace-relative path, its frontmatter name, or its filename stem.")] string target)
     {
-        var host = runtime.LoadHost();
+        var host = provider.GetHost();
         var request = ResolveRequest(host, target);
-        return JsonOutput.Serialize(Tap.Execution.Agent.WorkspaceInventory.Describe(host.Workspace, request));
+        return AgentJson.Serialize(Tap.Execution.Agent.WorkspaceInventory.Describe(host.Workspace, request));
     }
 
     [McpServerTool(Name = "send_request")]
@@ -47,7 +49,7 @@ public sealed class TapStudioTools(McpRuntime runtime)
         [Description("Per-run variable overrides; they outrank every file scope.")] Dictionary<string, string>? vars = null,
         CancellationToken cancellationToken = default)
     {
-        var host = runtime.LoadHost();
+        var host = provider.GetHost();
         var request = ResolveRequest(host, target);
         return await RunStepAsync(host, request, env, stage, vars, guard: null, cancellationToken);
     }
@@ -67,7 +69,7 @@ public sealed class TapStudioTools(McpRuntime runtime)
         [Description("Permit an absolute URL outside the collection. Dangerous: only on explicit user instruction.")] bool allowAnyUrl = false,
         CancellationToken cancellationToken = default)
     {
-        var host = runtime.LoadHost();
+        var host = provider.GetHost();
         RequestFile request;
         try
         {
@@ -103,7 +105,7 @@ public sealed class TapStudioTools(McpRuntime runtime)
         [Description("Per-run variable overrides; they outrank every file scope.")] Dictionary<string, string>? vars = null,
         CancellationToken cancellationToken = default)
     {
-        var host = runtime.LoadHost();
+        var host = provider.GetHost();
         ThrowIfBroken(host);
 
         if (!TargetResolver.TryResolve(
@@ -125,11 +127,7 @@ public sealed class TapStudioTools(McpRuntime runtime)
         try
         {
             var result = await runner.RunAsync(request, NoProgress, cancellationToken);
-            return redactor.Redact(ReportWriter.Json([result]))!;
-        }
-        catch (HeadlessAuthUnavailableException ex)
-        {
-            throw new McpException(ex.Message);
+            return AgentJson.TestReport([result], redactor);
         }
         catch (Exception ex) when (ex is ArgumentException or ArgumentOutOfRangeException)
         {
@@ -144,8 +142,8 @@ public sealed class TapStudioTools(McpRuntime runtime)
         OnStep: (_, _) => ValueTask.CompletedTask,
         OnEntry: (_, _) => ValueTask.CompletedTask);
 
-    private async Task<string> RunStepAsync(
-        CliWorkspaceHost host,
+    private static async Task<string> RunStepAsync(
+        IWorkspaceHost host,
         RequestFile request,
         string? env,
         string? stage,
@@ -170,11 +168,7 @@ public sealed class TapStudioTools(McpRuntime runtime)
         try
         {
             var step = await runner.SendAsync(request, run, ct);
-            return JsonOutput.Serialize(step, redactor);
-        }
-        catch (HeadlessAuthUnavailableException ex)
-        {
-            throw new McpException(ex.Message);
+            return AgentJson.Serialize(step, redactor);
         }
         catch (WorkspaceParseException ex)
         {
@@ -182,14 +176,14 @@ public sealed class TapStudioTools(McpRuntime runtime)
         }
     }
 
-    private static RequestFile ResolveRequest(CliWorkspaceHost host, string target)
+    private static RequestFile ResolveRequest(IWorkspaceHost host, string target)
     {
         if (!TargetResolver.TryResolve(host.Workspace, target, [WorkspaceKind.Request], out var resolved, out var error))
             throw new McpException(error);
         return (RequestFile)host.Workspace.FindByPath(resolved.Path)!;
     }
 
-    private static string? ResolveEnv(CliWorkspaceHost host, string? env)
+    private static string? ResolveEnv(IWorkspaceHost host, string? env)
     {
         if (string.IsNullOrWhiteSpace(env)) return null;
         if (!TargetResolver.TryResolve(host.Workspace, env!, [WorkspaceKind.Env], out var resolved, out var error))
@@ -199,7 +193,7 @@ public sealed class TapStudioTools(McpRuntime runtime)
 
     /// <summary>Running against a workspace that doesn't parse is a broken repo, not a failed
     /// test — same rule the <c>test</c> command applies, same distinction the caller needs.</summary>
-    private static void ThrowIfBroken(CliWorkspaceHost host)
+    private static void ThrowIfBroken(IWorkspaceHost host)
     {
         if (host.Workspace.Errors.Count == 0) return;
         var first = host.Workspace.Errors[0];

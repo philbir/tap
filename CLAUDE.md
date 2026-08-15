@@ -66,12 +66,19 @@ from the UI are the same computation. Two consequences to respect when editing:
   change to both. Studio-only wire shapes stay in `Tap.Studio/Contracts/Dtos.cs`.
 - **The agent surface lives in `Tap.Execution/Agent/`** (backs the agent-facing CLI/MCP
   front doors): `WorkspaceInventory` (discovery read-model, auth profiles as name + type
-  only), `DynamicRequestFactory` (ad-hoc requests synthesized into a collection; relative
-  URLs only unless `AllowAnyUrl` — call `EnsureCollectionScoped` on the rendered result,
-  since a variable can expand to an absolute URL and skip the baseUrl join). Any echo of a
-  rendered request to an agent (CLI `--json`, MCP results) must go through
-  `ResolvedRequest.Redactor` (`SecretRedactor`, built during render; the pipeline extends it
-  with minted tokens) — never serialize `ResolvedRequest.Headers` raw.
+  only), `TargetResolver` (path/name/stem → file), `AgentJson` (the one JSON dialect every
+  agent surface emits), `DynamicRequestFactory` (ad-hoc requests synthesized into a
+  collection; relative URLs only unless `AllowAnyUrl` — call `EnsureCollectionScoped` on the
+  rendered result, since a variable can expand to an absolute URL and skip the baseUrl
+  join). Any echo of a rendered request to an agent (CLI `--json`, MCP results) must go
+  through `ResolvedRequest.Redactor` (`SecretRedactor`, built during render; the pipeline
+  extends it with minted tokens) — never serialize `ResolvedRequest.Headers` raw.
+- **`Tap.Studio.Mcp` is the shared MCP tool layer** (`TapStudioTools` +
+  `IMcpWorkspaceProvider`), served twice: `tap-studio mcp` hosts it over stdio (workspace
+  loaded per call, headless auth), and `Tap.Studio` maps it at `/mcp` over the live
+  `WorkspaceService` (streamable HTTP; token source is the user's interactive cache, so
+  PKCE-authed requests work without any credential leaving the Studio process). Tool
+  contracts must not fork: change them in `Tap.Studio.Mcp`, never per host.
 
 The rest of the repo:
 

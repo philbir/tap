@@ -87,6 +87,15 @@ public static class StudioHost
         builder.Services.AddSingleton<KnownWorkspaceStore>();
         builder.Services.AddSingleton<WorkspaceService>();
         builder.Services.AddSingleton<GitService>();
+
+        // The agent surface as MCP tools at /mcp, over the live WorkspaceService — same
+        // shared tool layer the CLI's stdio server hosts, but with this process's cached
+        // interactive tokens, so an agent can run PKCE-authed requests the user signed
+        // into without any credential leaving the Studio.
+        builder.Services.AddSingleton<Mcp.IMcpWorkspaceProvider, Mcp.StudioMcpProvider>();
+        builder.Services.AddMcpServer()
+            .WithHttpTransport()
+            .WithTools<Mcp.TapStudioTools>();
         builder.Services.AddHttpContextAccessor();
 
         builder.Services.AddHttpClient("auth");
@@ -197,6 +206,7 @@ public static class StudioHost
         OnePasswordEndpoints.Map(app);
         BrowserEndpoints.Map(app);
         AiEndpoints.Map(app);
+        app.MapMcp("/mcp");
 
         // Serve the bundled SPA. Tap.Studio.csproj's BuildStudioUi target copies
         // src/ui-studio/dist/** into wwwroot at build time. In Aspire dev where Vite

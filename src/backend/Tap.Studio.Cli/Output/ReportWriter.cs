@@ -235,34 +235,11 @@ public static class ReportWriter
         return buffer.ToString();
     }
 
-    /// <summary>
-    /// An envelope carrying the engine's own result shape per target, in the same camelCase the
-    /// Studio's API emits — so a script that reads this and a script that reads the SSE stream
-    /// see one set of field names.
-    ///
-    /// <para>Always an envelope, even for one target. A script shouldn't have to branch on
-    /// whether the caller happened to pass <c>--tag</c>. Public because <c>test --json</c>
-    /// prints this same document to stdout; keep it on the default encoder so
-    /// <see cref="Tap.Workspace.Rendering.SecretRedactor"/>'s JSON-escaped variants match.</para>
-    /// </summary>
+    /// <summary>The shared run-report envelope — <c>test --json</c>, this file report, and
+    /// the MCP <c>run_test</c> tool all emit <see cref="Tap.Execution.Agent.AgentJson"/>'s
+    /// document, so every reader sees one set of field names.</summary>
     public static string Json(IReadOnlyList<TestRunResultDto> runs)
-        => JsonSerializer.Serialize(
-            new JsonReport(
-                Ok: runs.All(r => r.Ok),
-                Passed: runs.Sum(r => r.Passed),
-                Failed: runs.Sum(r => r.Failed),
-                Skipped: runs.Sum(r => r.Skipped),
-                DurationMs: runs.Sum(r => r.DurationMs),
-                Runs: runs),
-            new JsonSerializerOptions
-            {
-                WriteIndented = true,
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-            });
-
-    private sealed record JsonReport(
-        bool Ok, int Passed, int Failed, int Skipped, double DurationMs,
-        IReadOnlyList<TestRunResultDto> Runs);
+        => Tap.Execution.Agent.AgentJson.TestReport(runs);
 
     /// <summary>Everything a reader needs to act on a failure, without opening the workspace:
     /// which step, which request, and which assertion said what.</summary>

@@ -63,13 +63,20 @@ tap-studio call POST /upload -c demo -d @payload.json --json
 
 ## Same surface as MCP tools
 
-`tap-studio mcp --workspace <dir>` serves this exact surface over stdio to MCP clients
-(this repo's `.mcp.json` registers it against `samples/sample-workspace`). The tools —
-`workspace_inventory`, `describe_request`, `send_request`, `call_request`, `run_test` —
-return the same redacted JSON documents as the `--json` commands, and `call_request`
-enforces the same relative-URL guard (`allowAnyUrl` only on explicit user instruction).
-When the tools are connected, prefer them over shelling out; the semantics are identical.
-The server re-reads the workspace on every call, so file edits are picked up immediately.
+The tools — `workspace_inventory`, `describe_request`, `send_request`, `call_request`,
+`run_test` — return the same redacted JSON documents as the `--json` commands, and
+`call_request` enforces the same relative-URL guard (`allowAnyUrl` only on explicit user
+instruction). When tools are connected, prefer them over shelling out; the semantics are
+identical. Two hosts serve them:
+
+- **`tap-studio mcp --workspace <dir>`** (stdio; this repo's `.mcp.json` registers it
+  against `samples/sample-workspace`). Headless auth, workspace re-read on every call so
+  file edits are picked up immediately.
+- **The running Studio at `<studio-api>/mcp`** (streamable HTTP). Same tools over the
+  Studio's live workspace — and its token cache, so requests behind interactive OAuth
+  (PKCE) work once the user has signed in through the Studio UI. If an authed request
+  comes back 401 via any surface and the profile is interactive, don't try to obtain a
+  token yourself: ask the user to sign in in the Studio, then use the Studio's `/mcp`.
 
 ## Reading results
 

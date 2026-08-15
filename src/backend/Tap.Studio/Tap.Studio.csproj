@@ -27,10 +27,12 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Tap.Execution\Tap.Execution.csproj" />
+    <ProjectReference Include="..\Tap.Studio.Mcp\Tap.Studio.Mcp.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="LibGit2Sharp" />
+    <PackageReference Include="ModelContextProtocol.AspNetCore" />
   </ItemGroup>
 
   <!-- Build the Studio React UI and sync it into wwwroot so the shipped binary

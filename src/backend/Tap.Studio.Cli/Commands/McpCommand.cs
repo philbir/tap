@@ -6,6 +6,7 @@ using Spectre.Console.Cli;
 using Tap.Execution;
 using Tap.Studio.Cli.Mcp;
 using Tap.Studio.Cli.Workspace;
+using Tap.Studio.Mcp;
 
 namespace Tap.Studio.Cli.Commands;
 
@@ -46,7 +47,7 @@ public sealed class McpCommand : AsyncCommand<McpCommand.Settings>
         var builder = Host.CreateApplicationBuilder();
         builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
 
-        builder.Services.AddSingleton(new McpRuntime(root, settings.UseCachedTokens));
+        builder.Services.AddSingleton<IMcpWorkspaceProvider>(new McpRuntime(root, settings.UseCachedTokens));
         builder.Services
             .AddMcpServer()
             .WithStdioServerTransport()

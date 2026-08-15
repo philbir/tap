@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ModelContextProtocol;
 using Tap.Studio.Cli.Mcp;
+using Tap.Studio.Mcp;
 
 namespace Tap.Tests.Agent;
 

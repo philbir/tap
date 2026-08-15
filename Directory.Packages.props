@@ -3,7 +3,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <AspireVersion>13.4.6</AspireVersion>
-    <AspNetCoreVersion>10.0.10</AspNetCoreVersion>
+    <AspNetCoreVersion>10.0.11</AspNetCoreVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="Aspire.AppHost.Sdk" Version="$(AspireVersion)" />

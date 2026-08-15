@@ -33,6 +33,17 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- `agent init` installs the agent skills into consumer repos. They are embedded from
+         the repo's own .claude/skills so there is exactly one source of truth — the skills
+         this repo dogfoods are the skills the tool ships. LogicalName pins forward slashes
+         via RecursiveDir (normalized at read time for Windows builds). -->
+    <EmbeddedResource Include="../../../.claude/skills/tap-studio/**/*.md"
+                      LogicalName="agent-skills/tap-studio/%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="../../../.claude/skills/tap-author/**/*.md"
+                      LogicalName="agent-skills/tap-author/%(RecursiveDir)%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <ItemGroup>
     <PackageReference Include="Spectre.Console" />
     <PackageReference Include="Spectre.Console.Cli" />
     <PackageReference Include="ModelContextProtocol" />

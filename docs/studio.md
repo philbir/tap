@@ -355,6 +355,7 @@ files, not two implementations that drift apart.
 | `tap-studio lint` | Parse the workspace and report what doesn't load. |
 | `tap-studio vars` | Print the resolved variable cascade, secrets masked. |
 | `tap-studio mcp` | Serve the workspace to MCP clients over stdio. |
+| `tap-studio agent init --env <claude\|codex\|copilot\|opencode>` | Install the agent skills + MCP registration for an agent environment, per project or per user. |
 
 `test`, `send`, and `call` take `--json` for a secret-redacted machine-readable result on
 stdout — the mode built for scripts and AI agents. See [agent-surface.md](agent-surface.md).

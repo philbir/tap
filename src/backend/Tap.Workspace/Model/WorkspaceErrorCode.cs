@@ -1,7 +1,7 @@
 namespace Tap.Workspace.Model;
 
 /// <summary>
-/// Canonical parse / render error codes — mirrors §14 of <c>docs/workspace-format.md</c>.
+/// Canonical parse / render error codes — mirrors §16 of <c>docs/workspace-format.md</c>.
 /// Each code is stable and forms part of the public API; tooling matches on the string.
 /// </summary>
 public static class WorkspaceErrorCode

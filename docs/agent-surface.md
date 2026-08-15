@@ -11,6 +11,7 @@ result an agent reads and a result a human sees in the Testing tab are one compu
 ## Contents
 
 - [The trust model](#the-trust-model)
+- [Getting set up: `agent init`](#getting-set-up-agent-init)
 - [Agent-friendly CLI](#agent-friendly-cli)
 - [Dynamic requests: `call`](#dynamic-requests-call)
 - [MCP servers](#mcp-servers)
@@ -41,6 +42,37 @@ Four rules hold on every agent-facing surface:
 This is policy, not a sandbox: it governs what the sanctioned surfaces will do. An agent
 with shell access could always run `curl` — the point is that the sanctioned path is
 also the easiest one, and it never requires a credential in the agent's context.
+
+## Getting set up: `agent init`
+
+One command wires a project (or a machine) up for an agent environment — it installs the
+skills and registers the MCP server in that environment's own config format:
+
+```bash
+tap-studio agent init --env claude                       # this project, for Claude Code
+tap-studio agent init --env claude --env copilot         # several environments at once
+tap-studio agent init --env codex --scope user           # this machine, all projects
+tap-studio agent init --env opencode --mcp               # just the MCP registration
+tap-studio agent init --env claude --skills              # just the skills
+```
+
+| `--env` | Skills go to | MCP registered in |
+|---|---|---|
+| `claude` | `.claude/skills/` (project) or `~/.claude/skills/` (user) | `.mcp.json` (project); user scope prints the `claude mcp add` command |
+| `codex` | `.tap/agent/` + a managed block in `AGENTS.md` (`~/.codex/AGENTS.md` for user) | `.codex/config.toml` (project) or `~/.codex/config.toml` (user) |
+| `copilot` | `.tap/agent/` + a managed block in `.github/copilot-instructions.md` | `.vscode/mcp.json` (`servers` key); user scope prints the VS Code step |
+| `opencode` | `.tap/agent/` + a managed block in `AGENTS.md` (`~/.config/opencode/AGENTS.md` for user) | `opencode.json` (project) or `~/.config/opencode/opencode.json` (user) |
+
+The skills are embedded in the `tap-studio` tool itself, so re-running `agent init`
+after a tool update refreshes them — that is the intended upgrade path. Everything is
+idempotent: registrations are added once (an existing `tap-studio` entry is left alone
+unless `--force`), and the instructions block is replaced between its markers, never
+duplicated. Config files owned by another app (Claude's `~/.claude.json`, Copilot's user
+profile) are never edited — the command prints the exact manual step instead.
+
+Project-scope MCP registrations pin `--workspace <relative path>` to the workspace found
+from the project root; user-scope ones omit it, so the server resolves whatever
+workspace the agent happens to be working in.
 
 ## Agent-friendly CLI
 

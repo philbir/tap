@@ -88,7 +88,7 @@ stages:
 
 | Field | Type | Notes |
 |---|---|---|
-| `auth` | path \| id-ref \| `"none"` | Overrides the collection's `defaultAuth`; `none` opts out. |
+| `auth` | path \| id-ref | Overrides the collection's `defaultAuth`; point at a `type: none` profile to opt out of an inherited default. |
 | `protocol` | `http` \| `websocket` | Default `http`. `websocket`: scheme normalizes to ws/wss, body (if any) is sent as the first text frame. WS requests run from the editor/send only — not from flows/test sets. |
 | `vars` | map<string, var-spec> | Request tier (top file tier). |
 | `transport` | mapping | `ignoreTlsErrors`, `timeoutMs` — overrides collection transport. |
@@ -143,8 +143,8 @@ any field marked *(s)* may reference a secret via `{{provider:name}}`:
 | `none` | — | Explicit opt-out profile. |
 | `bearer` | `token` *(s)* | `Authorization: Bearer <token>`. |
 | `basic` | `username`, `password` *(s)* | Basic auth header. |
-| `apiKey` | `in` (`header`\|`query`\|`cookie`), `name`, `value` *(s)* | Injects the key where `in` says. |
-| `oauth2` | `flow` (`authorization_code` \| `authorization_code_pkce` \| `client_credentials` \| `device_code` \| `password`), `tokenUrl`, `clientId` *(s)*, `clientSecret?` *(s)*, `authorizeUrl` (auth-code flows), `scopes[]`, `audience?`, `redirectUri?` | Token minted at run time and cached per stage — never written to files. Interactive flows (PKCE/device) need a human: Studio UI, or CLI `--use-cached-tokens` after the user signed in. `client_credentials`/`password` work headlessly. |
+| `apiKey` | `in` (`header`\|`query`\|`cookie`), `apiKeyName`, `apiKeyValue` *(s)* | Injects the key where `in` says (only `header` is applied today). Don't use `name`/`value` — `name` is the profile's display name. |
+| `oauth2` | `flow` (`authorization_code` \| `authorization_code_pkce` \| `client_credentials` \| `device_code` \| `password`), `tokenUrl`, `clientId` *(s)*, `clientSecret?` *(s)*, `authorizeUrl` (auth-code flows), `scopes[]`, `audience?` (no `redirectUri` — the runtime derives it and ignores the field) | Token minted at run time and cached per stage — never written to files. Interactive flows (PKCE/device) need a human: Studio UI, or CLI `--use-cached-tokens` after the user signed in. `client_credentials`/`password` work headlessly. |
 | `azure-cli` | `scope` (v2) or `resource` (v1) | Shells out to `az account get-access-token`; requires prior `az login`. |
 | `jwt` | `algorithm` (HS256/RS256/RS512/…), `key` *(s)*, claim fields | Renderer mints and signs the JWT itself. |
 | `github` | `mode` (`gh-cli` \| `pat`), for `pat`: `token` *(s)* | `gh-cli` shells out to `gh auth token`; adds GitHub API headers automatically. |

@@ -105,7 +105,8 @@ or the URL guard.
 
 ## Auth rules
 
-- Non-interactive auth (client-credentials, ROPC, `az` CLI, API keys, PATs) just works.
+- Non-interactive auth (client-credentials, ROPC, `az` CLI, `gh` CLI, API keys, PATs)
+  just works.
 - Interactive auth (browser PKCE) cannot be minted headlessly → exit 4. If the user has
   signed in through the Studio UI on this machine, `--use-cached-tokens` lets the run use
   their cached token. Suggest that flag on exit 4; don't loop retries.

@@ -15,35 +15,43 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "10.0.x"
 
       # Tap.Cli + Tap.Server bundle the Vite-built UI into wwwroot/ via the
       # BuildTapUi MSBuild target. The target shells out to `yarn build`, so
       # Node + Corepack must be on PATH at pack time.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
       - name: Enable Corepack
         run: corepack enable
 
+      # Dispatch inputs and step outputs go through `env:`, never straight into
+      # the script body — a `${{ }}` splice is textual, so a crafted version
+      # string would run as shell in the job that holds NUGET_API_KEY.
       - name: Resolve version
         id: ver
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            echo "version=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_VERSION" ]; then
+            echo "version=$INPUT_VERSION" >> "$GITHUB_OUTPUT"
           else
             # Tags are plain SemVer (no `v` prefix) — `0.1.0`, `0.1.0-alpha.4`.
             v="${GITHUB_REF#refs/tags/}"
@@ -51,10 +59,12 @@ jobs:
           fi
 
       - name: Pack
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
           dotnet pack Tap.slnx \
             -c Release \
-            -p:Version=${{ steps.ver.outputs.version }} \
+            -p:Version="$VERSION" \
             -o artifacts
 
       - name: List artifacts
@@ -62,13 +72,15 @@ jobs:
 
       - name: Push to NuGet.org
         if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
         run: |
           dotnet nuget push 'artifacts/*.nupkg' \
             --source https://api.nuget.org/v3/index.json \
-            --api-key "${{ secrets.NUGET_API_KEY }}" \
+            --api-key "$NUGET_API_KEY" \
             --skip-duplicate
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: nupkgs
           path: artifacts/*.nupkg

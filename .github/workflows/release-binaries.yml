@@ -15,6 +15,9 @@ on:
         type: boolean
         default: false
 
+permissions:
+  contents: read
+
 jobs:
   build:
     strategy:
@@ -42,18 +45,18 @@ jobs:
       # the Windows runner was hanging here for 6h.
       COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4.3.1
         with:
           dotnet-version: "10.0.x"
 
       # Tap.Cli + Tap.Server bundle the Vite-built UI into wwwroot/ via the
       # BuildTapUi MSBuild target. The target shells out to `yarn build`, so
       # Node + Corepack must be on PATH at publish time.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
 
@@ -65,12 +68,17 @@ jobs:
           # never has to download mid-build (avoids hangs on Windows).
           corepack prepare yarn@4.9.1 --activate
 
+      # Dispatch inputs and step outputs go through `env:`, never straight into
+      # the script body — a `${{ }}` splice is textual, so a crafted version
+      # string would execute as shell inside the release pipeline.
       - name: Resolve version
         id: ver
         shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            v="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            v="$INPUT_VERSION"
           else
             v="${GITHUB_REF#refs/tags/}"
           fi
@@ -78,24 +86,30 @@ jobs:
 
       - name: Publish self-contained single-file
         shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          dotnet publish src/Tap.Cli/Tap.Cli.csproj \
+          dotnet publish src/backend/Tap.Cli/Tap.Cli.csproj \
             -c Release \
-            -r ${{ matrix.rid }} \
+            -r "$RID" \
             --self-contained true \
             -p:PublishSingleFile=true \
             -p:IncludeNativeLibrariesForSelfExtract=true \
             -p:EnableCompressionInSingleFile=true \
             -p:DebugType=None \
             -p:DebugSymbols=false \
-            -p:Version=${{ steps.ver.outputs.version }} \
-            -o publish/${{ matrix.rid }}
+            -p:Version="$VERSION" \
+            -o "publish/$RID"
 
       - name: Stage archive contents
         shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          version="${{ steps.ver.outputs.version }}"
-          rid="${{ matrix.rid }}"
+          version="$VERSION"
+          rid="$RID"
           name="tap-${version}-${rid}"
           mkdir -p "stage/${name}"
           cp -R "publish/${rid}/." "stage/${name}/"
@@ -105,9 +119,12 @@ jobs:
 
       - name: Create archive (tar.gz)
         shell: bash
+        env:
+          RID: ${{ matrix.rid }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          version="${{ steps.ver.outputs.version }}"
-          rid="${{ matrix.rid }}"
+          version="$VERSION"
+          rid="$RID"
           name="tap-${version}-${rid}"
           tar -C stage -czf "${name}.tar.gz" "${name}"
           if command -v sha256sum >/dev/null 2>&1; then
@@ -116,7 +133,7 @@ jobs:
             shasum -a 256 "${name}.tar.gz" | awk '{print $1}' > "${name}.tar.gz.sha256"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: binary-${{ matrix.rid }}
           path: |
@@ -132,9 +149,9 @@ jobs:
       # Need write to attach release assets.
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: artifacts
           pattern: binary-*
@@ -142,9 +159,11 @@ jobs:
 
       - name: Resolve version
         id: ver
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            v="${{ github.event.inputs.version }}"
+          if [ -n "$INPUT_VERSION" ]; then
+            v="$INPUT_VERSION"
           else
             v="${GITHUB_REF#refs/tags/}"
           fi
@@ -159,11 +178,16 @@ jobs:
 
       - name: Create GitHub Release
         if: ${{ github.event.inputs.dry_run != 'true' }}
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ steps.ver.outputs.version }}
           name: Tap ${{ steps.ver.outputs.version }}
           generate_release_notes: true
+          # Any SemVer pre-release tag carries a `-` (0.5.0-beta.2). Without
+          # this, whichever of this job and desktop.yml creates the release
+          # first decides the flag — and this one would publish a beta as
+          # "Latest". desktop.yml already gates on the same expression.
+          prerelease: ${{ contains(steps.ver.outputs.version, '-') }}
           files: |
             artifacts/tap-*.tar.gz
             artifacts/SHA256SUMS

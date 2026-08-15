@@ -1,0 +1,142 @@
+/* VariableInput — raw <input> showing the actual text, with chip overlays sitting
+   BEHIND the text. Inspired by dreamr's VariableInput.module.css.
+   Sizes (xs/sm/md) drive the height, font size, and padding through CSS variables so
+   the chip overlay re-measures correctly. */
+
+.wrapper {
+  --vi-height: 36px;
+  --vi-font-size: 14px;
+  --vi-padding-left: 10px;
+  --vi-padding-right: 64px;
+  --vi-chip-inset: 6px;
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+}
+
+.wrapper[data-size='xs'] {
+  --vi-height: 30px;
+  --vi-font-size: 12px;
+  --vi-padding-left: 8px;
+  --vi-padding-right: 40px;
+  --vi-chip-inset: 4px;
+}
+
+.wrapper[data-size='md'] {
+  --vi-height: 42px;
+  --vi-font-size: 16px;
+  --vi-padding-left: 12px;
+  --vi-padding-right: 72px;
+  --vi-chip-inset: 8px;
+}
+
+.input {
+  width: 100%;
+  height: var(--vi-height);
+  padding: 0 var(--vi-padding-right) 0 var(--vi-padding-left);
+  font-size: var(--vi-font-size);
+  line-height: 1;
+  font-family: inherit;
+  color: var(--mantine-color-text);
+  background: transparent;
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
+  outline: none;
+  box-sizing: border-box;
+  position: relative;
+  z-index: 2;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+
+.input:hover { border-color: var(--mantine-color-tap-light-color); }
+.input:focus-visible,
+.input:focus {
+  border-color: var(--mantine-color-tap-filled);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--mantine-color-tap-filled) 20%, transparent);
+}
+
+.wrapper[data-mono='true'] .input { font-family: var(--mono); }
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: var(--mantine-radius-md);
+}
+
+.chip {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  height: calc(var(--vi-height) - var(--vi-chip-inset) * 2);
+  display: inline-block;
+  border-radius: 4px;
+  box-sizing: border-box;
+  color: transparent;
+  white-space: pre;
+}
+
+.chipValid {
+  background: var(--mantine-color-tap-light);
+  border: 1px solid color-mix(in srgb, var(--mantine-color-tap-filled) 35%, transparent);
+}
+.chipSecret {
+  background: var(--mantine-color-yellow-light);
+  border: 1px solid color-mix(in srgb, var(--mantine-color-yellow-6) 45%, transparent);
+}
+.chipUnknown {
+  background: var(--mantine-color-red-light);
+  border: 1px dashed var(--mantine-color-red-6);
+}
+/* Painted while the variable view is still loading — we haven't decided whether the
+   token resolves yet, so red would mislead. Subtle gray + animated pulse signals
+   "working on it" without committing to a verdict. */
+.chipPending {
+  background: var(--mantine-color-gray-light);
+  border: 1px dashed color-mix(in srgb, var(--mantine-color-gray-6) 50%, transparent);
+  animation: chipPendingPulse 1.4s ease-in-out infinite;
+}
+@keyframes chipPendingPulse {
+  0%, 100% { opacity: 0.55; }
+  50%      { opacity: 1; }
+}
+
+.measure {
+  position: absolute;
+  visibility: hidden;
+  height: 0;
+  overflow: hidden;
+  white-space: pre;
+  line-height: 1;
+  padding: 0;
+  margin: 0;
+  font-size: var(--vi-font-size);
+  font-family: inherit;
+  pointer-events: none;
+}
+.wrapper[data-mono='true'] .measure { font-family: var(--mono); }
+
+.actions {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.popupFooter {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--mantine-color-default-border);
+}

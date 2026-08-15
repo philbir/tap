@@ -1,0 +1,4 @@
+---
+kind: workspace
+name: samples
+---

@@ -1,0 +1,26 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Tap.Tests</RootNamespace>
+    <AssemblyName>Tap.Tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Tap.Studio is referenced for the spec emitters: the parse -> emit -> parse
+         round-trip is the contract that keeps hand-written and editor-written files
+         interchangeable, so it has to be tested against the real emitter. -->
+    <ProjectReference Include="../Tap.Workspace/Tap.Workspace.csproj" />
+    <ProjectReference Include="../Tap.Studio/Tap.Studio.csproj" />
+    <ProjectReference Include="../Tap.Studio.Cli/Tap.Studio.Cli.csproj" />
+  </ItemGroup>
+
+</Project>

@@ -5,6 +5,8 @@ import "./styles.css";
 const version = import.meta.env.VITE_TAP_VERSION ?? "v0.1.0";
 const repoUrl = import.meta.env.VITE_TAP_REPO_URL ?? "https://github.com/philbir/tap";
 
+type Product = "inspector" | "studio";
+
 type Feature = {
   title: string;
   text: string;
@@ -13,12 +15,36 @@ type Feature = {
 
 type DocSection = {
   id: string;
+  product: Product;
   eyebrow: string;
   title: string;
   body: string;
 };
 
-const features: Feature[] = [
+const principles: Feature[] = [
+  {
+    title: "Local-first, no account",
+    text: "Everything runs on your machine. No cloud workspace, no sync service, no telemetry. Quick tunnels are free; stable hostnames just need a domain you already own.",
+    glyph: "L",
+  },
+  {
+    title: "Plain text, in your repo",
+    text: "Studio's workspace is Markdown with YAML frontmatter — requests, collections, auth profiles, and environments all review as ordinary git diffs.",
+    glyph: "T",
+  },
+  {
+    title: "Secrets stay out of files",
+    text: "The Inspector never persists credentials. Studio resolves secret references at execute time and keeps OAuth tokens in your OS state folder, never in the workspace.",
+    glyph: "S",
+  },
+  {
+    title: "Explicit boundaries",
+    text: "Tailscale routes stay tailnet-only by default, public exposure is opt-in, and proxy auth (header, CIDR, country, OIDC) gates traffic before it reaches your service.",
+    glyph: "B",
+  },
+];
+
+const inspectorFeatures: Feature[] = [
   {
     title: "Tunnel without ceremony",
     text: "Use free TryCloudflare URLs, dashboard connector tokens, API-managed Cloudflare DNS, or Tailscale Serve/Funnel when your tailnet is the right boundary.",
@@ -56,66 +82,192 @@ const features: Feature[] = [
   },
 ];
 
+const studioFeatures: Feature[] = [
+  {
+    title: "Full request composition",
+    text: "Method, URL, query params, headers, and bodies as None / Form / Multipart / Raw / Binary / GraphQL — with JSON and XML formatting, multi-file uploads, and a GraphQL editor backed by the live schema.",
+    glyph: "R",
+  },
+  {
+    title: "Many authentication flows",
+    text: "OAuth 2.0 / OIDC with PKCE, client credentials, ROPC and device code; Microsoft Entra; Azure CLI direct and on-behalf-of; GitHub PAT, gh CLI, App and OAuth App; AWS SigV4; signed JWT; bearer, basic, API key, custom headers.",
+    glyph: "A",
+  },
+  {
+    title: "AI assistance",
+    text: "Hand the request to GitHub Copilot CLI or Claude Code — running locally under your existing CLI login — and get a proposed edit, with documentation, that you review before saving.",
+    glyph: "AI",
+  },
+  {
+    title: "Responses you can read",
+    text: "Status, duration, size, a syntax-highlighted body with image and binary previews, the exact request that went on the wire, the auth and variable flow behind it, and which secrets were resolved.",
+    glyph: "V",
+  },
+  {
+    title: "Streaming built in",
+    text: "Server-Sent Events stream into a live timeline, and requests marked protocol: websocket open a real socket that appends frames as they arrive.",
+    glyph: "S",
+  },
+  {
+    title: "Flows and test sets",
+    text: "A flow runs requests in order and carries values out of one response into the next. A test set groups checks that each run one request or one whole flow. Both are Markdown in tests/, and the Testing tab streams every result as it lands.",
+    glyph: "T",
+  },
+  {
+    title: "The same verdict in CI",
+    text: "The tap-studio .NET tool runs those flows and test sets headlessly and reports JUnit, TRX, JSON, or Markdown, with exit codes a pipeline can branch on. It calls the same engine the UI does, so a pull-request check and the Testing tab are one computation.",
+    glyph: "CI",
+  },
+  {
+    title: "Git-native workspace",
+    text: "Every request, collection, auth profile, flow, and test set is a Markdown file in your repo. Branch, diff, stage, and commit without leaving the app.",
+    glyph: "G",
+  },
+  {
+    title: "Variables and secrets",
+    text: "A six-level cascade over pluggable providers: allow-listed host environment, an encrypted file in the repo, Azure Key Vault, 1Password, and machine-local system variables. Files hold references; values arrive at execute time.",
+    glyph: "X",
+  },
+  {
+    title: "Desktop app",
+    text: "A native shell for macOS, Windows, and Linux that self-updates and registers a stable tap-studio:// redirect URI for OAuth sign-in.",
+    glyph: "D",
+  },
+];
+
 const docs: DocSection[] = [
   {
     id: "use-cases",
+    product: "inspector",
     eyebrow: "Why",
     title: "Use cases",
-    body: "Tap is for the moments when localhost needs to behave like a real internet endpoint, but you still want full visibility into every request.",
+    body: "For the moments when localhost needs to behave like a real internet endpoint, but you still want full visibility into every request.",
   },
   {
     id: "quickstart",
+    product: "inspector",
     eyebrow: "Start",
     title: "Quick start",
     body: "Run Tap from the CLI for ad hoc debugging, or add it to Aspire when tunnel wiring should live beside your app resources.",
   },
   {
     id: "entry-points",
+    product: "inspector",
     eyebrow: "Choose",
     title: "CLI or Aspire",
     body: "Both entry points use the same Tap.Server runtime. The difference is where configuration and lifecycle orchestration live.",
   },
   {
     id: "cli",
+    product: "inspector",
     eyebrow: "Terminal",
     title: "CLI reference",
     body: "The CLI is for one upstream URL at a time. Start local-only, add Cloudflare, or route through Tailscale Serve/Funnel.",
   },
   {
     id: "cloudflare",
+    product: "inspector",
     eyebrow: "Cloudflare",
     title: "Tunnel setup",
     body: "Existing-tunnel mode uses a Cloudflare Tunnel you have already created. API-managed mode needs a Cloudflare API token that can edit tunnels and DNS.",
   },
   {
     id: "tailscale",
+    product: "inspector",
     eyebrow: "Tailscale",
     title: "Serve and Funnel",
     body: "Tailscale support routes Tap through your tailnet. Serve is private by default; Funnel is public and should be paired with auth.",
   },
   {
     id: "auth",
+    product: "inspector",
     eyebrow: "Security",
-    title: "Authentication",
+    title: "Proxy authentication",
     body: "Authentication gates the public proxy path before traffic reaches the upstream. The local inspector UI remains the control plane.",
   },
   {
-    id: "architecture",
-    eyebrow: "Internals",
-    title: "Architecture",
-    body: "Tap has two entry points, a shared inspector host, and optional Cloudflare or Tailscale tunnel providers in front of the proxy port.",
-  },
-  {
     id: "modes",
+    product: "inspector",
     eyebrow: "Routing",
     title: "Tunnel modes",
     body: "Tap scales from a local capture proxy to Cloudflare-managed tunnels, Tailscale private Serve, and public Funnel.",
   },
   {
+    id: "architecture",
+    product: "inspector",
+    eyebrow: "Internals",
+    title: "Architecture",
+    body: "Tap has two entry points, a shared inspector host, and optional Cloudflare or Tailscale tunnel providers in front of the proxy port.",
+  },
+  {
     id: "config",
+    product: "inspector",
     eyebrow: "Operations",
     title: "Configuration",
     body: "Most configuration is written by the AppHost, with provider credentials, profile fields, and optional auth coming from normal .NET configuration.",
+  },
+  {
+    id: "studio-compose",
+    product: "studio",
+    eyebrow: "Compose",
+    title: "The request composer",
+    body: "One URL bar and eight tabs: params, headers, body, auth, variables, meta, docs, and the generated Markdown source.",
+  },
+  {
+    id: "studio-auth",
+    product: "studio",
+    eyebrow: "Identity",
+    title: "Authentication flows",
+    body: "Auth profiles are reusable files. Start from a template, fill only the fields that flow needs, and prove it works before wiring it to a request.",
+  },
+  {
+    id: "studio-testing",
+    product: "studio",
+    eyebrow: "Testing",
+    title: "Flows and test sets",
+    body: "Assertions answer whether one response looked right. Flows and test sets answer the two questions above that: does this multi-step exchange still work end to end, and do these requests still pass?",
+  },
+  {
+    id: "studio-cli",
+    product: "studio",
+    eyebrow: "Pipelines",
+    title: "The tap-studio CLI",
+    body: "The same runs, headless, through a .NET tool. It carries the execution engine and nothing that serves a UI, so it stays small enough to install on every runner.",
+  },
+  {
+    id: "studio-ai",
+    product: "studio",
+    eyebrow: "Assist",
+    title: "AI assistance",
+    body: "Studio spawns an AI coding CLI you already have installed, hands it the real shape of your workspace, and applies what it proposes as an unsaved edit.",
+  },
+  {
+    id: "studio-workspace",
+    product: "studio",
+    eyebrow: "Format",
+    title: "The workspace is your repo",
+    body: "Seven file kinds, all Markdown with YAML frontmatter. A runnable request is the composition of workspace, collection, stage, auth, environment, and request.",
+  },
+  {
+    id: "studio-variables",
+    product: "studio",
+    eyebrow: "Values",
+    title: "Variables and secrets",
+    body: "A cascade of scopes over pluggable providers, so a workspace file only ever contains a reference — never a secret value.",
+  },
+  {
+    id: "studio-providers",
+    product: "studio",
+    eyebrow: "Providers",
+    title: "Variable providers",
+    body: "Five backends behind the same {{token}} syntax: the allow-listed host environment, an encrypted file in the repo, Azure Key Vault, 1Password, and Studio's machine-local store.",
+  },
+  {
+    id: "studio-install",
+    product: "studio",
+    eyebrow: "Install",
+    title: "Get Tap Studio",
+    body: "Studio ships as a native desktop app wrapping the self-contained backend, and runs from source through the Aspire dev loop.",
   },
 ];
 
@@ -232,6 +384,241 @@ dotnet user-secrets set Tailscale:UseDocker "true" \\
   sampleScenarios: `dotnet run --project samples/Sample.AppHost -- --scenarios tailscale
 dotnet run --project samples/Sample.AppHost -- --scenarios cloudflare
 dotnet run --project samples/Sample.AppHost -- --scenarios all`,
+  studioRequest: `---
+kind: request
+name: Create customer
+auth: ../../auth/stripe-bearer.auth.md
+tags: [customer, write]
+---
+
+# Create customer
+
+Called during signup. Idempotent on \`email\`.
+
+\`\`\`http
+POST /v1/customers
+Content-Type: application/json
+
+{ "email": "{{customer.email}}", "name": "{{customer.name}}" }
+\`\`\``,
+  studioCollection: `---
+kind: collection
+name: Stripe
+baseUrl: https://api.stripe.com
+defaultAuth: ../../auth/stripe-bearer.auth.md
+defaultHeaders:
+  Accept: application/json
+stages:
+- name: live
+- name: test
+  defaultAuth: ../../auth/stripe-test.auth.md
+---`,
+  studioAuth: `---
+kind: auth
+name: Corp Entra
+type: oauth2
+flow: authorization_code
+authority: https://login.microsoftonline.com/{{tenant}}/v2.0
+clientId: '{{env:ENTRA_CLIENT_ID}}'
+scopes:
+  - https://graph.microsoft.com/.default
+---`,
+  studioWorkspace: `---
+kind: workspace
+name: acme-billing
+defaultEnv: environments/local.env.md
+variableProviders:
+- name: env
+  type: env
+- name: vault
+  type: azkv
+  settings:
+    vaultUrl: https://acme-prod.vault.azure.net
+---`,
+  studioEnv: `---
+kind: env
+name: Production
+vars:
+  api.baseUrl: https://api.stripe.com
+  STRIPE_KEY: '{{vault:stripe-live-key}}'
+---`,
+  studioFlow: `---
+kind: flow
+name: Checkout
+steps:
+- name: Create the order
+  request: ../collections/demo/create-order.req.md
+  extract:
+  - var: orderId
+    jsonpath: $.order.id
+- name: Read it back
+  request: ../collections/demo/get-order.req.md
+  vars:
+    id: '{{orderId}}'
+  assertions:
+  - jsonpath: $.order.status
+    equals: open
+tags: [demo, smoke]
+---`,
+  studioTestSet: `---
+kind: test
+name: Order API
+vars:
+  customer: cus_demo
+tests:
+- name: Rejects an unknown SKU
+  request: ../collections/demo/create-order.req.md
+  vars: { item: nope }
+  assertions:
+  - status: 404
+- name: Full checkout
+  flow: ./checkout.flow.md
+onFailure: continue
+tags: [demo, smoke]
+---`,
+  studioCliInstall: `dotnet tool install --global Tap.Studio.Cli
+
+# run a test set, a flow, or a single request
+tap-studio test "Demo API smoke"
+tap-studio test tests/checkout.flow.md
+tap-studio send "Create customer"`,
+  studioCliSelect: `# every test set and flow carrying the tag — repeated tags union
+tap-studio test --tag smoke --tag graphql
+
+# just the tests inside a set whose name contains "refund"
+tap-studio test "Order API" --filter refund
+
+# one entry by index, or list what is available
+tap-studio test "Order API" --only 2
+tap-studio test --list`,
+  studioCliVars: `tap-studio test "Order API" \\
+  --env ci --stage uat \\
+  --var customer=cus_ci \\
+  --var-file ci.env
+
+# what would the requests actually see?
+tap-studio vars --env ci
+tap-studio lint`,
+  studioCliCi: `- run: dotnet tool install --global Tap.Studio.Cli
+
+- run: tap-studio test "Demo API smoke" --env ci \\
+    --output junit --output-file results.xml
+  env:
+    TAP_SECRETS_ALLOWED: "DEMO_*_TOKEN"
+    DEMO_API_TOKEN: \${{ secrets.DEMO_API_TOKEN }}
+
+- run: |
+    tap-studio test --tag smoke \\
+      --output markdown --output-file summary.md
+    cat summary.md >> "$GITHUB_STEP_SUMMARY"`,
+  studioAllowlist: `# Names whose values the UI may show in clear text
+export TAP_VARS_ALLOWED="DEMO_*,ASPNETCORE_ENVIRONMENT"
+
+# Names that resolve at execute time but stay masked everywhere
+export TAP_SECRETS_ALLOWED="ACME_*_TOKEN,AZURE_*"
+
+# Neither set? The env provider exposes nothing at all.`,
+  studioProviders: `---
+kind: workspace
+name: acme-billing
+defaultEnv: environments/local.env.md
+defaultVariableProvider: kv-dev
+variableProviders:
+- name: env
+  type: env
+- name: local
+  type: file
+- name: kv-dev
+  type: azkv
+  settings:
+    vaultName: acme-dev
+- name: kv-prod
+  type: azkv
+  settings:
+    vaultName: acme-prod
+- name: 1p
+  type: 1password
+  settings:
+    mode: vault
+    vault: Acme Dev
+---`,
+  studioFileStore: `# .vars/local.yml — written by Studio; commit it
+variables:
+  api.baseUrl: https://localhost:5001
+  STRIPE_KEY:
+    value: 'enc:v1:<iv>:<ciphertext>:<tag>'
+    secret: true`,
+  studioAzkv: `- name: kv-prod
+  type: azkv
+  settings:
+    # -> https://acme-prod.vault.azure.net/
+    vaultName: acme-prod
+    # optional: pin one tenant
+    tenantId: <tenant-guid>
+    # optional: tokens keep the unprefixed name
+    prefix: billing-`,
+  studioAzkvLogin: `az login
+az account set --subscription "<subscription>"
+
+# DefaultAzureCredential also accepts environment
+# credentials, workload and managed identity, and
+# your IDE's Azure sign-in — nothing about the
+# credential lives in the workspace file.`,
+  studio1pEnvironment: `- name: 1p
+  type: 1password
+  settings:
+    mode: environment
+    # 1Password app: Developer
+    #   -> View Environments
+    #   -> Manage environment
+    #   -> Copy environment ID
+    environment: <environment-id>`,
+  studio1pVault: `- name: 1p
+  type: 1password
+  settings:
+    mode: vault
+    # every item title becomes a variable name
+    vault: Acme Dev
+    # default: password, then credential, then
+    # the first populated concealed field
+    field: credential`,
+  studio1pItem: `- name: acme-api
+  type: 1password
+  settings:
+    mode: item
+    vault: Acme Dev
+    # this item's fields become the variables:
+    # {{acme-api:username}}, {{acme-api:api-key}}
+    item: Acme API`,
+  studio1pCli: `# Nothing to configure on a normal desktop: op
+# reuses the 1Password app integration or your
+# existing "op signin" session.
+
+# Environments need op 2.38.2-beta.01 or later:
+op --version
+
+# Only when op is not on PATH:
+export TAP_OP_CLI=/opt/homebrew/bin/op`,
+  studioEnvBinding: `---
+kind: env
+name: Production
+defaultVariableProvider: kv-prod
+strictVariables: true
+providerAliases:
+  kv: kv-prod
+vars:
+  api.baseUrl: https://api.acme.com
+---`,
+  studioRun: `cd samples
+aspire run
+
+# your own repo instead of the sample workspace
+STUDIO_WORKSPACE=/path/to/your/repo aspire run
+
+# add the native desktop window
+RunDesktop=true aspire run`,
+  studioBuild: `scripts/build-desktop.sh          # publish sidecar + tauri build
+scripts/build-desktop.sh --dev    # publish sidecar + tauri dev`,
 };
 
 const App = () => (
@@ -239,10 +626,10 @@ const App = () => (
     <SiteNav />
     <main>
       <Hero />
-      <PublicTunnelWarning />
-      <FeatureGrid />
-      <FlowSection />
-      <Docs />
+      <ProductSplit />
+      <Principles />
+      <InspectorProduct />
+      <StudioProduct />
       <FinalCta />
     </main>
   </>
@@ -255,15 +642,17 @@ const SiteNav = () => (
       <span>Tap</span>
     </a>
     <nav aria-label="Main">
-        <a href="#features">Features</a>
-        <a href="#use-cases">Use cases</a>
-        <a href="#quickstart">Quick start</a>
-        <a href="#entry-points">CLI/Aspire</a>
-        <a href="#cli">CLI</a>
-        <a href="#cloudflare">Cloudflare</a>
-        <a href="#tailscale">Tailscale</a>
-        <a href="#auth">Auth</a>
-        <a href="#architecture">Architecture</a>
+      <a href="#products">Products</a>
+      <a href="#inspector">Tunnel + Inspector</a>
+      <a href="#cli">CLI</a>
+      <a href="#cloudflare">Cloudflare</a>
+      <a href="#tailscale">Tailscale</a>
+      <a href="#studio">Studio</a>
+      <a href="#studio-auth">Auth flows</a>
+      <a href="#studio-testing">Testing</a>
+      <a href="#studio-cli">CI</a>
+      <a href="#studio-providers">Variables</a>
+      <a href="#studio-ai">AI</a>
       <a className="nav-cta" href={repoUrl}>
         GitHub
       </a>
@@ -276,20 +665,20 @@ const Hero = () => (
     <div className="hero-copy">
       <div className="eyebrow">
         <span className="spark" />
-        Aspire-friendly tunnel inspector
+        Two local-first tools for HTTP
       </div>
-      <h1>localhost, ready for real callbacks.</h1>
+      <h1>See what arrives. Shape what you send.</h1>
       <p className="lead">
-        Tap gives local services a public URL for mobile hooks, webhooks, auth redirects,
-        partner integrations, and temporary demos, then captures the traffic so you can see
-        what actually happened.
+        Tap gives local services a public URL and captures everything that hits it — and Tap
+        Studio is the workbench where you compose those requests, run real authentication
+        flows, and keep the whole workspace in your repo as plain Markdown.
       </p>
       <div className="hero-actions">
-        <a className="button primary" href="#quickstart">
-          Start tunneling
+        <a className="button primary" href="#products">
+          See both products
         </a>
-        <a className="button ghost" href="#architecture">
-          See architecture
+        <a className="button ghost" href="#quickstart">
+          Start tunneling
         </a>
         <a className="button ghost" href={repoUrl}>
           View code
@@ -299,12 +688,13 @@ const Hero = () => (
         <span>{version}</span>
         <span>CLI</span>
         <span>Aspire</span>
+        <span>Desktop app</span>
         <span>TryCloudflare</span>
         <span>Tailscale Serve</span>
-        <span>Tailscale Funnel</span>
-        <span>API-managed DNS</span>
-        <span>QR links</span>
-        <span>HTTP replay</span>
+        <span>OAuth 2.0 / OIDC</span>
+        <span>AI assistant</span>
+        <span>Tests in CI</span>
+        <span>Git-native</span>
         <span>Free as tap water</span>
       </div>
     </div>
@@ -312,6 +702,184 @@ const Hero = () => (
       <source srcSet="./tap-hero-dark.png" media="(prefers-color-scheme: dark)" />
       <img src="./tap-hero.png" alt="A tap extracting traffic from a tunnel into an inspector panel" />
     </picture>
+  </section>
+);
+
+const ProductSplit = () => (
+  <section className="section" id="products">
+    <div className="section-heading">
+      <span className="kicker">The big picture</span>
+      <h2>Local HTTP development has two halves.</h2>
+      <p>
+        Sometimes the internet needs to reach your laptop and you need to see exactly what
+        arrived. Other times you are the client, and you need to compose a request,
+        authenticate properly, send it, and keep it somewhere your team can find next month.
+        Tap is one product for each half — use either alone, or both together.
+      </p>
+    </div>
+    <div className="product-split">
+      <article className="product-card">
+        <span className="product-index">01</span>
+        <h3>Tap Tunnel + Inspector</h3>
+        <p>
+          A public URL for localhost through Cloudflare Tunnel or Tailscale, with every request,
+          response, SSE event, and WebSocket frame captured on the way through. Runs as the{" "}
+          <code>tap</code> CLI or as .NET Aspire resources.
+        </p>
+        <div className="product-tags">
+          <span>CLI</span>
+          <span>Aspire</span>
+          <span>Cloudflare</span>
+          <span>Tailscale</span>
+          <span>Replay</span>
+          <span>QR</span>
+        </div>
+        <a className="button primary" href="#inspector">
+          Explore the Inspector
+        </a>
+      </article>
+      <article className="product-card">
+        <span className="product-index">02</span>
+        <h3>Tap Studio</h3>
+        <p>
+          An HTTP workbench: full request composition, a catalogue of real authentication flows,
+          multi-step flows and test sets that also run headlessly in CI, an AI assistant running
+          on your own machine, and a workspace that lives in your git repo as Markdown. Ships as a
+          desktop app.
+        </p>
+        <div className="product-tags">
+          <span>Desktop</span>
+          <span>OAuth 2.0</span>
+          <span>Entra</span>
+          <span>AWS SigV4</span>
+          <span>GraphQL</span>
+          <span>Key Vault</span>
+          <span>1Password</span>
+          <span>Flows</span>
+          <span>Tests</span>
+          <span>CI</span>
+          <span>AI</span>
+        </div>
+        <a className="button primary" href="#studio">
+          Explore Studio
+        </a>
+      </article>
+    </div>
+  </section>
+);
+
+const Principles = () => (
+  <section className="flow-band" id="principles">
+    <div className="section-heading">
+      <span className="kicker">Shared foundations</span>
+      <h2>Different jobs, same rules.</h2>
+      <p>
+        The two products share a philosophy more than they share code. Everything is local,
+        everything is inspectable, and nothing quietly leaves your machine.
+      </p>
+    </div>
+    <div className="feature-grid">
+      {principles.map((item) => (
+        <article className="feature-card" key={item.title}>
+          <span className="glyph">{item.glyph}</span>
+          <h3>{item.title}</h3>
+          <p>{item.text}</p>
+        </article>
+      ))}
+    </div>
+  </section>
+);
+
+const InspectorProduct = () => (
+  <>
+    <ProductBand
+      id="inspector"
+      index="01"
+      title="Tap Tunnel + Inspector"
+      body="Give a local service a real public URL for mobile hooks, webhooks, auth redirects, partner integrations, and temporary demos — then read back exactly what happened."
+    />
+    <PublicTunnelWarning />
+    <section className="section" id="inspector-features">
+      <div className="section-heading">
+        <span className="kicker">What it does</span>
+        <h2>Public callbacks and local debugging in one workflow.</h2>
+        <p>
+          Start with free TryCloudflare URLs. Add a free Cloudflare account and your own domain
+          when you want stable hostnames. Tap itself is free like tap water: drink as much as
+          you like.
+        </p>
+      </div>
+      <div className="feature-grid">
+        {inspectorFeatures.map((feature) => (
+          <article className="feature-card" key={feature.title}>
+            <span className="glyph">{feature.glyph}</span>
+            <h3>{feature.title}</h3>
+            <p>{feature.text}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+    <FlowSection />
+    <Docs product="inspector" label="Inspector docs" />
+  </>
+);
+
+const StudioProduct = () => (
+  <>
+    <ProductBand
+      id="studio"
+      index="02"
+      title="Tap Studio"
+      body="The HTTP workbench: compose requests, authenticate against real identity providers, execute, document — and keep the whole thing in your repository as reviewable Markdown."
+    />
+    <section className="section" id="studio-features">
+      <Screenshot
+        src="./screenshots/studio-request.png"
+        alt="Tap Studio composing a POST request and showing the response"
+        caption="One URL bar, eight tabs, and a response panel that shows the status, timing, body, the exact request that went on the wire, and which secrets were resolved."
+      />
+      <div className="section-heading section-gap">
+        <span className="kicker">What it does</span>
+        <h2>A request client that behaves like part of your codebase.</h2>
+        <p>
+          Studio is the other direction of travel: you are the client. It composes the call,
+          runs the authentication flow behind it, executes it, and stores the result as text
+          your team can review — then keeps proving it works, from the Testing tab and from
+          your pipeline.
+        </p>
+      </div>
+      <div className="feature-grid">
+        {studioFeatures.map((feature) => (
+          <article className="feature-card" key={feature.title}>
+            <span className="glyph">{feature.glyph}</span>
+            <h3>{feature.title}</h3>
+            <p>{feature.text}</p>
+          </article>
+        ))}
+      </div>
+    </section>
+    <Docs product="studio" label="Studio docs" />
+  </>
+);
+
+const ProductBand = ({
+  id,
+  index,
+  title,
+  body,
+}: {
+  id: string;
+  index: string;
+  title: string;
+  body: string;
+}) => (
+  <section className="product-band" id={id}>
+    <span className="product-index large">{index}</span>
+    <div>
+      <span className="kicker">Product {index}</span>
+      <h2>{title}</h2>
+      <p>{body}</p>
+    </div>
   </section>
 );
 
@@ -338,28 +906,6 @@ const PublicTunnelWarning = () => (
       src="./public-tunnel-warning.png"
       alt="A suspicious actor sending malicious traffic through a public tunnel into a computer"
     />
-  </section>
-);
-
-const FeatureGrid = () => (
-  <section className="section" id="features">
-    <div className="section-heading">
-      <span className="kicker">Why Tap</span>
-      <h2>Public callbacks and local debugging finally share one workflow.</h2>
-      <p>
-        Start with free TryCloudflare URLs. Add a free Cloudflare account and your own domain
-        when you want stable hostnames. Tap itself is free like tap water: drink as much as you like.
-      </p>
-    </div>
-    <div className="feature-grid">
-      {features.map((feature) => (
-        <article className="feature-card" key={feature.title}>
-          <span className="glyph">{feature.glyph}</span>
-          <h3>{feature.title}</h3>
-          <p>{feature.text}</p>
-        </article>
-      ))}
-    </div>
   </section>
 );
 
@@ -391,23 +937,26 @@ const FlowSection = () => (
   </section>
 );
 
-const Docs = () => (
-  <section className="docs-wrap" id="docs">
-    <aside className="docs-sidebar" aria-label="Docs navigation">
-      <span className="kicker">Docs</span>
-      {docs.map((doc) => (
-        <a href={`#${doc.id}`} key={doc.id}>
-          {doc.title}
-        </a>
-      ))}
-    </aside>
-    <div className="docs-content">
-      {docs.map((doc) => (
-        <DocBlock doc={doc} key={doc.id} />
-      ))}
-    </div>
-  </section>
-);
+const Docs = ({ product, label }: { product: Product; label: string }) => {
+  const sections = docs.filter((doc) => doc.product === product);
+  return (
+    <section className="docs-wrap" id={`${product}-docs`}>
+      <aside className="docs-sidebar" aria-label={label}>
+        <span className="kicker">{label}</span>
+        {sections.map((doc) => (
+          <a href={`#${doc.id}`} key={doc.id}>
+            {doc.title}
+          </a>
+        ))}
+      </aside>
+      <div className="docs-content">
+        {sections.map((doc) => (
+          <DocBlock doc={doc} key={doc.id} />
+        ))}
+      </div>
+    </section>
+  );
+};
 
 const DocBlock = ({ doc }: { doc: DocSection }) => {
   if (doc.id === "use-cases") {
@@ -538,6 +1087,8 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
             ["--tailscale-authkey", "Auth key for ephemeral userspace tailscaled. Env: TAILSCALE_AUTHKEY."],
             ["--tailscale-system", "Force system mode even when an auth key exists in env or profile."],
             ["--tailscale-login-server", "Override the coordination server for Headscale or other control planes."],
+            ["--auth-header / --auth-cidr / --auth-country", "Static checks on the public proxy path."],
+            ["--auth-oidc-*", "Require browser sign-in through an OpenID Connect issuer."],
             ["--config", "Load defaults from a JSON tap.config file."],
           ].map(([key, value]) => (
             <div className="config-row" role="row" key={key}>
@@ -720,6 +1271,11 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
           <CodeBlock title="CLI: OIDC" code={commands.cliOidc} />
           <CodeBlock title="Aspire: proxy auth" code={commands.aspireAuth} />
         </div>
+        <p className="doc-note">
+          This gate protects the tunnelled proxy path. It is unrelated to Tap Studio's
+          authentication profiles, which are about signing <em>your own</em> outbound requests —
+          see <a href="#studio-auth">Studio auth flows</a>.
+        </p>
       </section>
     );
   }
@@ -803,36 +1359,666 @@ const DocBlock = ({ doc }: { doc: DocSection }) => {
     );
   }
 
+  if (doc.id === "config") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="config-table" role="table" aria-label="Configuration">
+          {[
+            ["Cloudflare:TunnelToken", "Connector token for token tunnels."],
+            ["Cloudflare:ApiToken", "API-managed tunnels, DNS, and tunnel details."],
+            ["Tailscale:AuthKey", "Auth key for ephemeral userspace or Docker Tailscale nodes."],
+            ["Tailscale:UseSystem", "Sample AppHost flag that enables the system-daemon Tailscale scenario."],
+            ["Tailscale:UseDocker", "Sample AppHost flag that enables the Tailscale Docker scenario."],
+            ["Inspector__ProxyPort", "Captured application traffic."],
+            ["Inspector__UiPort", "Local UI, REST API, and SSE stream."],
+            ["Inspector__Provider", "cloudflare or tailscale; drives provider-specific UI and endpoints."],
+            ["Inspector__Ingress", "Serialized hostname-to-upstream routing table."],
+            ["Inspector__Tunnel__*", "Provider context for tunnel details, Tailscale socket path, mode, and status."],
+            ["Inspector__Auth__*", "Optional header, CIDR, country, and OIDC checks."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="callout">
+          <strong>Security boundary</strong>
+          <p>
+            Tap keeps the UI local and gates the public proxy path. Treat any tunnel as an
+            internet-facing endpoint and add an explicit access boundary for sensitive services.
+          </p>
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/inspector.md">
+          Full Inspector reference
+        </a>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-compose") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="config-table" role="table" aria-label="Request editor tabs">
+          {[
+            ["Params", "Query string as key/value rows, kept in sync with the URL bar."],
+            ["Headers", "Request headers, with completion for the common ones."],
+            ["Body", "None, Form, Multipart, Raw, Binary, or GraphQL. Raw bodies get JSON/Text/XML modes and a Format button; multipart handles multiple files."],
+            ["Auth", "Which profile applies: inherited from the collection, overridden here, or none."],
+            ["Variables", "Request-scoped variables with descriptions, defaults, and required flags."],
+            ["Meta", "Name, tags, and protocol — http or websocket."],
+            ["Docs", "Markdown documentation, rendered under the request. This is the file's body."],
+            ["Source", "The generated *.req.md, read-only. Studio is the only thing that writes YAML."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="mode-grid section-gap">
+          {[
+            ["Response panel", "Status, duration, size, and content type, with tabs for the body, headers, the exact request sent, the auth and variable flow, and the secrets resolved."],
+            ["Streaming", "text/event-stream responses stream into a live timeline; protocol: websocket opens a real socket and appends frames as they arrive."],
+            ["GraphQL", "The GraphQL body mode fetches the endpoint schema, so queries, mutations, and variables get completion and validation against the live server."],
+            ["Base URL and stages", "A request stores a path; the collection contributes the base URL, and a named stage can override it for dev, uat, or prod."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-auth") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-auth-wizard.png"
+          alt="Tap Studio's auth template catalogue"
+          caption="Creating an auth profile starts from a template catalogue; the wizard then asks only for the fields that flow actually needs."
+        />
+        <div className="config-table" role="table" aria-label="Authentication templates">
+          {[
+            ["GitHub PAT", "Classic or fine-grained personal access token."],
+            ["GitHub CLI", "Reuses whichever account gh auth login is signed in as."],
+            ["GitHub App", "Mints an RS256 JWT from the App key, exchanges for an installation token."],
+            ["GitHub OAuth App", "Interactive sign-in for tools acting as a user."],
+            ["OAuth 2.0 / OIDC", "Authorization code with PKCE, client credentials, ROPC, or device code — endpoints by hand or via .well-known discovery."],
+            ["Microsoft Entra", "Pre-filled AAD v2 authority; supply tenant and client id."],
+            ["Azure CLI", "az account get-access-token, direct or on-behalf-of."],
+            ["AWS Signature V4", "Signs requests with AWS access keys."],
+            ["Signed JWT", "Mints a self-signed JWT per call for service-to-service patterns."],
+            ["Bearer / Basic / API key", "Static credentials, referenced from a variable provider."],
+            ["Custom headers", "Free-form header and cookie injection."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <Screenshot
+          src="./screenshots/studio-auth-oauth2.png"
+          alt="An OAuth 2.0 authorization code with PKCE profile in Tap Studio"
+          caption="Turn on discovery and Studio fetches /.well-known/openid-configuration to fill in the endpoints. Try it runs the flow on its own, so you can prove a profile works before wiring it to a request."
+        />
+        <div className="mode-grid">
+          {[
+            ["Tokens stay out of the repo", "Access tokens, refresh tokens, and expiry live in your OS state folder, keyed by workspace and profile, tightened to user-only permissions. Refresh is automatic."],
+            ["The redirect URI is runtime-owned", "Studio derives it from its own base URL and shows it read-only. The desktop app registers the stable tap-studio:// deep link instead of a random loopback port."],
+            ["Pick your browser", "Interactive flows let you choose which installed browser and profile handles the sign-in, so a work tenant doesn't land in your personal session."],
+            ["Profiles are inheritable", "Set a default auth on the collection and override it per request — or opt out entirely with auth: none."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <CodeBlock title="auth/corp-entra.auth.md" code={commands.studioAuth} />
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-testing") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-testing.png"
+          alt="The Tap Studio Testing tab running a test set, with results streaming below"
+          caption="A test set's entries above, the run below. Results stream in as they land — and the last entry here runs a whole flow, expanded to its steps, the request each one sent, and every assertion verdict."
+        />
+        <div className="config-table" role="table" aria-label="Testing file kinds">
+          {[
+            ["*.flow.md", "A flow: an ordered list of steps. Each step names an existing request, may override its variables, and may extract values out of its response for the steps below."],
+            ["*.test.md", "A test set: variables that apply to the whole run, plus a list of tests that each run one request or one whole flow, with extra assertions layered on the target's own."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="tests/checkout.flow.md" code={commands.studioFlow} />
+          <CodeBlock title="tests/order-api.test.md" code={commands.studioTestSet} />
+        </div>
+        <div className="callout">
+          <strong>Step one binds it, step two reads it</strong>
+          <p>
+            That is the whole mechanism. Extract from a JSONPath, an XPath, a header, the status,
+            the duration, the whole body, or a regex capture group — and in the editor the row
+            reads left to right as the sentence it is: variable, arrow, source. A value that
+            doesn't turn up fails the step rather than quietly binding nothing, because the next
+            request is about to send an unexpanded token and saying so here beats a strange URL
+            two steps later. Mark it optional with a default when it genuinely is.
+          </p>
+        </div>
+        <div className="mode-grid section-gap">
+          {[
+            ["Neither request knows it is in a flow", "Steps point at the same files the Requests tab sends, carrying the same assertions. The flow only supplies variables and carries values across. A failed step stops the flow, because everything after it would run against a state that never happened."],
+            ["Set variables are the last word", "A test set's variables sit above the environment and above the request's own, which is what lets one set pin an identity for every check inside it. Values bound by extract beat even those — a flow whose id could be overridden by its caller is no longer a flow."],
+            ["Keep going, or stop the set", "By default a failing test doesn't stop the others; one broken endpoint shouldn't hide the state of the rest. Switch onFailure to stop for entries that build on each other."],
+            ["A flow is a test target", "A test entry runs either a request or a whole flow. Assertions on a flow entry check the last step's response — the one a caller of the flow actually sees."],
+            ["Results stream as they land", "A ten-entry set against a slow API reports progress instead of appearing all at once. Each row expands to the request that ran, every assertion verdict, the values a step bound, and the response body. Failures open themselves, and one test can be re-run from its own row."],
+            ["Runs read what is on disk", "Run is disabled while there are unsaved edits — the alternative is a green result for a file that doesn't exist yet. Nothing is persisted either: a run annotates the screen, and an extracted value lives only for the length of it."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/studio.md#tests-and-flows">
+          Read the testing guide
+        </a>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-cli") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <CodeBlock title="Install and run" code={commands.studioCliInstall} />
+        <div className="config-table section-gap" role="table" aria-label="tap-studio commands">
+          {[
+            ["tap-studio test", "Run a test set or a flow."],
+            ["tap-studio send", "Send one request and evaluate its assertions."],
+            ["tap-studio lint", "Parse the workspace and report what doesn't load."],
+            ["tap-studio vars", "Print the resolved variable cascade, secrets masked."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="callout">
+          <strong>It is the same engine</strong>
+          <p>
+            The Studio's API and the CLI both call Tap.Execution, so a verdict from a pipeline and
+            a verdict from the Testing tab are the same computation over the same files — not two
+            implementations that drift apart. tap-studio is a separate package from the tap tunnel
+            CLI: different product, different command, both installable side by side.
+          </p>
+        </div>
+        <div className="mode-grid section-gap">
+          {[
+            ["Name it the way you read it", "A target is a workspace-relative path, the name from the file's frontmatter, or its filename stem — so the thing on the Testing tab is the thing you can type. An ambiguous name lists the candidates instead of guessing."],
+            ["The workspace finds itself", "Discovery walks up from the working directory to the nearest tap.md, the way git finds a repo. Pass --workspace to override it."],
+            ["A selection that matches nothing is an error", "A misspelled --tag that quietly ran zero tests would leave a pipeline passing forever with nothing in the output to notice it by. So an unmatched tag lists the tags that do exist, and exits 2."],
+            ["Input variables win", "--var and --var-file land in the same tier the UI's per-run overrides use, above every file scope. Later files beat earlier ones, and --var beats all of them."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="Selecting what runs" code={commands.studioCliSelect} />
+          <CodeBlock title="Environment, stage, and input variables" code={commands.studioCliVars} />
+        </div>
+        <CodeBlock title=".github/workflows/api-tests.yml" code={commands.studioCliCi} />
+        <div className="config-table section-gap" role="table" aria-label="Report formats">
+          {[
+            ["--output junit", "Ingested by GitHub Actions, GitLab, Azure DevOps, and Jenkins without a plugin, so a failed assertion is a failed test in the UI rather than a line in a log. A tagged run writes one testsuite per target."],
+            ["--output trx", "Azure DevOps' native reporting. Several targets merge into one TestRun."],
+            ["--output json", "Scripting. Always an envelope — ok, passed, failed, skipped, durationMs, runs — whatever the target count, so nothing has to branch on how the run was selected."],
+            ["--output markdown", "The places a human reads. Verdict first, then failures in full, then a table per target; passing targets collapse into a details block and failing ones stay open."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="config-table section-gap" role="table" aria-label="Exit codes">
+          {[
+            ["0", "Everything that ran, passed."],
+            ["1", "A test or assertion failed."],
+            ["2", "Usage error — unknown or ambiguous name, bad option, a selection matching nothing."],
+            ["3", "Workspace error — no tap.md, or a file that doesn't parse."],
+            ["4", "Auth couldn't be acquired without a human."],
+            ["130", "Cancelled."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <p className="doc-note">
+          One versus everything above it is the distinction worth having: a red build because the
+          API misbehaved is a different situation from a red build because the runner couldn't do
+          its job, and a single exit code for both makes them indistinguishable from a dashboard.
+        </p>
+        <div className="callout">
+          <strong>Auth that refuses rather than hangs</strong>
+          <p>
+            Bearer, basic, API key, custom, AWS SigV4, GitHub PAT, OAuth 2.0 client credentials and
+            ROPC, and Azure CLI all mint without a human — federated credentials included. An
+            interactive grant fails immediately with exit 4, naming the profile and the
+            alternatives, instead of blocking the job on a sign-in prompt nobody can see. Secrets
+            reach the run through the same variable providers the UI uses; the env provider is the
+            natural CI path, deny-by-default behind TAP_SECRETS_ALLOWED. The developer token cache
+            is ignored unless you pass --use-cached-tokens, because a run that passes on a warm
+            token from someone's laptop is a test that didn't really run.
+          </p>
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/studio.md#running-tests-from-ci">
+          Read the CI guide
+        </a>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-ai") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-assistant.png"
+          alt="The Tap Studio AI assistant proposing an edit to a request"
+          caption="The assistant proposes; you apply. Its edit lands in the editor as an unsaved change you review and save — or discard."
+        />
+        <div className="mode-grid">
+          {[
+            ["Your CLI, your login", "Studio spawns GitHub Copilot CLI or Claude Code from your machine per request instead of bundling an SDK, so there is no extra native dependency and no second set of credentials."],
+            ["It sees the workspace", "The prompt carries the current request, the collection's base URL, default auth and shared headers, the available auth profiles, the environment names, and the variable catalogue with scopes and secret flags."],
+            ["It proposes, you apply", "The assistant never writes files. It returns a structured request that the UI applies as an unsaved edit; re-apply is one click."],
+            ["It documents as it goes", "New or meaningfully changed requests come back with Markdown documentation, and it refines existing notes rather than overwriting them."],
+            ["No inlined secrets", "Anything sensitive has to be a {{variable}} reference — the assistant is told never to hardcode a token or key."],
+            ["Model choice", "Pick the provider and model in Settings; the status endpoint reports what was detected and what still needs setup."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-workspace") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <Screenshot
+          src="./screenshots/studio-git.png"
+          alt="A request edit shown as an ordinary git diff inside Tap Studio"
+          caption="Because a request is a couple of lines of Markdown, review, blame, cherry-pick, and revert all work the way they do for code. Branch, stage, diff, and commit without leaving the app."
+        />
+        <div className="config-table" role="table" aria-label="Workspace file kinds">
+          {[
+            ["tap.md", "The workspace: name, default environment, variable providers, workspace-wide variables."],
+            ["_collection.md", "A collection: base URL, named stages, default auth, default headers, collection variables."],
+            ["*.req.md", "One request, as a fenced http block plus Markdown documentation."],
+            ["*.auth.md", "A reusable authentication profile."],
+            ["*.env.md", "A named environment: a set of variables and secret references."],
+            ["*.flow.md", "A flow: requests in order, with values carried from one response into the next."],
+            ["*.test.md", "A test set: run-wide variables plus a list of tests, each running a request or a flow."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="callout">
+          <strong>A runnable request is a composition</strong>
+          <p>
+            Workspace + collection (+ stage) + auth + environment + request. No single file is the
+            whole story, and sub-folders inside a collection are pure grouping — they carry no
+            metadata and no inheritance.
+          </p>
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="collections/stripe/create-customer.req.md" code={commands.studioRequest} />
+          <CodeBlock title="collections/stripe/_collection.md" code={commands.studioCollection} />
+          <CodeBlock title="tap.md" code={commands.studioWorkspace} />
+          <CodeBlock title="environments/prod.env.md" code={commands.studioEnv} />
+        </div>
+        <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/workspace-format.md">
+          Read the workspace format spec
+        </a>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-variables") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="callout">
+          <strong>Two token shapes</strong>
+          <p>
+            `{"{{name}}"}` resolves from the scope cascade first, then the default provider, then
+            the remaining providers in registration order — first hit wins.{" "}
+            `{"{{provider:name}}"}` resolves only against that provider, with no fall-through.
+            Write a backslash before the braces for a literal.
+          </p>
+        </div>
+        <div className="flow section-gap" aria-label="Variable cascade">
+          {["workspace", "collection", "stage", "env", "request", "run"].map((step, index) => (
+            <React.Fragment key={step}>
+              <div className="flow-node">{step}</div>
+              {index < 5 ? <div className="flow-link" /> : null}
+            </React.Fragment>
+          ))}
+        </div>
+        <div className="mode-grid section-gap">
+          {[
+            ["Scopes carry the boring values", "Base URLs, tenant names, page sizes — the things that differ per environment and are fine to read in a diff. They live in the vars block of the workspace, collection, stage, env, or request file."],
+            ["Providers carry everything else", "A provider is a named, typed connection to somewhere values actually live. The workspace file records the name and the type; the value is fetched when the request runs."],
+            ["Declared in two places", "Workspace providers live in tap.md and travel with the repo. System providers live in ~/.tap/system.json and follow the machine. A workspace provider shadows a system one with the same name."],
+            ["Every read is recorded", "Each execution logs which provider answered which name and whether it was secret, so the response's Secrets tab can show what a request depends on without surfacing a value."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="code-grid">
+          <CodeBlock title="tap.md — declaring providers" code={commands.studioProviders} />
+          <CodeBlock title="environments/prod.env.md" code={commands.studioEnv} />
+        </div>
+        <p className="doc-note">
+          Providers are read on demand and cached per render, so one variables panel doesn't spawn
+          a vault round trip per row. Each type is covered below in{" "}
+          <a href="#studio-providers">Variable providers</a>.
+        </p>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-providers") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="config-table" role="table" aria-label="Provider types">
+          {[
+            ["env", "Read", "Allow-listed variables from the process Studio runs in."],
+            ["file", "Read / write", "An encrypted YAML file inside the workspace."],
+            ["azkv", "Read / write", "Azure Key Vault via DefaultAzureCredential."],
+            ["1password", "Read / write", "A 1Password Environment, vault, or item via the op CLI."],
+            ["system", "Read / write", "Studio's own machine-local variable list."],
+          ].map(([key, mode, value]) => (
+            <div className="config-row wide" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span className="provider-chip mode" role="cell">
+                {mode}
+              </span>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="step-list section-gap">
+          <MiniPanel title="Pick a scope">
+            Add a provider from Settings → Variable providers when it belongs to the machine, or
+            from the workspace editor when it belongs to the repo. Same shape either way: a name,
+            a type, and a settings bag.
+          </MiniPanel>
+          <MiniPanel title="The form comes from the provider">
+            Each type publishes its own field list, so the dialog shows exactly the settings that
+            type understands — with vault pickers, CLI auto-detection, and fields that appear only
+            when the mode they belong to is selected.
+          </MiniPanel>
+          <MiniPanel title="Test before you save">
+            Test runs a real listing against the draft settings — bounded to 20 seconds so a stalled
+            credential probe fails loudly — and reports how many variables came back. A file
+            provider whose passphrase is wrong is reported as a failure, not an empty vault.
+          </MiniPanel>
+          <MiniPanel title="Then browse it">
+            Saved providers list their variable names in the Variables panel with a secret badge and
+            a count. Values stay masked until you ask for one explicitly, and Refresh drops the
+            provider's cached listing.
+          </MiniPanel>
+        </div>
+
+        <ProviderDetail
+          id="provider-env"
+          name="Host environment"
+          type="env"
+          mode="Read-only"
+          blurb={
+            <>
+              Exposes variables from the process Studio runs in — the natural fit for values your
+              shell, CI job, or `direnv` setup already exports. Membership is decided by two host
+              environment variables rather than by the workspace, so no file in the repo can widen
+              what a provider can reach. Both take comma-separated globs, and a name on both lists
+              is treated as secret. Set neither and the provider exposes nothing.
+            </>
+          }
+          settings={[
+            ["TAP_VARS_ALLOWED", "Names exposed as plain variables — values may be displayed."],
+            ["TAP_SECRETS_ALLOWED", "Names that resolve at execute time but stay masked in every UI surface."],
+          ]}
+        >
+          <CodeBlock title="Allowlisting host environment variables" code={commands.studioAllowlist} />
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-file"
+          name="Encrypted file"
+          type="file"
+          mode="Read / write"
+          blurb={
+            <>
+              A YAML store at `.vars/&lt;provider&gt;.yml` inside the workspace, written by Studio
+              rather than by hand. Values marked secret are encrypted at rest with AES-256-GCM under
+              a key derived from a passphrase (PBKDF2-HMAC-SHA256, 200k iterations), so the file
+              itself is safe to commit. Plain values work without a passphrase; storing a secret
+              requires one. Keep the passphrase on a system-scope provider so it stays in
+              `~/.tap/system.json` instead of the repo.
+            </>
+          }
+          settings={[
+            ["encryptionKey", "Passphrase the AES key is derived from. Required before any secret value can be stored."],
+          ]}
+        >
+          <CodeBlock title=".vars/local.yml" code={commands.studioFileStore} />
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-azkv"
+          name="Azure Key Vault"
+          type="azkv"
+          mode="Read / write"
+          blurb={
+            <>
+              Reads and writes secrets in an Azure Key Vault through `DefaultAzureCredential`, so it
+              picks up `az login`, environment credentials, workload and managed identity, or your
+              IDE's Azure sign-in — no client secret in the workspace file. Listing returns names
+              and metadata only; a value is fetched when a token actually references it. Names Key
+              Vault cannot hold (anything outside `A-Z a-z 0-9 -`) count as a miss rather than an
+              error, so a bare token keeps falling through to the next provider.
+            </>
+          }
+          settings={[
+            ["vaultName", "Required. Short vault name; expands to https://<name>.vault.azure.net/. The settings form can pick from the vaults you can see."],
+            ["tenantId", "Pins authentication to one tenant when your account can reach several."],
+            ["prefix", "Prepended to every Key Vault lookup. Tokens keep using the unprefixed name."],
+          ]}
+        >
+          <div className="code-grid">
+            <CodeBlock title="tap.md entry" code={commands.studioAzkv} />
+            <CodeBlock title="Signing in" code={commands.studioAzkvLogin} />
+          </div>
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-1password"
+          name="1Password"
+          type="1password"
+          mode="Read / write"
+          blurb={
+            <>
+              Backed by the local `op` CLI, which is already authenticated on your machine — through
+              the 1Password desktop app integration and biometric unlock, or an existing `op signin`
+              session. Like Key Vault, the provider carries no credentials of its own. Three shapes,
+              chosen by the mode: an Environment, a whole vault, or a single item.
+            </>
+          }
+          settings={[
+            ["mode", "environment, vault, or item. Decides which of the fields below apply."],
+            ["environment", "Environment mode. The Environment ID copied from the 1Password app."],
+            ["vault", "Vault mode and item mode. Vault name or ID; every lookup is scoped to it."],
+            ["item", "Item mode. The item whose fields become this provider's variables."],
+            ["field", "Vault mode. Which field holds the value. Empty falls back to password, then credential, then the first concealed field."],
+            ["account", "Account shorthand or sign-in address — only needed when op is signed in to several."],
+            ["serviceAccountToken", "For headless hosts. Empty uses whatever session op already has."],
+            ["cliPath", "Override when op isn't on PATH. Otherwise TAP_OP_CLI, then the usual install locations, then PATH."],
+          ]}
+        >
+          <div className="mode-grid section-gap">
+            {[
+              ["Environment mode", "A 1Password Environment is already a flat name-to-value namespace, which is exactly what a variable provider is — so its variables become the provider's, in one call. Read-only: the CLI can't write an Environment back. Environments are still beta and need op 2.38.2-beta.01 or later."],
+              ["Vault mode", "Every item in the vault becomes one variable, named after the item's title and valued by its field. This mirrors the Key Vault model: vault, name, value. Writing a name that isn't there yet creates the item."],
+              ["Item mode", "One item's fields become the variables — username, password, and any custom field you added. Section-scoped fields are addressed as section.field, the same spelling op's own assignment syntax uses."],
+              ["Set-up help built in", "The settings form detects the op binary for you and can browse the vaults your session can see, so the vault field is a picker rather than a string you have to spell correctly."],
+            ].map(([name, body]) => (
+              <article className="mode-card" key={name}>
+                <strong>{name}</strong>
+                <p>{body}</p>
+              </article>
+            ))}
+          </div>
+          <div className="code-grid">
+            <CodeBlock title="Environment mode" code={commands.studio1pEnvironment} />
+            <CodeBlock title="Vault mode" code={commands.studio1pVault} />
+            <CodeBlock title="Item mode" code={commands.studio1pItem} />
+            <CodeBlock title="The op CLI" code={commands.studio1pCli} />
+          </div>
+          <p className="doc-note">
+            1Password docs: <a href="https://developer.1password.com/docs/cli/get-started/">get started with the CLI</a>
+            {" "}and <a href="https://developer.1password.com/docs/environments/">Environments</a>.
+          </p>
+        </ProviderDetail>
+
+        <ProviderDetail
+          id="provider-system"
+          name="System variables"
+          type="system"
+          mode="Read / write"
+          blurb={
+            <>
+              Always registered, and backed by the same `~/.tap/system.json` the Settings screen
+              edits — so a value you type into Settings is a variable every workspace on this machine
+              can resolve. This is where a personal token belongs when it should never travel with
+              the repo. Point `TAP_SYSTEM_DIR` somewhere else to relocate the file.
+            </>
+          }
+          settings={[]}
+        />
+
+        <div className="section-heading section-gap">
+          <span className="kicker">Per environment</span>
+          <h2>One vault per environment, one token in the request.</h2>
+          <p>
+            A request shouldn't have to know whether it is running against dev or prod. An
+            environment can bind provider names, so the same token reads from a different vault
+            depending on which environment is active.
+          </p>
+        </div>
+        <div className="config-table" role="table" aria-label="Environment provider binding">
+          {[
+            ["defaultVariableProvider", "The provider bare {{name}} tokens hit first, and the one that receives writes made without naming a target. Precedence: environment, then workspace, then system."],
+            ["providerAliases", "Alias-to-provider bindings. Requests use a stable prefix like {{kv:stripe-key}}; each environment points kv at its own provider."],
+            ["strictVariables", "With a default provider set, a bare token that misses it fails instead of falling through — so a prod run can never silently pick up a dev value."],
+          ].map(([key, value]) => (
+            <div className="config-row" role="row" key={key}>
+              <code role="cell">{key}</code>
+              <span role="cell">{value}</span>
+            </div>
+          ))}
+        </div>
+        <div className="code-grid section-gap">
+          <CodeBlock title="environments/prod.env.md" code={commands.studioEnvBinding} />
+          <CodeBlock title="tap.md — both vaults registered" code={commands.studioProviders} />
+        </div>
+        <div className="callout">
+          <strong>What never reaches a file</strong>
+          <p>
+            Workspace files hold provider names and references, not values. Settings the provider
+            marks sensitive leave the API as `***` and are only ever sent back as that same mask,
+            so the browser never receives one. Secret values are masked in every listing until you
+            ask for a specific one, and the execution trace records provider, name, and secret flag
+            — never the value. Keep secret-bearing settings on system-scope providers; workspace
+            providers are written into `tap.md` verbatim.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  if (doc.id === "studio-install") {
+    return (
+      <section className="doc-block" id={doc.id}>
+        <DocHeader doc={doc} />
+        <div className="mode-grid">
+          {[
+            ["macOS", "A signed .dmg / .app for Apple Silicon and Intel."],
+            ["Windows", "An .msi and an NSIS setup .exe."],
+            ["Linux", "A .deb package."],
+            ["Auto-update", "Each release publishes a signed manifest the updater client polls, so the app keeps itself current."],
+          ].map(([name, body]) => (
+            <article className="mode-card" key={name}>
+              <strong>{name}</strong>
+              <p>{body}</p>
+            </article>
+          ))}
+        </div>
+        <div className="code-grid">
+          <CodeBlock title="Run from source" code={commands.studioRun} />
+          <CodeBlock title="Build the desktop bundle" code={commands.studioBuild} />
+        </div>
+        <p className="doc-note">
+          The dev loop starts a demo API that exercises every verb, content type, SSE, WebSockets,
+          GraphQL, and a real OAuth2/OIDC server — so every Studio feature has something to talk to
+          out of the box.
+        </p>
+        <a className="text-link" href={`${repoUrl}/releases`}>
+          Download Tap Studio
+        </a>
+      </section>
+    );
+  }
+
   return (
     <section className="doc-block" id={doc.id}>
       <DocHeader doc={doc} />
-      <div className="config-table" role="table" aria-label="Configuration">
-        {[
-          ["Cloudflare:TunnelToken", "Connector token for token tunnels."],
-          ["Cloudflare:ApiToken", "API-managed tunnels, DNS, and tunnel details."],
-          ["Tailscale:AuthKey", "Auth key for ephemeral userspace or Docker Tailscale nodes."],
-          ["Tailscale:UseSystem", "Sample AppHost flag that enables the system-daemon Tailscale scenario."],
-          ["Tailscale:UseDocker", "Sample AppHost flag that enables the Tailscale Docker scenario."],
-          ["Inspector__ProxyPort", "Captured application traffic."],
-          ["Inspector__UiPort", "Local UI, REST API, and SSE stream."],
-          ["Inspector__Provider", "cloudflare or tailscale; drives provider-specific UI and endpoints."],
-          ["Inspector__Ingress", "Serialized hostname-to-upstream routing table."],
-          ["Inspector__Tunnel__*", "Provider context for tunnel details, Tailscale socket path, mode, and status."],
-          ["Inspector__Auth__*", "Optional header, CIDR, country, and OIDC checks."],
-        ].map(([key, value]) => (
-          <div className="config-row" role="row" key={key}>
-            <code role="cell">{key}</code>
-            <span role="cell">{value}</span>
-          </div>
-        ))}
-      </div>
-      <div className="callout">
-        <strong>Security boundary</strong>
-        <p>
-          Tap keeps the UI local and gates the public proxy path. Treat any tunnel as an
-          internet-facing endpoint and add an explicit access boundary for sensitive services.
-        </p>
-      </div>
     </section>
   );
 };
@@ -854,6 +2040,44 @@ const DocHeader = ({ doc }: { doc: DocSection }) => (
     <h2>{doc.title}</h2>
     <p>{doc.body}</p>
   </div>
+);
+
+const ProviderDetail = ({
+  id,
+  name,
+  type,
+  mode,
+  blurb,
+  settings,
+  children,
+}: {
+  id: string;
+  name: string;
+  type: string;
+  mode: string;
+  blurb: React.ReactNode;
+  settings: string[][];
+  children?: React.ReactNode;
+}) => (
+  <article className="provider-block" id={id}>
+    <header className="provider-block-head">
+      <h3>{name}</h3>
+      <code className="provider-chip">{type}</code>
+      <span className="provider-chip mode">{mode}</span>
+    </header>
+    <p>{blurb}</p>
+    {settings.length > 0 ? (
+      <div className="config-table" role="table" aria-label={`${name} settings`}>
+        {settings.map(([key, value]) => (
+          <div className="config-row" role="row" key={key}>
+            <code role="cell">{key}</code>
+            <span role="cell">{value}</span>
+          </div>
+        ))}
+      </div>
+    ) : null}
+    {children}
+  </article>
 );
 
 const MiniPanel = ({ title, children }: { title: string; children: React.ReactNode }) => (
@@ -882,9 +2106,12 @@ const Screenshot = ({ src, alt, caption }: { src: string; alt: string; caption: 
 const FinalCta = () => (
   <section className="final-cta">
     <div>
-      <span className="kicker">Ready for callbacks</span>
-      <h2>Give local services a public URL you can actually debug.</h2>
-      <p>Build the docs site, publish it to GitHub Pages, and point users at one clear Tap workflow.</p>
+      <span className="kicker">Two tools, one workflow</span>
+      <h2>Compose the call in Studio. Watch it land in the Inspector.</h2>
+      <p>
+        Both halves are free, local, and open source. Install the CLI, grab the desktop app, or
+        read the code.
+      </p>
     </div>
     <a className="button primary" href={repoUrl}>
       View on GitHub

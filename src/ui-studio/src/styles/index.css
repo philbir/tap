@@ -1,0 +1,66 @@
+/*
+ * Tap Studio global styles. Mantine owns the form-control look (TextInput, Select, etc.)
+ * via @mantine/core/styles.css — this file only keeps:
+ *   - method-color tokens (used by the HTTP method dropdown indicator)
+ *   - the mono font stack (for code/<pre> elements outside Mantine widgets)
+ *   - a tiny reset that complements Mantine's CSSVariablesResolver
+ */
+
+:root {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --method-get: #4a90e2;
+  --method-post: #2aa876;
+  --method-put: #d29922;
+  --method-delete: #d9534f;
+  --method-patch: #9b59b6;
+  --method-head: #6e7681;
+  --method-options: #6e7681;
+
+  --mono: 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;
+}
+
+html, body, #root { height: 100%; margin: 0; }
+
+.tap-brand {
+  min-width: max-content;
+  padding-right: 4px;
+}
+
+.tap-brand__icon {
+  display: block;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08), 0 0 0 1px color-mix(in srgb, var(--mantine-color-tap-filled) 25%, transparent);
+}
+
+/* HTTP method coloring helper — apply via [data-method] on any element. */
+[data-method='GET']    { color: var(--method-get); }
+[data-method='POST']   { color: var(--method-post); }
+[data-method='PUT']    { color: var(--method-put); }
+[data-method='PATCH']  { color: var(--method-patch); }
+[data-method='DELETE'] { color: var(--method-delete); }
+[data-method='HEAD'], [data-method='OPTIONS'] { color: var(--text-muted, #8d91a0); }
+
+/* Sidebar tree-row hover affordance: per-row action menu (move, …) appears on hover. */
+.tap-tree-row:hover { background: var(--mantine-color-default-hover); }
+.tap-tree-row__actions { opacity: 0; transition: opacity 0.12s; }
+.tap-tree-row:hover .tap-tree-row__actions,
+.tap-tree-row:focus-within .tap-tree-row__actions { opacity: 1; }
+
+/* Git changes list: per-row hover actions (Stage / Unstage / Discard). Hidden by
+   default; revealed on row hover. Positioned absolute so they don't squeeze the
+   filename text on hover. */
+.tap-git-row .tap-git-row__actions {
+  opacity: 0;
+  transition: opacity 0.12s;
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+}
+.tap-git-row:hover .tap-git-row__actions,
+.tap-git-row:focus-within .tap-git-row__actions { opacity: 1; }

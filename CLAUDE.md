@@ -2,28 +2,73 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Developer flow
+
+- **Frontend changes (`src/ui-inspector/`, `src/ui-studio/`)**: always verify in a browser before reporting done. Use the Claude Preview / Chrome MCP to load the dev server, exercise the changed feature, and check the console for errors. Type-check + build passing is not enough — the UI must actually render and behave correctly.
+- **Backend changes (`Tap.Hosting`, `Tap.Server`, `Tap.Studio`, AppHost)**: use Aspire exclusively for application execution and debugging. A user-started AppHost is usually already running: inspect `aspire ps --non-interactive`, reuse it, and only start a new AppHost when none is running. Rebuild and restart only the affected resource with `aspire resource <resource-name> rebuild --apphost <apphost.csproj> --non-interactive`; do not use `dotnet build`, `dotnet run`, or manual process management for application iteration.
+
 ## Build, run, test
 
 - SDK is pinned in `global.json` to .NET 10 (`10.0.201`). Targets `net10.0` everywhere.
 - `TreatWarningsAsErrors` is enabled globally (`Directory.Build.props`) — warnings break the build.
-- Solution file is `Tap.slnx` (modern XML format). Use `dotnet build Tap.slnx` / `dotnet restore Tap.slnx`.
-- Run the full demo: `dotnet run --project samples/Sample.AppHost`. There is no test project yet.
-- Aspire CLI: `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire run` from inside `samples/` works.
+- Solution file is `Tap.slnx` (modern XML format). Use `dotnet restore Tap.slnx` only for an explicit restore; do not use `dotnet build` to run or debug the application.
+- Only when no AppHost is already running, start the app with `aspire start --non-interactive --apphost <apphost.csproj>`.
+- Tests live in `src/backend/Tap.Tests` (xunit v3). Run them with `dotnet test src/backend/Tap.Tests/Tap.Tests.csproj -p:SkipStudioUiBuild=true` (the skip flag avoids a full Vite build on every run). They cover the workspace parser/emitter round-trips (requests, assertions, flows, test sets), the assertion evaluator, and the response-value extractor — all pure functions, no AppHost needed.
+- The `tap-studio` CLI lives in `src/backend/Tap.Studio.Cli` and ships as the `Tap.Studio.Cli` dotnet tool. Run it from source with `dotnet run --project src/backend/Tap.Studio.Cli -- test <name> --workspace samples/sample-workspace`; pack it with `dotnet pack src/backend/Tap.Studio.Cli -c Release`. It never needs the AppHost — it talks to the upstream directly, not to `studio-api`.
+- After a backend change, use `aspire resource <resource-name> rebuild --apphost <apphost.csproj> --non-interactive`; this rebuilds and restarts the resource.
+- `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire start --non-interactive` from inside `samples/` selects it automatically.
 - `cloudflared` must be on PATH at AppHost start time (`brew install cloudflared` / `winget install Cloudflare.cloudflared`). The lifecycle hook shells out and fails fast if it's missing.
 
 ### UI
 
-- `ui/` is yarn 4.9.1 (Berry) — use `yarn`, not `npm`. Scripts: `yarn dev` (Vite, port 5197), `yarn build` (`tsc -b && vite build`), `yarn preview`.
-- `Tap.Server.csproj` has a `BuildTapUi` MSBuild target that runs `yarn install` + `yarn build` and copies `ui/dist/**` into `src/Tap.Server/wwwroot/` on every server build. Set `-p:SkipTapUiBuild=true` to skip when iterating on C# only.
-- For UI hot-reload against a running AppHost: `cd ui && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`); set that env var to whatever UI port the AppHost allocated.
-- `src/Tap.Server/wwwroot/*` is gitignored (regenerated artifact) — never hand-edit it.
+- **Two UIs.** `src/ui-inspector/` is the inspector (vanilla CSS modules + base-ui primitives, embedded in Tap.Server). `src/ui-studio/` is the workbench (Mantine v9.2.1 + Tabler icons + Zustand). They share zero runtime code.
+- Both are yarn 4.9.1 (Berry) — use `yarn`, not `npm`. Scripts: `yarn dev` / `yarn build` / `yarn preview`. Inspector dev port is 5197; Studio dev port is 5297.
+- `Tap.Server.csproj` has a `BuildTapUi` MSBuild target that runs `yarn install` + `yarn build` and copies `src/ui-inspector/dist/**` into `src/backend/Tap.Server/wwwroot/` on every server build. Set `-p:SkipTapUiBuild=true` to skip when iterating on C# only.
+- For inspector hot-reload against a running AppHost: `cd src/ui-inspector && yarn dev`. Vite proxies `/api` → `VITE_INSPECTOR_API_URL` (default `http://localhost:5198`).
+- For Studio hot-reload: `cd src/ui-studio && yarn dev` against the Studio.AppHost (`VITE_STUDIO_API_URL`, default `http://localhost:5298`).
+- `src/backend/Tap.Server/wwwroot/*` is gitignored (regenerated artifact) — never hand-edit it.
+
+### Studio UI conventions (`src/ui-studio/`)
+
+- **Mantine-only**. The component library is `@mantine/core` v9.2.1 plus `@mantine/hooks`, `@mantine/modals`, `@mantine/notifications`, `@mantine/form`. Do not introduce other UI libs. Icons come from `@tabler/icons-react`. The provider stack lives in `src/main.tsx`; theme in `src/theme.ts`.
+- **Skill**: `.claude/skills/mantine/SKILL.md` documents the v9 gotchas, our conventions, color tokens, and the per-kind editor recipe. Load it whenever editing `src/ui-studio/`.
+- **Live docs MCP**: `.mcp.json` registers Context7 (`@upstash/context7-mcp`). Use `mcp__context7__resolve-library-id` + `get-library-docs` for authoritative v9 prop signatures.
+- **State**: Zustand store at `src/store/index.ts`. Global slices (`info / tree / envs / collections / auths / knownWorkspaces / tabs / activeEnvByRoot / generation`) live there; editor-local form state stays in `useState`. UI state (open tabs + per-workspace active env) is persisted to localStorage via `persist` middleware.
+- **Editor pattern**: every editor maintains a typed `spec` + `savedSpec` and PUTs to `/api/{kind}/spec` on save. The server (in `src/backend/Tap.Studio/Specs/`) is the sole producer of canonical YAML — clients never assemble YAML strings. Dirty = `JSON.stringify(spec) !== JSON.stringify(savedSpec)`. Source tab is read-only.
+- **No CSS modules in editors.** Spacing via Mantine props (`mb="md"`, `gap="xs"`), layout via `<Stack>` / `<Group>` / `<SimpleGrid>`. The one exception is `VariableInput.module.css` (painted-overlay token highlighter).
 
 ## Architecture
 
-Tap is two NuGet-style packages plus a sample, glued together by Aspire:
+Two product families share one repo. **Inspector** (`Tap.Hosting` + `Tap.Server` + the `Tap`
+CLI) watches traffic arriving at your machine; **Studio** (`Tap.Workspace` + `Tap.Execution` +
+`Tap.Studio` + the `Tap.Studio.Cli` tool) is where you author and send it. They share nothing
+at runtime.
+
+### Studio layering — the rule that matters
+
+```
+Tap.Workspace    parse · render · assert · extract     ← pure, no I/O beyond the loader
+     ▲
+Tap.Execution    send · auth · run flows & test sets   ← no ASP.NET Core, no Git, no UI
+     ▲                        ▲
+Tap.Studio              Tap.Studio.Cli
+  REST + SSE + React UI    `tap-studio` dotnet tool (CI)
+```
+
+`Tap.Execution` is the engine **both** front ends run on, so a verdict from CI and a verdict
+from the UI are the same computation. Two consequences to respect when editing:
+
+- **Nothing may flow downhill.** The engine must not reference `Tap.Studio` — if a piece of
+  execution logic needs something from the host, it goes behind `IWorkspaceHost` /
+  `IAuthTokenSource` (`Tap.Execution/Workspace/`). `WorkspaceService` implements the former.
+- **`Tap.Execution/Contracts/` is a shared public API.** The Studio serializes those records
+  straight onto its SSE stream and the CLI renders them to JUnit; changing one is a breaking
+  change to both. Studio-only wire shapes stay in `Tap.Studio/Contracts/Dtos.cs`.
+
+The rest of the repo:
 
 - **`Tap.Hosting`** (library, namespace `Aspire.Hosting`) — extension methods consumers call from their own AppHost. Primary surface: `AddTap<T>`, `AddTapContainer`, `WithTap`, `tap.WithTunnel(name, configure)`, `tap.WithQuickTunnel`, `tap.WithTailscaleFunnel`, `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon`/`WithEphemeralDaemon`/`WithFunnelPort` (Tailscale). Low-level escape hatches still public: `AddCloudflaredTunnel`, `AddTailscaleFunnel`, `WithCloudflareTunnel`, `WithTailscaleFunnel(target, tunnel)`. No runtime; pure AppHost wiring.
-- **Tunnel abstraction** lives in `src/Tap.Hosting/Tunnels/` (`TapTunnelResource` base, `TapTunnelAnnotation`, `TapTunnelIngress`). `CloudflaredTunnelResource` (multi-host) and `TailscaleFunnelResource` (single endpoint) both inherit `TapTunnelResource`. `TapHandle.AttachedTunnel` is the base type; `WithTap<T>` dispatches to provider-specific attach via `is`-check on the runtime type.
+- **Tunnel abstraction** lives in `src/backend/Tap.Hosting/Tunnels/` (`TapTunnelResource` base, `TapTunnelAnnotation`, `TapTunnelIngress`). `CloudflaredTunnelResource` (multi-host) and `TailscaleFunnelResource` (single endpoint) both inherit `TapTunnelResource`. `TapHandle.AttachedTunnel` is the base type; `WithTap<T>` dispatches to provider-specific attach via `is`-check on the runtime type.
 - **`Tap.Server`** (`Microsoft.NET.Sdk.Web`) — standalone ASP.NET Core app: YARP reverse proxy + capture middleware + SSE feed + bundled React UI in `wwwroot`. Reads its config from `Inspector:*` and `Cloudflare:*` env vars set by the AppHost.
 - **`ui/`** — Vite + React 19 + TypeScript source for the inspector UI. Built into `Tap.Server/wwwroot` at build time; not a separate runtime artifact.
 - **`samples/Sample.AppHost`** — exercises eight scenarios in parallel: standalone, Cloudflare quick / existing-dashboard / API-managed / dynamic-hostname tunnels, and Tailscale Serve in three flavors (system daemon, ephemeral userspace process, ephemeral Docker container). Each scenario is gated on the relevant user-secrets being present (`Cloudflare:*` for CF modes; `Tailscale:UseSystem=true` for system-Tailscale; `Tailscale:AuthKey` for ephemeral; pair with `Tailscale:UseDocker=true` for the container variant). `samples/Sample.Api` is the trivial upstream. Filter providers via `--scenarios cloudflare|tailscale|all` (default all).
@@ -46,7 +91,7 @@ Tap is two NuGet-style packages plus a sample, glued together by Aspire:
 ### Configuration touch-points
 
 - AppHost reads `Cloudflare:TunnelToken`, `Cloudflare:ApiToken`, `Cloudflare:AccountId`, `Cloudflare:Zone`, `Cloudflare:Hostnames:*`, and `Tailscale:AuthKey` from `IConfiguration`. The sample expects these via `dotnet user-secrets` (UserSecretsId `tap-sample-apphost`) — see header comment in `samples/Sample.AppHost/Program.cs`.
-- `Tap.Server` consumes `Inspector:ProxyPort`, `Inspector:UiPort`, `Inspector:Mode` (`standalone`|`tunnel`), `Inspector:Provider` (`cloudflare`|`tailscale`|unset — gates provider-specific endpoints), `Inspector:Ingress` (JSON array of `{hostname, upstream}`), and optional `Cloudflare:ApiToken`/`AccountId`/`TunnelId` (used by `/api/tunnel/ingress` to mutate Cloudflare ingress rules; that endpoint returns 404 for non-Cloudflare providers). The AppHost serializes the ingress array via `WithEnvironment(ctx => ...)` so allocated upstream ports are resolved at startup, not registration.
+- `Tap.Server` consumes `Inspector:ProxyPort`, `Inspector:UiPort`, `Inspector:Mode` (`standalone`|`tunnel`), `Inspector:Provider` (`cloudflare`|`tailscale`|unset — gates provider-specific endpoints), `Inspector:Ingress` (JSON array of `{hostname, upstream}`), `Inspector:UiAllowedHosts` (comma-separated extra `Host` values accepted on the UI port — only needed when `Inspector:UiHost` is a wildcard; loopback and `UiHost` are always allowed), and optional `Cloudflare:ApiToken`/`AccountId`/`TunnelId` (used by `/api/tunnel/ingress` to mutate Cloudflare ingress rules; that endpoint returns 404 for non-Cloudflare providers). The AppHost serializes the ingress array via `WithEnvironment(ctx => ...)` so allocated upstream ports are resolved at startup, not registration.
 - Default ports: proxy `5199`, UI `5198` (constants in `TapExtensions`). The sample overrides to `5299/5298` to avoid collisions if a real consumer also runs.
 
 ### Source-generated JSON

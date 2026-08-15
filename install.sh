@@ -6,15 +6,37 @@
 #   curl -fsSL https://raw.githubusercontent.com/philbir/tap/main/install.sh | sh
 #
 # Environment:
-#   TAP_VERSION       Pin a specific version (defaults to latest GitHub release).
-#   TAP_INSTALL_DIR   Where the unpacked release lives (default ~/.local/share/tap).
-#   TAP_BIN_DIR       Where the `tap` launcher is created (default ~/.local/bin).
+#   TAP_VERSION        Pin a specific version (defaults to latest GitHub release).
+#   TAP_INSTALL_DIR    Where the unpacked release lives (default ~/.local/share/tap).
+#   TAP_BIN_DIR        Where the `tap` launcher is created (default ~/.local/bin).
+#   TAP_SKIP_CHECKSUM  Set to 1 to install without verifying SHA256SUMS.
 
 set -eu
 
 REPO="philbir/tap"
 INSTALL_DIR="${TAP_INSTALL_DIR:-$HOME/.local/share/tap}"
 BIN_DIR="${TAP_BIN_DIR:-$HOME/.local/bin}"
+
+# INSTALL_DIR comes from the environment and its contents get wiped below.
+# Reject anything that isn't a plausible install path so an unset HOME or a
+# stray TAP_INSTALL_DIR=/ can't turn the upgrade path into `rm -rf /*`.
+case "$INSTALL_DIR" in
+  *..*)
+    echo "tap: refusing TAP_INSTALL_DIR='$INSTALL_DIR' — must not contain '..'." >&2
+    exit 1 ;;
+esac
+# Require an absolute path with at least two segments: `/`, `/usr` and `/home`
+# are never install roots, but `/opt/tap` and ~/.local/share/tap are.
+case "${INSTALL_DIR%/}" in
+  /*/*) ;;
+  *)
+    echo "tap: refusing TAP_INSTALL_DIR='$INSTALL_DIR' — too close to the filesystem root." >&2
+    exit 1 ;;
+esac
+if [ "${INSTALL_DIR%/}" = "${HOME:-}" ]; then
+  echo "tap: refusing to install directly into your home directory." >&2
+  exit 1
+fi
 
 uname_s=$(uname -s)
 uname_m=$(uname -m)
@@ -57,23 +79,41 @@ if ! curl -fsSL "$asset_url" -o "$tmp/$asset"; then
   exit 1
 fi
 
-# Verify checksum if SHA256SUMS is published.
-if curl -fsSL "$sums_url" -o "$tmp/SHA256SUMS" 2>/dev/null; then
-  expected=$(grep " $asset\$" "$tmp/SHA256SUMS" | awk '{print $1}' || true)
-  if [ -n "$expected" ]; then
-    if command -v sha256sum >/dev/null 2>&1; then
-      actual=$(sha256sum "$tmp/$asset" | awk '{print $1}')
-    else
-      actual=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')
-    fi
-    if [ "$expected" != "$actual" ]; then
-      echo "tap: checksum mismatch (expected $expected, got $actual)" >&2
-      exit 1
-    fi
-    echo "tap: checksum OK"
-  fi
+# Verify the download against the release's SHA256SUMS. This fails closed: a
+# missing manifest and a tampered manifest look identical from here, so both
+# abort rather than silently installing an unverified binary.
+if [ "${TAP_SKIP_CHECKSUM:-0}" = "1" ]; then
+  echo "tap: TAP_SKIP_CHECKSUM=1 — installing without checksum verification"
 else
-  echo "tap: SHA256SUMS not available, skipping checksum verification"
+  if ! curl -fsSL "$sums_url" -o "$tmp/SHA256SUMS"; then
+    echo "tap: could not download SHA256SUMS from $sums_url" >&2
+    echo "     Refusing to install an unverified binary." >&2
+    echo "     Set TAP_SKIP_CHECKSUM=1 to override." >&2
+    exit 1
+  fi
+  # Exact filename match on field 2 — a substring/regex match would let an
+  # unrelated entry vouch for this asset.
+  expected=$(awk -v f="$asset" '$2 == f { print $1 }' "$tmp/SHA256SUMS")
+  if [ -z "$expected" ]; then
+    echo "tap: $asset has no entry in SHA256SUMS." >&2
+    echo "     Refusing to install an unverified binary." >&2
+    echo "     Set TAP_SKIP_CHECKSUM=1 to override." >&2
+    exit 1
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual=$(sha256sum "$tmp/$asset" | awk '{print $1}')
+  elif command -v shasum >/dev/null 2>&1; then
+    actual=$(shasum -a 256 "$tmp/$asset" | awk '{print $1}')
+  else
+    echo "tap: neither sha256sum nor shasum is available — cannot verify $asset." >&2
+    echo "     Install coreutils, or set TAP_SKIP_CHECKSUM=1 to override." >&2
+    exit 1
+  fi
+  if [ "$expected" != "$actual" ]; then
+    echo "tap: checksum mismatch (expected $expected, got $actual)" >&2
+    exit 1
+  fi
+  echo "tap: checksum OK"
 fi
 
 echo "tap: extracting"
@@ -86,6 +126,7 @@ fi
 
 mkdir -p "$INSTALL_DIR" "$BIN_DIR"
 # Wipe the prior install so we never leave stale framework files behind.
+# Safe because INSTALL_DIR was validated as a plausible install path above.
 rm -rf "$INSTALL_DIR"/*
 cp -R "$src_dir/." "$INSTALL_DIR/"
 chmod +x "$INSTALL_DIR/tap"

@@ -1,0 +1,23 @@
+.tab {
+  position: relative;
+}
+
+/* Close button hidden by default; visible on tab hover or when active. */
+.tab .close {
+  opacity: 0;
+  transition: opacity 80ms ease;
+}
+
+.tab:hover .close,
+.tab[data-active='true'] .close {
+  opacity: 1;
+}
+
+/* Keep a placeholder so the tab width doesn't shift when the close icon appears. */
+.tab .closeSlot {
+  width: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}

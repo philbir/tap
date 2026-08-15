@@ -1,6 +1,10 @@
 # Tap Architecture
 
-Tap has two user-facing entry points and one shared inspector runtime:
+> Scope: this document covers **Tap Tunnel + Inspector** — the tunnel providers, the capture
+> proxy, and the Inspector UI. Tap Studio, the request workbench, is a separate product with
+> its own stack; see [studio.md](studio.md) and [workspace-format.md](workspace-format.md).
+
+The Inspector half has two user-facing entry points and one shared runtime:
 
 ```mermaid
 flowchart LR
@@ -277,7 +281,7 @@ The server itself does not care whether options came from a terminal command or 
 
 ## Auth Boundary
 
-The inspector UI port is local control-plane traffic and is not gated by Tap auth. The proxy port can enforce `Inspector:Auth` checks before requests reach the upstream:
+The inspector UI port is local control-plane traffic and is not gated by Tap auth. It is instead confined to the local machine: it binds to `localhost`, answers only to a loopback `Host` header (or one listed in `Inspector:UiAllowedHosts`) so DNS rebinding cannot reach it, rejects cross-site browser requests via `Sec-Fetch-Site`, and redacts credentials from `/api/profiles`. The proxy port can enforce `Inspector:Auth` checks before requests reach the upstream:
 
 | Mechanism | Source |
 |---|---|

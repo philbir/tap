@@ -1,0 +1,56 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Tap.Studio</RootNamespace>
+    <AssemblyName>Tap.Studio</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <UserSecretsId>tap-studio</UserSecretsId>
+  </PropertyGroup>
+
+  <!-- Single-file self-contained publish is the shipping shape (Tauri sidecar,
+       Docker, manual zip). Engaged only when a RID is specified on publish, so
+       regular dotnet build keeps the fast framework-dependent shape.
+       Compression is intentionally OFF: on .NET 10 the compressed-extract path
+       has triggered AccessViolationException inside reflection-heavy framework
+       paths (StaticFileMiddleware.GetTypedHeaders). Native-library self-extract
+       is also off — Kestrel + StaticFiles ship native libs and self-extract
+       interacts poorly with them; loose libs next to the binary are fine. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <EnableCompressionInSingleFile>false</EnableCompressionInSingleFile>
+    <DebugType>embedded</DebugType>
+    <InvariantGlobalization>false</InvariantGlobalization>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Tap.Execution\Tap.Execution.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="LibGit2Sharp" />
+  </ItemGroup>
+
+  <!-- Build the Studio React UI and sync it into wwwroot so the shipped binary
+       serves a fully self-contained app. Mirrors Tap.Server's BuildTapUi target.
+       Skip with -p:SkipStudioUiBuild=true when iterating on C# only. -->
+  <PropertyGroup>
+    <StudioUiDir>$(MSBuildThisFileDirectory)../../ui-studio</StudioUiDir>
+    <StudioUiDist>$(StudioUiDir)/dist</StudioUiDist>
+    <StudioUiWwwroot>$(MSBuildThisFileDirectory)wwwroot</StudioUiWwwroot>
+  </PropertyGroup>
+
+  <Target Name="BuildStudioUi" BeforeTargets="BeforeBuild" Condition="'$(SkipStudioUiBuild)' != 'true' AND Exists('$(StudioUiDir)/package.json')">
+    <Exec Command="yarn install" WorkingDirectory="$(StudioUiDir)" Condition="!Exists('$(StudioUiDir)/.yarn/install-state.gz') AND !Exists('$(StudioUiDir)/node_modules')" />
+    <Exec Command="yarn build" WorkingDirectory="$(StudioUiDir)" />
+    <ItemGroup>
+      <_StudioUiDistFiles Include="$(StudioUiDist)/**/*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_StudioUiDistFiles)"
+          DestinationFiles="@(_StudioUiDistFiles->'$(StudioUiWwwroot)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>

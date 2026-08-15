@@ -1,5 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
-  <Sdk Name="Aspire.AppHost.Sdk" Version="13.3.0" />
+<Project Sdk="Aspire.AppHost.Sdk/13.4.2">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -9,13 +8,13 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Aspire.Hosting.AppHost" />
     <PackageReference Include="Aspire.Hosting.JavaScript" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\Tap.Hosting\Tap.Hosting.csproj" IsAspireProjectResource="false" />
-    <ProjectReference Include="..\..\src\Tap.Server\Tap.Server.csproj" />
+    <ProjectReference Include="..\..\src\backend\Tap.Hosting\Tap.Hosting.csproj" IsAspireProjectResource="false" />
+    <ProjectReference Include="..\..\src\backend\Tap.Server\Tap.Server.csproj" />
     <ProjectReference Include="..\Sample.Api\Sample.Api.csproj" />
+    <ProjectReference Include="..\Demo.Api\Demo.Api.csproj" />
   </ItemGroup>
 </Project>

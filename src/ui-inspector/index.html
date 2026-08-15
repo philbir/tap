@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      The inspector renders fully attacker-controlled captured traffic (paths, headers, bodies,
+      SSE and WebSocket frames) on the same origin as an unauthenticated replay and
+      tunnel-ingress API, so a single missed escape must not turn into script execution.
+      `data:`/`blob:` cover base64 image bodies and the HAR/.http exports; `'unsafe-inline'`
+      on style-src covers React 19 stylesheet hoisting and syntax-highlighter themes.
+      The sha256 is the Fast Refresh preamble @vitejs/plugin-react injects inline during
+      `yarn dev` only — regenerate it if that plugin's preamble changes, or dev white-screens.
+      `frame-ancestors` is ignored in a meta tag; Tap.Server must send it as a header.
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'sha256-Z2/iFzh9VMlVkEOar1f/oSHWwQk3ve1qk/C2WdsC4Xk='; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'; form-action 'self'"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" type="image/svg+xml" href="/tap-favicon.svg" />
+    <link rel="apple-touch-icon" href="/tap-favicon.svg" />
+    <title>Tap</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

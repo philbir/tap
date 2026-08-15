@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The bundled Tap.Studio sidecar is a .NET app. Under the hardened runtime
+       (required for notarization) CoreCLR's JIT can't allocate executable memory
+       and dies with "Failed to create CoreCLR, HRESULT: 0x80070008" unless these
+       exceptions are granted. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+  <!-- Still required, not cargo-culted: Tap.Studio is published with
+       PublishSingleFile + IncludeNativeLibrariesForSelfExtract (see
+       Tap.Studio.csproj), so libcoreclr/libclrjit/libSystem.Native are carried
+       inside the executable and written to ~/.net/<app>/<hash>/ by the apphost
+       on first run. Those extracted copies are produced at runtime and are
+       therefore outside the notarized bundle's signature, so library validation
+       refuses to dlopen them and the sidecar dies before Kestrel binds. Drop
+       this only if the sidecar stops self-extracting (NativeAOT, or
+       IncludeNativeLibrariesForSelfExtract=false with the .dylibs shipped
+       alongside the binary as signed bundle resources). -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <true/>
+</dict>
+</plist>

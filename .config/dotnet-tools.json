@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "isRoot": true,
+  "tools": {
+    "tap.studio.cli": {
+      "version": "0.6.0-beta.1",
+      "commands": [
+        "tap-studio"
+      ],
+      "rollForward": false
+    }
+  }
+}

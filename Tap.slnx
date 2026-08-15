@@ -8,6 +8,7 @@
     <Project Path="src/backend/Tap.Execution/Tap.Execution.csproj" />
     <Project Path="src/backend/Tap.Studio/Tap.Studio.csproj" />
     <Project Path="src/backend/Tap.Studio.Cli/Tap.Studio.Cli.csproj" />
+    <Project Path="src/backend/Tap.Studio.Mcp/Tap.Studio.Mcp.csproj" />
     <Project Path="src/backend/Tap.Tests/Tap.Tests.csproj" />
   </Folder>
   <Folder Name="/samples/">

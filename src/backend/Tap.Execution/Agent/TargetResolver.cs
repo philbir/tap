@@ -1,7 +1,7 @@
 using Tap.Workspace;
 using Tap.Workspace.Model;
 
-namespace Tap.Studio.Cli.Workspace;
+namespace Tap.Execution.Agent;
 
 /// <summary>What a command was asked to act on, once a name has been turned into a file.</summary>
 /// <param name="File">The resolved workspace file.</param>

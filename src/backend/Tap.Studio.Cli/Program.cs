@@ -27,7 +27,39 @@ app.Configure(cfg =>
     cfg.AddCommand<SendCommand>("send")
         .WithDescription("Send one request and evaluate its assertions.")
         .WithExample(["send", "GET /demo/methods"])
-        .WithExample(["send", "collections/demo/methods/01-get.req.md", "--verbose"]);
+        .WithExample(["send", "collections/demo/methods/01-get.req.md", "--verbose"])
+        .WithExample(["send", "GET /demo/methods", "--json"]);
+
+    cfg.AddCommand<CallCommand>("call")
+        .WithDescription("Send an ad-hoc request through a collection, inheriting its baseUrl, headers, and auth. Relative URLs only unless --allow-any-url.")
+        .WithExample(["call", "GET", "/users/42", "--collection", "demo"])
+        .WithExample(["call", "POST", "/things", "-c", "demo", "-H", "Content-Type: application/json", "-d", "@body.json", "--json"]);
+
+    cfg.AddCommand<ListCommand>("list")
+        .WithDescription("List what's in the workspace: collections, requests, envs, tests, auth profiles (name + type only).")
+        .WithExample(["list"])
+        .WithExample(["list", "requests", "--json"]);
+
+    cfg.AddCommand<DescribeCommand>("describe")
+        .WithDescription("Show one request's template surface: method, URL, headers, variables, auth (name only), assertions.")
+        .WithExample(["describe", "GET /demo/methods"])
+        .WithExample(["describe", "collections/demo/methods/01-get.req.md", "--json"]);
+
+    cfg.AddCommand<McpCommand>("mcp")
+        .WithDescription("Serve the workspace to MCP clients over stdio: inventory, describe, send, call, and test as tools.")
+        .WithExample(["mcp", "--workspace", "."])
+        .WithExample(["mcp", "-w", "samples/sample-workspace", "--use-cached-tokens"]);
+
+    cfg.AddBranch("agent", agent =>
+    {
+        agent.SetDescription("Set up AI-agent support for this workspace.");
+        agent.AddCommand<AgentInitCommand>("init")
+            .WithDescription("Install the agent skills and/or MCP registration for claude, codex, copilot, or opencode — per project or per user. With no --env, an interactive wizard detects and preselects the environments this machine runs.")
+            .WithExample(["agent", "init"])
+            .WithExample(["agent", "init", "--env", "claude"])
+            .WithExample(["agent", "init", "--env", "claude", "--env", "copilot", "--scope", "project"])
+            .WithExample(["agent", "init", "--env", "codex", "--scope", "user", "--mcp"]);
+    });
 
     cfg.AddCommand<LintCommand>("lint")
         .WithDescription("Parse every file in the workspace and report what doesn't load.")

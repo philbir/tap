@@ -25,6 +25,7 @@ plain text in your git repo.
 - [Assertions](#assertions)
 - [Tests and flows](#tests-and-flows)
 - [Running tests from CI](#running-tests-from-ci)
+- [AI agents](#ai-agents)
 - [Authentication](#authentication)
 - [Variables, environments, and secrets](#variables-environments-and-secrets)
 - [AI assistant](#ai-assistant)
@@ -348,12 +349,23 @@ files, not two implementations that drift apart.
 |---|---|
 | `tap-studio test <name>` | Run a test set or a flow. |
 | `tap-studio send <name>` | Send one request and evaluate its assertions. |
+| `tap-studio call <METHOD> <url> -c <collection>` | Send an ad-hoc request through a collection, inheriting its baseUrl, headers, and auth. |
+| `tap-studio list [kind]` | List collections, requests, envs, tests, or auth profiles (name + type only). |
+| `tap-studio describe <request>` | Show a request's template surface without rendering it. |
 | `tap-studio lint` | Parse the workspace and report what doesn't load. |
 | `tap-studio vars` | Print the resolved variable cascade, secrets masked. |
+| `tap-studio mcp` | Serve the workspace to MCP clients over stdio. |
+| `tap-studio agent init --env <claude\|codex\|copilot\|opencode>` | Install the agent skills + MCP registration for an agent environment, per project or per user. |
+
+`test`, `send`, and `call` take `--json` for a secret-redacted machine-readable result on
+stdout — the mode built for scripts and AI agents. See [agent-surface.md](agent-surface.md).
 
 `<name>` is a path, the `name:` from the frontmatter, or the filename stem — so the thing you
 read off the Testing tab is the thing you can type. `--list` shows what's available. The
-workspace is found by walking up from the working directory to the nearest `tap.md`.
+workspace is found by walking up from the working directory to the nearest `tap.md` — or,
+when no ancestor has one, by taking the first workspace beneath the working directory
+(shallowest first, then alphabetical, to a bounded depth). Standing at a repo root whose
+workspace lives in a subfolder therefore just works; `--workspace` pins it explicitly.
 
 ### Selecting what runs
 
@@ -461,6 +473,25 @@ is **not** consulted unless you pass `--use-cached-tokens`. A CI run that passes
 someone's laptop had a warm token is a test that didn't really run.
 
 ---
+
+## AI agents
+
+A workspace is agent-ready out of the box: an AI coding agent can discover what exists,
+send saved requests, fire ad-hoc calls through a collection's configured auth, and run
+test sets — **without ever holding a credential**. The `--json` mode redacts every
+secret from what the agent reads; discovery reports auth profiles as name + type only;
+ad-hoc calls are locked to the collection's baseUrl so inherited credentials can't be
+sent elsewhere.
+
+The same surface is served as MCP tools: `tap-studio mcp` over stdio, or the running
+Studio's `/mcp` endpoint — the latter rides the user's interactively-minted tokens, so
+even PKCE-authed requests work for an agent after the user signs in once in the browser.
+A collection can opt out of all of it with `agent: false` (the **Agent access** switch
+in the collection editor).
+
+The full story — trust model, tool contracts, per-collection control, and the two
+shippable Claude Code skills (`tap-studio` for operating a workspace, `tap-author` for
+authoring one) — lives in [agent-surface.md](agent-surface.md).
 
 ## Authentication
 

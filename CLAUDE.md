@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Solution file is `Tap.slnx` (modern XML format). Use `dotnet restore Tap.slnx` only for an explicit restore; do not use `dotnet build` to run or debug the application.
 - Only when no AppHost is already running, start the app with `aspire start --non-interactive --apphost <apphost.csproj>`.
 - Tests live in `src/backend/Tap.Tests` (xunit v3). Run them with `dotnet test src/backend/Tap.Tests/Tap.Tests.csproj -p:SkipStudioUiBuild=true` (the skip flag avoids a full Vite build on every run). They cover the workspace parser/emitter round-trips (requests, assertions, flows, test sets), the assertion evaluator, and the response-value extractor — all pure functions, no AppHost needed.
-- The `tap-studio` CLI lives in `src/backend/Tap.Studio.Cli` and ships as the `Tap.Studio.Cli` dotnet tool. Run it from source with `dotnet run --project src/backend/Tap.Studio.Cli -- test <name> --workspace samples/sample-workspace`; pack it with `dotnet pack src/backend/Tap.Studio.Cli -c Release`. It never needs the AppHost — it talks to the upstream directly, not to `studio-api`.
+- The `tap-studio` CLI lives in `src/backend/Tap.Studio.Cli` and ships as the `Tap.Studio.Cli` dotnet tool. Run it from source with `dotnet run --project src/backend/Tap.Studio.Cli -- test <name> --workspace samples/sample-workspace`; pack it with `dotnet pack src/backend/Tap.Studio.Cli -c Release`. It never needs the AppHost — it talks to the upstream directly, not to `studio-api`. Besides `test`/`send`/`lint`/`vars` it carries the agent surface: `list [kind]`, `describe <request>`, `call <METHOD> <url> -c <collection>` (dynamic request; relative URLs only unless `--allow-any-url`), each with `--json` (redacted, stdout-only document; progress/errors on stderr), and `mcp` — a stdio MCP server (official `ModelContextProtocol` SDK) exposing the same surface as tools (`workspace_inventory`, `describe_request`, `send_request`, `call_request`, `run_test`; workspace re-read per call, logs on stderr). `.mcp.json` registers it against the sample workspace; the `.claude/skills/tap-studio` skill documents the discover → describe → call loop, and `.claude/skills/tap-author` (self-contained, shippable to consumer repos) teaches agents to author workspace assets — full per-kind frontmatter spec + assertion grammar in its `references/`, kept in sync with `docs/workspace-format.md` and the parser.
 - After a backend change, use `aspire resource <resource-name> rebuild --apphost <apphost.csproj> --non-interactive`; this rebuilds and restarts the resource.
 - `samples/aspire.config.json` points at `Sample.AppHost`, so `aspire start --non-interactive` from inside `samples/` selects it automatically.
 - `cloudflared` must be on PATH at AppHost start time (`brew install cloudflared` / `winget install Cloudflare.cloudflared`). The lifecycle hook shells out and fails fast if it's missing.
@@ -64,6 +64,21 @@ from the UI are the same computation. Two consequences to respect when editing:
 - **`Tap.Execution/Contracts/` is a shared public API.** The Studio serializes those records
   straight onto its SSE stream and the CLI renders them to JUnit; changing one is a breaking
   change to both. Studio-only wire shapes stay in `Tap.Studio/Contracts/Dtos.cs`.
+- **The agent surface lives in `Tap.Execution/Agent/`** (backs the agent-facing CLI/MCP
+  front doors): `WorkspaceInventory` (discovery read-model, auth profiles as name + type
+  only), `TargetResolver` (path/name/stem → file), `AgentJson` (the one JSON dialect every
+  agent surface emits), `DynamicRequestFactory` (ad-hoc requests synthesized into a
+  collection; relative URLs only unless `AllowAnyUrl` — call `EnsureCollectionScoped` on the
+  rendered result, since a variable can expand to an absolute URL and skip the baseUrl
+  join). Any echo of a rendered request to an agent (CLI `--json`, MCP results) must go
+  through `ResolvedRequest.Redactor` (`SecretRedactor`, built during render; the pipeline
+  extends it with minted tokens) — never serialize `ResolvedRequest.Headers` raw.
+- **`Tap.Studio.Mcp` is the shared MCP tool layer** (`TapStudioTools` +
+  `IMcpWorkspaceProvider`), served twice: `tap-studio mcp` hosts it over stdio (workspace
+  loaded per call, headless auth), and `Tap.Studio` maps it at `/mcp` over the live
+  `WorkspaceService` (streamable HTTP; token source is the user's interactive cache, so
+  PKCE-authed requests work without any credential leaving the Studio process). Tool
+  contracts must not fork: change them in `Tap.Studio.Mcp`, never per host.
 
 The rest of the repo:
 

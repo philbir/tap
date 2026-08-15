@@ -1,5 +1,5 @@
 import {
-  ActionIcon, Badge, Box, Button, Checkbox, Code, Group, NumberInput, ScrollArea, Select, Stack, Tabs, TagsInput, Text, TextInput,
+  ActionIcon, Badge, Box, Button, Checkbox, Code, Group, NumberInput, ScrollArea, Select, Stack, Switch, Tabs, TagsInput, Text, TextInput,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
@@ -174,6 +174,12 @@ export function CollectionEditor({ path }: Props) {
               acceptValueOnBlur
               clearable
             />
+            <Switch
+              label="Agent access"
+              description="Let AI agents (MCP tools, tap-studio call) discover and send requests through this collection. Off fences it from agents; the Studio and CLI stay unaffected."
+              checked={spec.agentEnabled !== false}
+              onChange={(e) => update('agentEnabled', e.currentTarget.checked ? undefined : false)}
+            />
             {!detail.exists && (
               <Text size="xs" c="dimmed">
                 No <Code fz="xs">_collection.md</Code> on disk yet — saving will create it.
@@ -331,6 +337,9 @@ function specFromDetail(d: CollectionDetail): CollectionSpec {
         })
       : undefined,
     defaultStage: d.defaultStage ?? undefined,
+    // Only the opt-out is carried: undefined means enabled and keeps the emitted file
+    // silent, mirroring what the server writes.
+    agentEnabled: d.agentEnabled === false ? false : undefined,
     body: d.body && d.body.trim().length > 0 ? d.body : undefined,
   }
 }

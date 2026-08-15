@@ -30,6 +30,13 @@ public sealed record ResolvedRequest
     public IReadOnlyList<ResolvedAssert> Assertions { get; init; } = [];
 
     public required ResolvedRequestMetadata Metadata { get; init; }
+
+    /// <summary>Removes this render's secrets from output meant for callers that must not see
+    /// them (agent transcripts, CLI JSON, MCP results). Lives on the request rather than in
+    /// <see cref="Metadata"/> because metadata is persisted into execution history and must
+    /// stay value-free; the redactor holds values, privately, for exactly as long as the
+    /// rendered request itself is alive.</summary>
+    public SecretRedactor Redactor { get; init; } = SecretRedactor.None;
 }
 
 public sealed record ResolvedRequestMetadata
@@ -43,4 +50,10 @@ public sealed record ResolvedRequestMetadata
     /// IsSecret flag only. Never carries the resolved value; history surfaces this so
     /// operators can see what providers were consulted without storing secret material.</summary>
     public required IReadOnlyList<VariableResolution> VariablesUsed { get; init; }
+
+    /// <summary>The fully-expanded base URL the request's relative path was joined onto, or
+    /// <c>null</c> when the URL was already absolute and no join happened. Callers that only
+    /// permit collection-scoped execution (dynamic agent requests) use this to verify the
+    /// final URL actually went through the collection's baseUrl.</summary>
+    public string? ResolvedBaseUrl { get; init; }
 }

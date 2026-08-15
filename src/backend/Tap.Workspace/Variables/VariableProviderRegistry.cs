@@ -97,6 +97,18 @@ public sealed class VariableProviderRegistry
 
     public IReadOnlyList<VariableResolution> Trace => _trace;
 
+    /// <summary>Clear-text values of every secret this registry resolved so far. Consumed by
+    /// the renderer to build a <see cref="Rendering.SecretRedactor"/> for the render — the one
+    /// legitimate reason to read secret values back out, since redaction needs to know what to
+    /// look for. Read it after all expansion is done; the registry is per-render, so the cache
+    /// at that point holds exactly this render's lookups.</summary>
+    public IReadOnlyList<string> SecretValues
+        => _cache.Values
+            .Where(v => v is { IsSecret: true, Value.Length: > 0 })
+            .Select(v => v!.Value)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+
     /// <summary>Maps an alias to its concrete provider name; names that aren't aliases pass
     /// through unchanged. Null in, null out.</summary>
     private string? ResolveAlias(string? name)

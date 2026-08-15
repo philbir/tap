@@ -16,8 +16,9 @@ public sealed class HeadlessAuthUnavailableException(string message) : Exception
 ///
 /// <para>Three rules, each chosen for what it prevents:</para>
 /// <list type="number">
-///   <item><b>Mint what can be minted.</b> client_credentials, ROPC, and <c>az</c> all work
-///     without a human and cover the credentials a CI runner actually has.</item>
+///   <item><b>Mint what can be minted.</b> client_credentials, ROPC, <c>az</c>, and
+///     <c>gh</c> all work without a human and cover the credentials a CI runner actually
+///     has.</item>
 ///   <item><b>Refuse the rest loudly.</b> An interactive grant fails immediately, naming the
 ///     profile and the alternatives. The failure mode this replaces — a pipeline blocked on a
 ///     sign-in prompt nobody can see, until the job times out — is far worse than an error.</item>
@@ -62,7 +63,7 @@ public sealed class HeadlessAuthTokenSource(
         {
             "oauth2" => await OAuth2Async(profile, resolver, ct).ConfigureAwait(false),
             "azure-cli" => await AzureCliAsync(profile, resolver, ct).ConfigureAwait(false),
-            "github" => Refuse(profile, $"github mode '{Mode(profile)}'", "a Personal Access Token (mode: pat), whose value can come from an env-backed variable"),
+            "github" => await GithubAsync(profile, ct).ConfigureAwait(false),
             "jwt" => null, // Minted by the renderer from profile fields; nothing to fetch.
             _ => Refuse(profile, $"auth type '{profile.Type}'", "one of the non-interactive types"),
         };
@@ -164,6 +165,52 @@ public sealed class HeadlessAuthTokenSource(
             throw new HeadlessAuthUnavailableException(
                 $"Auth profile '{profile.RelativePath}': the token response was not JSON. {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// GitHub's <c>gh-cli</c> mode is the <c>az</c> of GitHub: <c>gh auth token</c> needs no
+    /// human once <c>gh auth login</c> has run — on a laptop or a runner alike, and by the
+    /// same rule that admits azure-cli. PAT mode never reaches here (the renderer stamps it
+    /// from the profile's fields); app and oauth modes still refuse, naming the alternatives.
+    /// </summary>
+    private async ValueTask<AuthToken?> GithubAsync(AuthFile profile, CancellationToken ct)
+    {
+        var mode = Mode(profile);
+        if (mode is not ("gh-cli" or "ghcli" or "cli"))
+        {
+            return Refuse(
+                profile,
+                $"github mode '{mode}'",
+                "gh-cli (a signed-in GitHub CLI), or a Personal Access Token (mode: pat) whose value can come from an env-backed variable");
+        }
+
+        int exitCode;
+        string stdout, stderr;
+        try
+        {
+            (exitCode, stdout, stderr) = await RunAsync("gh", ["auth", "token"], ct).ConfigureAwait(false);
+        }
+        catch (System.ComponentModel.Win32Exception)
+        {
+            throw new HeadlessAuthUnavailableException(
+                $"Auth profile '{profile.RelativePath}': could not run `gh` — install the GitHub CLI and run `gh auth login` first.");
+        }
+
+        if (exitCode != 0)
+        {
+            throw new HeadlessAuthUnavailableException(
+                $"Auth profile '{profile.RelativePath}': `gh auth token` exited with {exitCode}. {Trim(stderr)}");
+        }
+
+        var token = stdout.Trim();
+        if (token.Length == 0)
+        {
+            throw new HeadlessAuthUnavailableException(
+                $"Auth profile '{profile.RelativePath}': `gh auth token` returned nothing — run `gh auth login` first.");
+        }
+
+        // gh doesn't report expiry; the per-run mint cache makes one exchange per run anyway.
+        return new AuthToken(token, null);
     }
 
     /// <summary>

@@ -84,7 +84,8 @@ public static class CollectionEndpoints
                         BaseUrl: s.BaseUrl,
                         DefaultAuth: s.DefaultAuth?.RelativePath,
                         Vars: s.Vars)).ToArray(),
-                    DefaultStage: c.DefaultStage));
+                    DefaultStage: c.DefaultStage,
+                    AgentEnabled: c.Agent.Enabled));
             }
 
             var dirAbs = Path.Combine(ws.TapDirectory, CollectionsRoot, slug);
@@ -103,7 +104,8 @@ public static class CollectionEndpoints
                 Body: string.Empty,
                 Source: string.Empty,
                 Stages: Array.Empty<CollectionStageDto>(),
-                DefaultStage: null));
+                DefaultStage: null,
+                AgentEnabled: true));
         });
 
         g.MapPut("/spec", (CollectionSpecDto spec, WorkspaceService svc) =>

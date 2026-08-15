@@ -32,6 +32,13 @@ public sealed class TestRunner(RequestPipeline pipeline)
     /// assertion; far short of shipping 2 MiB per step down the event stream.</summary>
     public const int BodyPreviewCap = 64 * 1024;
 
+    /// <summary>Called with each step's fully-rendered request after render (auth token
+    /// already injected) and before anything goes on the wire. This is where an agent-facing
+    /// caller collects <see cref="ResolvedRequest.Redactor"/> for its output, and where a
+    /// dynamic request's collection-scope guard runs — throwing here fails the step without
+    /// sending it.</summary>
+    public Action<ResolvedRequest>? OnRendered { get; init; }
+
     /// <summary>Ceiling on how many requests one run may fire. A flow can reference a flow —
     /// not through the file format, but a test set can name a flow and a future edit could make
     /// that recursive — and a runaway run is a lot of real traffic against someone's API.</summary>
@@ -70,7 +77,15 @@ public sealed class TestRunner(RequestPipeline pipeline)
         var ws = pipeline.Workspace;
         var requestFile = ws.FindByPath(request.Path) as RequestFile
             ?? throw new FileNotFoundException($"'{request.Path}' is not a request in this workspace.");
+        return await SendAsync(requestFile, request, ct).ConfigureAwait(false);
+    }
 
+    /// <summary>Same one-step run for a <see cref="RequestFile"/> the caller already holds —
+    /// which is how a dynamic (agent-synthesized) request runs, since it exists in memory but
+    /// not in the workspace index that the path overload consults.</summary>
+    public async Task<TestStepResultDto> SendAsync(
+        RequestFile requestFile, RunTestRequestDto request, CancellationToken ct)
+    {
         var name = requestFile.Name ?? Stem(requestFile.RelativePath);
         var bag = RunVariables.Literals(new Dictionary<string, VarSpec>(), request.Overrides);
 
@@ -345,6 +360,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
 
             HttpExecutionHelpers.ValidateScheme(rendered);
             rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
+            OnRendered?.Invoke(rendered);
 
             if (rendered.Protocol == RequestProtocol.WebSocket)
             {

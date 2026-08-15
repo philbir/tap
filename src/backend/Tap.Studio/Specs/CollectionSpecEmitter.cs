@@ -5,8 +5,8 @@ namespace Tap.Studio.Specs;
 
 /// <summary>
 /// Emits the canonical YAML for a <c>_collection.md</c>. Field order: kind / id / name /
-/// baseUrl / defaultAuth / defaultHeaders / vars / tags / stages / defaultStage. The file
-/// always lives at <c>collections/&lt;slug&gt;/_collection.md</c>.
+/// baseUrl / defaultAuth / defaultHeaders / vars / tags / stages / defaultStage / agent.
+/// The file always lives at <c>collections/&lt;slug&gt;/_collection.md</c>.
 /// </summary>
 public static class CollectionSpecEmitter
 {
@@ -39,6 +39,10 @@ public static class CollectionSpecEmitter
         }
 
         fm.SetIfNotEmpty("defaultStage", spec.DefaultStage);
+
+        // Enabled is the default, so only the opt-out is written — the canonical file says
+        // nothing unless the author actually fenced the collection off from agents.
+        if (spec.AgentEnabled == false) fm.Set("agent", "false");
 
         return SpecYaml.ToFrontmatter(fm, spec.Body);
     }

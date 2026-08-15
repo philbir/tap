@@ -134,8 +134,28 @@ public sealed record CollectionFile : WorkspaceFile
     /// <summary>Name of the stage to preselect in the UI when no stage is explicitly chosen.</summary>
     public string? DefaultStage { get; init; }
 
+    /// <summary>Whether agents may use this collection — see <see cref="CollectionAgentOptions"/>.</summary>
+    public CollectionAgentOptions Agent { get; init; } = new();
+
     public CollectionStage? FindStage(string? name)
         => string.IsNullOrEmpty(name) ? null : Stages.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
+}
+
+/// <summary>
+/// Agent-surface policy for a collection — the <c>agent:</c> frontmatter key on
+/// <c>_collection.md</c>. Written as a bare bool (<c>agent: false</c>) or a mapping
+/// (<c>agent: { enabled: false }</c>); the mapping form is the extension point for more
+/// granular control later (allowed methods, dynamic-request opt-out, …). Enabled by
+/// default: the option exists to fence specific collections off from agents, not to make
+/// every workspace opt in.
+///
+/// <para>This is policy, not a sandbox — it governs what the sanctioned agent surfaces
+/// (MCP tools, <c>call</c>, agent discovery) will do, and humans using the Studio or the
+/// CLI's developer commands are deliberately not affected by it.</para>
+/// </summary>
+public sealed record CollectionAgentOptions
+{
+    public bool Enabled { get; init; } = true;
 }
 
 /// <summary>

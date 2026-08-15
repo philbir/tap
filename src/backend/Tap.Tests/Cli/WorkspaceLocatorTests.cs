@@ -4,7 +4,10 @@ namespace Tap.Tests.Cli;
 
 /// <summary>
 /// Finding the workspace without being told where it is — what makes <c>tap-studio test</c>
-/// work from anywhere inside a checkout, the way git does.
+/// work from anywhere inside a checkout, the way git does. Order of precedence: the
+/// explicit flag, then the upward walk, then the downward fallback — which must be
+/// deterministic (shallowest, then ordinal-first), bounded, and blind to dependency
+/// folders.
 /// </summary>
 public class WorkspaceLocatorTests : IDisposable
 {
@@ -105,5 +108,76 @@ public class WorkspaceLocatorTests : IDisposable
         Assert.False(WorkspaceLocator.TryLocate(null, orphan, out _, out var error));
         Assert.Contains("--workspace", error, StringComparison.Ordinal);
         Assert.Contains("tap.md", error, StringComparison.Ordinal);
+    }
+
+    // ---- The downward fallback -----------------------------------------------------------
+
+    [Fact]
+    public void A_workspace_beneath_the_start_directory_is_found()
+    {
+        var expected = Dir("samples", "sample-workspace");
+        Manifest(expected);
+
+        Assert.True(WorkspaceLocator.TryLocate(null, _root, out var found, out var error), error);
+        Assert.Equal(expected, found);
+    }
+
+    [Fact]
+    public void An_ancestor_workspace_still_wins_over_a_descendant()
+    {
+        Manifest(_root);
+        Manifest(Dir("nested", "deeper"));
+        var start = Dir("somewhere");
+
+        Assert.True(WorkspaceLocator.TryLocate(null, start, out var found, out _));
+        Assert.Equal(_root, found);
+    }
+
+    [Fact]
+    public void The_first_workspace_is_the_shallowest_then_ordinal_first()
+    {
+        Manifest(Dir("z-shallow"));
+        Manifest(Dir("a", "deeper"));
+
+        // Depth 1 beats the ordinal-earlier depth 2.
+        Assert.True(WorkspaceLocator.TryLocate(null, _root, out var found, out _));
+        Assert.Equal(Path.Combine(_root, "z-shallow"), found);
+
+        // Same depth as z-shallow, ordinal-earlier — now wins.
+        Manifest(Dir("b-shallow"));
+        Assert.True(WorkspaceLocator.TryLocate(null, _root, out found, out _));
+        Assert.Equal(Path.Combine(_root, "b-shallow"), found);
+    }
+
+    [Fact]
+    public void Dependency_and_dot_directories_are_never_searched()
+    {
+        Manifest(Dir("node_modules", "some-pkg"));
+        Manifest(Dir(".hidden", "ws"));
+
+        Assert.False(WorkspaceLocator.TryLocate(null, _root, out _, out var error));
+        Assert.Contains("--workspace", error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_scan_depth_is_bounded()
+    {
+        Manifest(Dir("a", "b", "c", "d", "e", "f")); // depth 6 — one past the cap
+        Assert.False(WorkspaceLocator.TryLocate(null, _root, out _, out _));
+
+        var inReach = Dir("a", "b", "c", "d", "e"); // depth 5 — at the cap
+        Manifest(inReach);
+        Assert.True(WorkspaceLocator.TryLocate(null, _root, out var found, out _));
+        Assert.Equal(inReach, found);
+    }
+
+    [Fact]
+    public void The_dot_tap_layout_is_found_beneath_too()
+    {
+        var tap = Dir("svc", ".tap");
+        Manifest(tap);
+
+        Assert.True(WorkspaceLocator.TryLocate(null, _root, out var found, out _));
+        Assert.Equal(tap, found);
     }
 }

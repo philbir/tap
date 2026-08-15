@@ -57,6 +57,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         var parsed = HttpBlockParser.Parse(expandedBlock);
 
         var url = parsed.Url;
+        string? resolvedBaseUrl = null;
         if (!HasAnyScheme(url))
         {
             if (collection is null || string.IsNullOrWhiteSpace(collection.BaseUrl) && string.IsNullOrWhiteSpace(stage?.BaseUrl))
@@ -72,6 +73,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             var baseUrl = await Interpolation.ExpandAsync(baseUrlSource, cascade, registry, ct).ConfigureAwait(false);
             baseUrl = NormalizeScheme(baseUrl, request.Protocol);
             url = JoinUrl(baseUrl, url);
+            resolvedBaseUrl = baseUrl;
         }
         else
         {
@@ -108,6 +110,17 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
 
         var assertions = await RenderAssertionsAsync(request.Assertions, cascade, secretNames, ct).ConfigureAwait(false);
 
+        // Built last, after every expansion has run, so the registry's secret cache is
+        // complete. Cascade secrets are collected by their winning value; the auth-derived
+        // header names come along so a caller can mask e.g. an apiKey header whose value the
+        // renderer derived rather than resolved.
+        var secretValues = new List<string>(registry.SecretValues);
+        foreach (var name in secretNames)
+        {
+            if (cascade.TryGetValue(name, out var secretValue)) secretValues.Add(secretValue);
+        }
+        var redactor = new SecretRedactor(secretValues, authHeaders.Keys);
+
         return new ResolvedRequest
         {
             Method = parsed.Method,
@@ -117,12 +130,14 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             Protocol = request.Protocol,
             Transport = transport,
             Assertions = assertions,
+            Redactor = redactor,
             Metadata = new ResolvedRequestMetadata
             {
                 SourceRequestPath = request.RelativePath,
                 EnvPath = env?.RelativePath,
                 StageName = stage?.Name,
                 VariablesUsed = registry.Trace,
+                ResolvedBaseUrl = resolvedBaseUrl,
             },
         };
     }

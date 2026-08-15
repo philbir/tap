@@ -1,5 +1,5 @@
+using Tap.Execution.Agent;
 using System.ComponentModel;
-using Spectre.Console;
 using Spectre.Console.Cli;
 using Tap.Execution;
 using Tap.Execution.Contracts;
@@ -9,6 +9,7 @@ using Tap.Studio.Cli.Auth;
 using Tap.Studio.Cli.Output;
 using Tap.Studio.Cli.Workspace;
 using Tap.Workspace.Model;
+using Tap.Workspace.Rendering;
 
 namespace Tap.Studio.Cli.Commands;
 
@@ -34,11 +35,15 @@ public sealed class SendCommand : AsyncCommand<SendCommand.Settings>
         [CommandOption("--body")]
         [Description("Print the response body.")]
         public bool ShowBody { get; init; }
+
+        [CommandOption("--json")]
+        [Description("Print the step result as JSON on stdout, secrets redacted. Progress and errors go to stderr.")]
+        public bool Json { get; init; }
     }
 
     protected override async Task<int> ExecuteAsync(CommandContext context, Settings settings, CancellationToken ct)
     {
-        var console = ConsoleFactory.Create(settings.NoColor);
+        var console = ConsoleFactory.Create(settings.NoColor, toStdErr: settings.Json);
         var reporter = new ConsoleReporter(console, settings.Verbose);
 
         if (!WorkspaceLocator.TryLocate(settings.WorkspaceDirectory, null, out var root, out var locateError))
@@ -88,10 +93,17 @@ public sealed class SendCommand : AsyncCommand<SendCommand.Settings>
 
         try
         {
-            var runner = new TestRunner(new RequestPipeline(host));
+            // The redactor rides along on the rendered request; captured here so the JSON
+            // echo can be scrubbed of everything secret that went into this render.
+            var redactor = SecretRedactor.None;
+            var runner = new TestRunner(new RequestPipeline(host))
+            {
+                OnRendered = rendered => redactor = rendered.Redactor,
+            };
             var step = await runner.SendAsync(request, ct);
 
-            PrintStep(console, step, settings.ShowBody || settings.Verbose);
+            if (settings.Json) JsonOutput.Write(step, redactor);
+            else StepPrinter.Print(console, step, settings.ShowBody || settings.Verbose);
             return step.Ok ? ExitCode.Ok : ExitCode.TestFailed;
         }
         catch (OperationCanceledException)
@@ -111,40 +123,4 @@ public sealed class SendCommand : AsyncCommand<SendCommand.Settings>
         }
     }
 
-    private static void PrintStep(IAnsiConsole console, TestStepResultDto step, bool showBody)
-    {
-        var status = step.Status > 0 ? step.Status.ToString() : "—";
-        var colour = step.Status is >= 200 and < 300 ? "green" : step.Status >= 400 ? "red" : "yellow";
-        console.MarkupLine($"[dim]{Markup.Escape(step.Method)}[/] {Markup.Escape(step.Url)}");
-        console.MarkupLine($"[{colour}]{status}[/] {Markup.Escape(step.StatusText ?? string.Empty)} [dim]{step.DurationMs:F0}ms · {step.ResponseBodyBytes:N0} bytes[/]");
-
-        if (step.Error is { } error)
-        {
-            console.MarkupLine($"[red]{Markup.Escape(error)}[/]");
-            return;
-        }
-
-        foreach (var assertion in step.Assertions)
-        {
-            if (assertion.Skipped)
-            {
-                console.MarkupLine($"  [dim]○ {Markup.Escape(assertion.Name)}[/]");
-                continue;
-            }
-            if (assertion.Ok)
-            {
-                console.MarkupLine($"  [green]✔[/] {Markup.Escape(assertion.Name)}");
-                continue;
-            }
-            var why = assertion.Message ?? $"expected {assertion.Expected ?? "—"}, got {assertion.Actual ?? "nothing"}";
-            console.MarkupLine($"  [red]✘[/] {Markup.Escape(assertion.Name)}");
-            console.MarkupLine($"    [dim]{Markup.Escape(why)}[/]");
-        }
-
-        if (showBody && step.ResponseBody is { Length: > 0 } body)
-        {
-            console.WriteLine();
-            console.WriteLine(body);
-        }
-    }
 }

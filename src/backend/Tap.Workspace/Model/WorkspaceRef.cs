@@ -3,7 +3,7 @@ namespace Tap.Workspace.Model;
 /// <summary>
 /// A normalized reference to another workspace file. Frontmatter accepts either a
 /// relative path (<c>../../apis/stripe.api.md</c>) or an id reference (<c>id:0192-...</c>);
-/// the parser canonicalizes both into this shape. See spec §12.
+/// the parser canonicalizes both into this shape. See spec §14.
 /// </summary>
 public sealed record WorkspaceRef
 {

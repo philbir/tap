@@ -1,18 +1,32 @@
 namespace Tap.Studio.Cli.Workspace;
 
 /// <summary>
-/// Finds the workspace a command should act on: the one the user named, or the nearest one
-/// above the working directory.
+/// Finds the workspace a command should act on: the one the user named, the nearest one
+/// above the working directory, or — failing both — the first one beneath it.
 ///
 /// <para>Walking up mirrors what every other repo-scoped tool does — <c>git</c>, <c>dotnet</c>,
 /// <c>npm</c> — so <c>tap-studio test</c> works from anywhere inside a checkout without a flag.
-/// Both layouts are recognised: a folder holding <c>tap.md</c> directly, and the older
+/// The downward fallback covers the other common seat: standing at a repo root whose
+/// workspace lives in a subfolder (<c>samples/sample-workspace</c>, <c>api/tap</c>). The scan
+/// is breadth-first in ordinal order, so "the first one" is deterministic — the shallowest,
+/// then alphabetically first — and it is bounded (depth cap, dot- and dependency-directory
+/// skips) so a giant tree doesn't turn a typo'd command into a filesystem crawl. Both
+/// layouts are recognised: a folder holding <c>tap.md</c> directly, and the older
 /// <c>.tap/</c> subfolder.</para>
 /// </summary>
 public static class WorkspaceLocator
 {
     public const string ManifestFileName = "tap.md";
     public const string TapDirectoryName = ".tap";
+
+    /// <summary>How deep the downward fallback looks. Workspaces live near the top of a
+    /// repo; anything deeper is more likely test data than the thing the user meant.</summary>
+    private const int MaxScanDepth = 5;
+
+    private static readonly HashSet<string> SkippedDirectories = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "node_modules", "bin", "obj", "dist", "out", "wwwroot",
+    };
 
     /// <summary>
     /// Resolves the workspace root, or returns null with a reason the caller can print.
@@ -47,8 +61,47 @@ public static class WorkspaceLocator
             current = current.Parent;
         }
 
-        error = $"No Tap workspace found in '{searched}' or any parent directory. "
-              + $"Point at one with --workspace, or run from inside a folder containing {ManifestFileName}.";
+        if (TryFindBeneath(searched, out root)) return true;
+
+        error = $"No Tap workspace found in '{searched}', any parent directory, or the first "
+              + $"{MaxScanDepth} levels beneath it. Point at one with --workspace, or run from "
+              + $"inside a folder containing {ManifestFileName}.";
+        return false;
+    }
+
+    /// <summary>The downward fallback: breadth-first so a shallow workspace always beats a
+    /// deep one, ordinal order within a level so the pick is stable across runs and
+    /// machines. The start directory itself was already ruled out by the upward walk.</summary>
+    private static bool TryFindBeneath(string start, out string root)
+    {
+        root = string.Empty;
+        var queue = new Queue<(string Directory, int Depth)>();
+        queue.Enqueue((start, 0));
+
+        while (queue.Count > 0)
+        {
+            var (directory, depth) = queue.Dequeue();
+            if (depth > 0 && TryManifestRoot(directory, out root)) return true;
+            if (depth == MaxScanDepth) continue;
+
+            string[] children;
+            try
+            {
+                children = Directory.GetDirectories(directory);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                continue;
+            }
+
+            Array.Sort(children, StringComparer.Ordinal);
+            foreach (var child in children)
+            {
+                var name = Path.GetFileName(child);
+                if (name.StartsWith('.') || SkippedDirectories.Contains(name)) continue;
+                queue.Enqueue((child, depth + 1));
+            }
+        }
         return false;
     }
 

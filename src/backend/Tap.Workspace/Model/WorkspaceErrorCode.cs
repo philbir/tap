@@ -1,7 +1,7 @@
 namespace Tap.Workspace.Model;
 
 /// <summary>
-/// Canonical parse / render error codes — mirrors §14 of <c>docs/workspace-format.md</c>.
+/// Canonical parse / render error codes — mirrors §16 of <c>docs/workspace-format.md</c>.
 /// Each code is stable and forms part of the public API; tooling matches on the string.
 /// </summary>
 public static class WorkspaceErrorCode
@@ -47,6 +47,22 @@ public static class WorkspaceErrorCode
     /// <summary>The workspace could not be read at all (missing folder, unreadable root). The
     /// workspace loads empty carrying this error rather than taking the host down with it.</summary>
     public const string E_WORKSPACE_LOAD_FAILED = nameof(E_WORKSPACE_LOAD_FAILED);
+
+    /// <summary>A dynamic (agent-supplied) request tried to leave its collection: the URL was
+    /// absolute, or rendered absolute through a variable, without the caller explicitly
+    /// allowing that. The guard exists because a dynamic URL combined with inherited auth
+    /// headers is a credential-exfiltration primitive — see <c>Tap.Execution.Agent</c>.</summary>
+    public const string E_DYNAMIC_URL_NOT_COLLECTION_SCOPED = nameof(E_DYNAMIC_URL_NOT_COLLECTION_SCOPED);
+
+    /// <summary>A dynamic request named a collection that doesn't exist, or its method / URL /
+    /// headers were malformed (empty, or carrying line breaks that would smuggle extra lines
+    /// into the synthesized http block).</summary>
+    public const string E_DYNAMIC_REQUEST_INVALID = nameof(E_DYNAMIC_REQUEST_INVALID);
+
+    /// <summary>An agent surface tried to use a collection whose <c>agent:</c> option
+    /// disables agent access. Policy set by the collection's author in
+    /// <c>_collection.md</c>; the human-facing Studio and CLI commands ignore it.</summary>
+    public const string E_AGENT_ACCESS_DISABLED = nameof(E_AGENT_ACCESS_DISABLED);
 }
 
 public sealed record WorkspaceError(

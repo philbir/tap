@@ -38,7 +38,7 @@
     "@tabler/icons-react": "^3.46.0",
     "@tauri-apps/api": "^2.11.1",
     "@tiptap/core": "^3.29.2",
-    "@tiptap/extension-link": "^3.29.2",
+    "@tiptap/extension-link": "^3.30.0",
     "@tiptap/pm": "^3.29.2",
     "@tiptap/react": "^3.29.2",
     "@tiptap/starter-kit": "^3.29.2",

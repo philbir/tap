@@ -974,6 +974,18 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@tiptap/extension-link@npm:^3.30.0":
+  version: 3.30.0
+  resolution: "@tiptap/extension-link@npm:3.30.0"
+  dependencies:
+    linkifyjs: "npm:^4.3.3"
+  peerDependencies:
+    "@tiptap/core": 3.30.0
+    "@tiptap/pm": 3.30.0
+  checksum: 10c0/ef79b0c3c8eda2e8e68ec3c7bebfa83d055a3f68d9d815cd181689b0abe1e7e49ebb76271fb461512f0961e2000486a604a61a269a51469941c372e215e9896b
+  languageName: node
+  linkType: hard
+
 "@tiptap/extension-list-item@npm:^3.29.2":
   version: 3.29.2
   resolution: "@tiptap/extension-list-item@npm:3.29.2"
@@ -3607,7 +3619,7 @@ __metadata:
     "@tabler/icons-react": "npm:^3.46.0"
     "@tauri-apps/api": "npm:^2.11.1"
     "@tiptap/core": "npm:^3.29.2"
-    "@tiptap/extension-link": "npm:^3.29.2"
+    "@tiptap/extension-link": "npm:^3.30.0"
     "@tiptap/pm": "npm:^3.29.2"
     "@tiptap/react": "npm:^3.29.2"
     "@tiptap/starter-kit": "npm:^3.29.2"

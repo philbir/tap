@@ -49,6 +49,7 @@ One command wires a project (or a machine) up for an agent environment — it in
 skills and registers the MCP server in that environment's own config format:
 
 ```bash
+tap-studio agent init                                    # wizard: detects installed environments
 tap-studio agent init --env claude                       # this project, for Claude Code
 tap-studio agent init --env claude --env copilot         # several environments at once
 tap-studio agent init --env codex --scope user           # this machine, all projects
@@ -62,6 +63,12 @@ tap-studio agent init --env claude --skills              # just the skills
 | `codex` | `.tap/agent/` + a managed block in `AGENTS.md` (`~/.codex/AGENTS.md` for user) | `.codex/config.toml` (project) or `~/.codex/config.toml` (user) |
 | `copilot` | `.tap/agent/` + a managed block in `.github/copilot-instructions.md` | `.vscode/mcp.json` (`servers` key); user scope prints the VS Code step |
 | `opencode` | `.tap/agent/` + a managed block in `AGENTS.md` (`~/.config/opencode/AGENTS.md` for user) | `opencode.json` (project) or `~/.config/opencode/opencode.json` (user) |
+
+With no `--env` on an interactive terminal, a three-question wizard runs instead: it
+detects which environments this machine plausibly has (CLIs on PATH, config directories,
+project markers like `.vscode/`), preselects those, then asks for scope and what to
+install. Headless callers keep the crisp usage error — a prompt nobody can see is a
+hang, not a wizard.
 
 The skills are embedded in the `tap-studio` tool itself, so re-running `agent init`
 after a tool update refreshes them — that is the intended upgrade path. Everything is

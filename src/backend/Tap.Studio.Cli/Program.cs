@@ -54,7 +54,8 @@ app.Configure(cfg =>
     {
         agent.SetDescription("Set up AI-agent support for this workspace.");
         agent.AddCommand<AgentInitCommand>("init")
-            .WithDescription("Install the agent skills and/or MCP registration for claude, codex, copilot, or opencode — per project or per user.")
+            .WithDescription("Install the agent skills and/or MCP registration for claude, codex, copilot, or opencode — per project or per user. With no --env, an interactive wizard detects and preselects the environments this machine runs.")
+            .WithExample(["agent", "init"])
             .WithExample(["agent", "init", "--env", "claude"])
             .WithExample(["agent", "init", "--env", "claude", "--env", "copilot", "--scope", "project"])
             .WithExample(["agent", "init", "--env", "codex", "--scope", "user", "--mcp"]);

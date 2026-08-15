@@ -45,6 +45,11 @@ app.Configure(cfg =>
         .WithExample(["describe", "GET /demo/methods"])
         .WithExample(["describe", "collections/demo/methods/01-get.req.md", "--json"]);
 
+    cfg.AddCommand<McpCommand>("mcp")
+        .WithDescription("Serve the workspace to MCP clients over stdio: inventory, describe, send, call, and test as tools.")
+        .WithExample(["mcp", "--workspace", "."])
+        .WithExample(["mcp", "-w", "samples/sample-workspace", "--use-cached-tokens"]);
+
     cfg.AddCommand<LintCommand>("lint")
         .WithDescription("Parse every file in the workspace and report what doesn't load.")
         .WithExample(["lint"])

@@ -21,13 +21,18 @@ public static class JsonOutput
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
     };
 
-    /// <summary>Serializes <paramref name="payload"/> to stdout, scrubbed through
+    /// <summary>Serializes <paramref name="payload"/>, scrubbed through
     /// <paramref name="redactor"/> when one is supplied. Redaction happens on the serialized
     /// text so it also catches a secret inside any nested string — a URL query, a response
-    /// body preview, an assertion's actual value.</summary>
-    public static void Write<T>(T payload, SecretRedactor? redactor = null)
+    /// body preview, an assertion's actual value. The MCP tools return this same document, so
+    /// a script reading CLI output and an agent reading a tool result see one shape.</summary>
+    public static string Serialize<T>(T payload, SecretRedactor? redactor = null)
     {
         var json = JsonSerializer.Serialize(payload, Options);
-        Console.Out.WriteLine(redactor is null ? json : redactor.Redact(json));
+        return redactor is null ? json : redactor.Redact(json)!;
     }
+
+    /// <summary>Writes <see cref="Serialize{T}"/>'s document to stdout.</summary>
+    public static void Write<T>(T payload, SecretRedactor? redactor = null)
+        => Console.Out.WriteLine(Serialize(payload, redactor));
 }

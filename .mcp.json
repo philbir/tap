@@ -6,6 +6,11 @@
     "context7": {
       "command": "npx",
       "args": ["-y", "@upstash/context7-mcp@latest"]
+    },
+    "//2": "Dogfoods this repo's own `tap-studio mcp` stdio server against the sample workspace: workspace_inventory / describe_request / send_request / call_request / run_test as tools, secrets redacted. Same engine as the CLI.",
+    "tap-studio": {
+      "command": "dotnet",
+      "args": ["run", "--project", "src/backend/Tap.Studio.Cli", "--", "mcp", "--workspace", "samples/sample-workspace"]
     }
   }
 }

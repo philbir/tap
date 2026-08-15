@@ -61,6 +61,16 @@ tap-studio call POST /upload -c demo -d @payload.json --json
 - `--auth <ref>` picks a different auth profile from the workspace (by path relative to
   the collection directory); omit it to use the collection's default.
 
+## Same surface as MCP tools
+
+`tap-studio mcp --workspace <dir>` serves this exact surface over stdio to MCP clients
+(this repo's `.mcp.json` registers it against `samples/sample-workspace`). The tools —
+`workspace_inventory`, `describe_request`, `send_request`, `call_request`, `run_test` —
+return the same redacted JSON documents as the `--json` commands, and `call_request`
+enforces the same relative-URL guard (`allowAnyUrl` only on explicit user instruction).
+When the tools are connected, prefer them over shelling out; the semantics are identical.
+The server re-reads the workspace on every call, so file edits are picked up immediately.
+
 ## Reading results
 
 `send` and `call` print one step object; `test` prints `{ok, passed, failed, skipped,

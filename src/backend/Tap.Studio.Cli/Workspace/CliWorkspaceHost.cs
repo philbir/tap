@@ -74,6 +74,7 @@ public sealed class CliWorkspaceHost : IWorkspaceHost
             new FileVariableProviderFactory(),
             new AzureKeyVaultVariableProviderFactory(),
             new OnePasswordVariableProviderFactory(),
+            new AspireVariableProviderFactory(),
             .. SystemFactory(out var systemSettings),
         ];
 

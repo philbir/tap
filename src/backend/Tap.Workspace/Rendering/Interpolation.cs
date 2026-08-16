@@ -80,6 +80,15 @@ public static partial class Interpolation
                     resolved[key] = cascadeValue;
                     continue;
                 }
+
+                // Generated tokens ({{$guid}}, {{$timestamp}}, …) come after the cascade so a
+                // workspace can still define a variable of that name and win.
+                if (DynamicVariables.TryResolve(name, out var generated))
+                {
+                    resolved[key] = generated;
+                    continue;
+                }
+
                 var v = await registry.ResolveAnyAsync(name, ct).ConfigureAwait(false);
                 if (v is null)
                 {
@@ -123,7 +132,11 @@ public static partial class Interpolation
             foreach (Match m in TokenRegex().Matches(input))
             {
                 if (m.Groups["provider"].Success) continue;
-                names.Add(m.Groups["name"].Value.Trim());
+                var name = m.Groups["name"].Value.Trim();
+                // Generated tokens are not inputs the user has to supply, so listing them among
+                // a request's variables would read as "you still need to set these".
+                if (DynamicVariables.IsDynamic(name)) continue;
+                names.Add(name);
             }
         }
         catch (RegexMatchTimeoutException)

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { RequestSpec, WorkspaceFileKind } from '../api/types'
 import { useTapStore } from '../store'
+import { fileNameFor } from './tapFiles'
 
 interface Props {
   open: boolean
@@ -31,7 +32,7 @@ export function DuplicateRequestDialog({ open, onOpenChange, source, onCreated }
 
   const slug = nameToSlug(name)
   const dir = source ? source.realPath.slice(0, source.realPath.lastIndexOf('/')) : ''
-  const target = slug ? `${dir}/${slug}.req.md` : ''
+  const target = slug ? `${dir}/${fileNameFor('req', slug)}` : ''
 
   async function submit() {
     if (!source) return

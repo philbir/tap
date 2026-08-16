@@ -30,7 +30,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
     {
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
         var transport = new RequestTransportSettings
         {
@@ -50,8 +50,16 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             auth = workspace.Resolve(collection.DefaultAuth, collectionDir) as AuthFile;
         }
 
-        var (cascade, secretNames) = BuildCascade(request, collection, stage, env, overrides);
+        var built = BuildCascade(request, collection, stage, env, overrides);
+        var cascade = built.Values;
+        var secretNames = built.SecretNames;
         await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
+
+        // Resolve the effective base URL *before* the block is interpolated, so the block can
+        // refer to it as {{baseUrl}}. It only needs the cascade and the providers, never the
+        // block, so hoisting it costs nothing and buys the portable spelling.
+        var effectiveBaseUrl = await BindBaseUrlAsync(built, collection, stage, request.Protocol, ct)
+            .ConfigureAwait(false);
 
         var expandedBlock = await Interpolation.ExpandAsync(request.HttpBlock, cascade, registry, ct).ConfigureAwait(false);
         var parsed = HttpBlockParser.Parse(expandedBlock);
@@ -60,7 +68,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         string? resolvedBaseUrl = null;
         if (!HasAnyScheme(url))
         {
-            if (collection is null || string.IsNullOrWhiteSpace(collection.BaseUrl) && string.IsNullOrWhiteSpace(stage?.BaseUrl))
+            if (effectiveBaseUrl is null)
             {
                 // The URL has already been through interpolation, so it can carry a resolved secret
                 // — name the request instead of echoing it.
@@ -69,11 +77,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
                     "The request URL is not absolute and the owning collection has no baseUrl to fall back on.",
                     request.RelativePath));
             }
-            var baseUrlSource = !string.IsNullOrWhiteSpace(stage?.BaseUrl) ? stage!.BaseUrl! : collection.BaseUrl;
-            var baseUrl = await Interpolation.ExpandAsync(baseUrlSource, cascade, registry, ct).ConfigureAwait(false);
-            baseUrl = NormalizeScheme(baseUrl, request.Protocol);
-            url = JoinUrl(baseUrl, url);
-            resolvedBaseUrl = baseUrl;
+            url = JoinUrl(effectiveBaseUrl, url);
+            resolvedBaseUrl = effectiveBaseUrl;
         }
         else
         {
@@ -161,10 +166,15 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         IReadOnlyDictionary<string, string>? overrides = null,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
     {
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
-        var (cascade, secretNames) = BuildCascade(request, collection, stage, env, overrides);
+        var built = BuildCascade(request, collection, stage, env, overrides);
+        var cascade = built.Values;
+        var secretNames = built.SecretNames;
         await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
+        // Same built-in the send path binds, so an assertion reading {{baseUrl}} gets the value
+        // the request was actually built against rather than an unknown-variable error.
+        await BindBaseUrlAsync(built, collection, stage, request.Protocol, ct).ConfigureAwait(false);
         return await RenderAssertionsAsync(assertions, cascade, secretNames, ct, tolerant).ConfigureAwait(false);
     }
 
@@ -191,10 +201,54 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         }
     }
 
-    /// <summary>Composes the variable cascade — workspace &lt; collection &lt; stage &lt; env
-    /// &lt; request &lt; overrides — along with the set of names whose winning definition is
-    /// marked secret.</summary>
-    private (Dictionary<string, string> Cascade, HashSet<string> SecretNames) BuildCascade(
+    /// <summary>
+    /// Resolves the collection's base URL for this render — the stage's override when it has one,
+    /// else the collection's own — and binds it into the cascade as <see cref="BaseUrlVariable"/>.
+    /// Returns the resolved value (scheme-normalized for the protocol), or null when there is no
+    /// collection or it declares no base URL — which is only an error if the request line turns
+    /// out to be relative.
+    ///
+    /// <para>The binding is skipped when a Tap scope already defines the name: the built-in fills
+    /// a gap, it does not overrule an author who declared their own <c>baseUrl</c> var. The
+    /// trailing <c>/</c> is trimmed so the idiomatic <c>{{baseUrl}}/orders</c> can't produce a
+    /// doubled separator.</para>
+    /// </summary>
+    private async ValueTask<string?> BindBaseUrlAsync(
+        Cascade built, CollectionFile? collection, CollectionStage? stage, RequestProtocol protocol,
+        CancellationToken ct)
+    {
+        var source = !string.IsNullOrWhiteSpace(stage?.BaseUrl) ? stage!.BaseUrl : collection?.BaseUrl;
+        if (string.IsNullOrWhiteSpace(source)) return null;
+
+        var expanded = await Interpolation.ExpandAsync(source!, built.Values, registry, ct).ConfigureAwait(false);
+        var normalized = NormalizeScheme(expanded, protocol);
+        if (!built.TapDefined.Contains(BaseUrlVariable))
+            built.Values[BaseUrlVariable] = normalized.TrimEnd('/');
+        return normalized;
+    }
+
+    /// <summary>The built-in name bound to the collection's (stage-resolved) base URL. Exists so
+    /// a <c>.http</c> file can write <c>GET {{baseUrl}}/orders</c> and mean the same thing in
+    /// Visual Studio — where its own <c>@baseUrl</c> answers — and in Tap, where the collection
+    /// and the selected stage answer instead.</summary>
+    public const string BaseUrlVariable = "baseUrl";
+
+    /// <summary>The assembled cascade, the names whose winning definition is secret, and the
+    /// names any Tap scope defined (i.e. everything except the portable layer) — the last of
+    /// which decides whether the built-in <see cref="BaseUrlVariable"/> is allowed to bind.</summary>
+    private readonly record struct Cascade(
+        Dictionary<string, string> Values,
+        HashSet<string> SecretNames,
+        HashSet<string> TapDefined);
+
+    /// <summary>Composes the variable cascade — portable &lt; workspace &lt; collection &lt; stage
+    /// &lt; env &lt; request &lt; overrides.
+    ///
+    /// <para>Portable vars (a <c>.http</c> file's <c>@name = value</c> lines) sit at the bottom
+    /// rather than at request scope. They are what the file resolves to when it is opened by a
+    /// tool that is not Tap, so anything configured in the workspace is by definition the more
+    /// deliberate answer. See <see cref="RequestFile.PortableVars"/>.</para></summary>
+    private Cascade BuildCascade(
         RequestFile request,
         CollectionFile? collection,
         CollectionStage? stage,
@@ -206,33 +260,40 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         // and an assertion needs to know whether the expected value it just expanded is safe
         // to echo back into a results pane.
         var secretNames = new HashSet<string>(StringComparer.Ordinal);
+        var tapDefined = new HashSet<string>(StringComparer.Ordinal);
 
-        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames);
-        if (collection is not null) MergeVars(cascade, collection.Vars, secretNames);
-        if (stage is not null) MergeVars(cascade, stage.Vars, secretNames);
-        if (env is not null) MergeVars(cascade, env.Vars, secretNames);
-        MergeVars(cascade, request.Vars, secretNames);
+        MergeVars(cascade, request.PortableVars, secretNames);
+        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames, tapDefined);
+        if (collection is not null) MergeVars(cascade, collection.Vars, secretNames, tapDefined);
+        if (stage is not null) MergeVars(cascade, stage.Vars, secretNames, tapDefined);
+        if (env is not null) MergeVars(cascade, env.Vars, secretNames, tapDefined);
+        MergeVars(cascade, request.Vars, secretNames, tapDefined);
 
         if (overrides is not null)
         {
             foreach (var (k, v) in overrides)
             {
                 cascade[k] = v;
+                tapDefined.Add(k);
                 // A per-run override is a literal the caller just typed, not a secret lookup.
                 secretNames.Remove(k);
             }
         }
 
-        return (cascade, secretNames);
+        return new Cascade(cascade, secretNames, tapDefined);
     }
 
+    /// <param name="tapDefined">Collects the names this scope defined. Null for the portable
+    /// layer, which is deliberately not counted as a Tap-side definition.</param>
     private static void MergeVars(
-        Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src, HashSet<string> secretNames)
+        Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src,
+        HashSet<string> secretNames, HashSet<string>? tapDefined = null)
     {
         foreach (var (k, v) in src)
         {
             if (v.Default is not { } d) continue;
             dest[k] = d;
+            tapDefined?.Add(k);
             // A later scope redefining the name also redefines its sensitivity — an env that
             // overrides a secret with a literal test value is no longer holding a secret.
             if (v.Secret) secretNames.Add(k);

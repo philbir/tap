@@ -9,7 +9,7 @@ namespace Tap.Tests.Asserts;
 /// <summary>Builders shared by the assertion parser, round-trip, and evaluator tests.</summary>
 internal static class AssertTestData
 {
-    public const string RequestPath = "collections/demo/sample.req.md";
+    public const string RequestPath = "collections/demo/sample.req.tap";
 
     /// <summary>Wraps a frontmatter fragment in an otherwise-minimal request file.</summary>
     public static string RequestSource(string frontmatterFragment)

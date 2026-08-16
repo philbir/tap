@@ -13,6 +13,7 @@ import type { AssertResult, AssertSummary, AuthExecuteResponse, AuthStatus, Auth
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useActiveEnv, useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
+import { COLLECTION_FILE } from '../shell/tapFiles'
 
 interface Props {
   rendered: RenderedRequest | null
@@ -1162,8 +1163,8 @@ function resolveEffectiveAuth(opts: {
   if (collectionDefaultAuth === undefined) return { kind: 'unknown' }
   if (collectionDefaultAuth === null || collectionDefaultAuth === '') return { kind: 'inherit-empty' }
   if (collectionDefaultAuth === 'none') return { kind: 'none', inherited: true }
-  // Collection defaultAuth is relative to the collection file (e.g. `_collection.md`).
-  const collectionFile = requestPath.split('/').slice(0, 2).join('/') + '/_collection.md'
+  // Collection defaultAuth is relative to the collection file (e.g. `_collection.tap`).
+  const collectionFile = `${requestPath.split('/').slice(0, 2).join('/')}/${COLLECTION_FILE}`
   const resolved = resolveRelativePath(collectionFile, collectionDefaultAuth)
   return {
     kind: 'profile',

@@ -28,6 +28,7 @@ import type {
   GitStatus,
   GraphQLSchemaMode,
   GraphQLSchemaResponse,
+  HttpFileParseResult,
   KnownWorkspace,
   OidcDiscovery,
   PostmanImportResponse,
@@ -155,8 +156,21 @@ export const api = {
   /** Save a workspace file by its raw text content. The server validates by parsing
    *  through `FileParser` before writing — invalid YAML/kind/etc. rejects with 400 +
    *  WorkspaceErrorDto, and nothing is written. Used by every editor's Source tab. */
+  /** Raw text of one workspace file. Used by the .http editor, which has no structured spec. */
+  source: (path: string) =>
+    get<{ path: string; content: string }>(`/api/workspace/source?path=${encodeURIComponent(path)}`)
+      .then((r) => r.content),
+
   saveSource: (path: string, content: string) =>
     put('/api/workspace/source', { path, content }),
+
+  /** Parse unsaved `.http` text server-side, listing the requests it currently holds.
+   *  The `.http` editor drives its request list off this rather than off the workspace tree:
+   *  a request's name is derived from its own content, so an unsaved edit can add, rename or
+   *  remove requests. Same parser the loader and the executor use, so the row the user clicks
+   *  and the request the server then runs cannot disagree. */
+  parseHttpFile: (path: string, content: string) =>
+    post<HttpFileParseResult>('/api/http/parse', { path, content }),
   tree: () => get<TreeNode[]>('/api/workspace/tree'),
 
   /** Create an empty folder under `.tap/`. Folders are pure grouping — no spec file is written. */
@@ -167,7 +181,7 @@ export const api = {
   deleteFolder: (path: string) =>
     del(`/api/workspace/folders?path=${encodeURIComponent(path)}`),
 
-  /** Delete a single workspace file (request / auth / env / `_collection.md`). */
+  /** Delete a single workspace file (request / auth / env / `_collection.tap`). */
   deleteFile: (path: string) =>
     del(`/api/workspace/files?path=${encodeURIComponent(path)}`),
 
@@ -250,7 +264,7 @@ export const api = {
 
   // Tags
   tags: () => get<TaggedItem[]>('/api/tags'),
-  /** Workspace tag dictionary: union of curated tags from `tap.md` and tags currently
+  /** Workspace tag dictionary: union of curated tags from `workspace.tap` and tags currently
    *  in use on any entity. Source for every TagsInput's autocomplete + the Tags-view
    *  filter picker. */
   tagDictionary: () => get<string[]>('/api/tags/dictionary'),
@@ -286,6 +300,9 @@ export const api = {
    * Pass `spec` to send an unsaved (dirty) draft: the server builds the request from the
    * spec in-memory — same emit pipeline as Save — without writing it to disk, then renders
    * and executes that transient request instead of the on-disk file.
+   *
+   * `source` is the same idea for a `.http` file, which has no spec — it carries the raw
+   * editor text, and `path` names which request inside it to run.
    */
   executeStream(
     path: string,
@@ -294,9 +311,10 @@ export const api = {
     handler: (event: StreamEvent) => void,
     overrides?: Record<string, string>,
     spec?: RequestSpec,
+    source?: string,
   ): AbortController {
     const ctrl = new AbortController()
-    void runExecuteStream(path, env, stage, overrides, handler, ctrl.signal, spec)
+    void runExecuteStream(path, env, stage, overrides, handler, ctrl.signal, spec, source)
     return ctrl
   },
 
@@ -593,10 +611,11 @@ async function runExecuteStream(
   handler: (event: StreamEvent) => void,
   signal: AbortSignal,
   spec?: RequestSpec,
+  source?: string,
 ): Promise<void> {
   await postSse(
     '/api/execute/stream',
-    { path, env, stage, overrides, spec },
+    { path, env, stage, overrides, spec, source },
     signal,
     (name, payload) => {
       switch (name) {

@@ -20,7 +20,7 @@ public sealed class LintCommand : Command<LintCommand.Settings>
     public sealed class Settings : CommandSettings
     {
         [CommandOption("-w|--workspace <DIR>")]
-        [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
+        [Description("Workspace directory. Defaults to the nearest ancestor containing workspace.tap, or the first workspace found beneath the working directory.")]
         public string? WorkspaceDirectory { get; init; }
 
         [CommandOption("--no-color")]
@@ -52,27 +52,51 @@ public sealed class LintCommand : Command<LintCommand.Settings>
             console.WriteLine();
         }
 
-        foreach (var error in workspace.Errors)
+        // Errors and warnings are reported together but only errors decide the exit code — a
+        // deprecation notice must not turn every unmigrated workspace's CI red.
+        var errors = workspace.Errors.Where(e => e.Severity == WorkspaceErrorSeverity.Error).ToArray();
+        var warnings = workspace.Errors.Where(e => e.Severity == WorkspaceErrorSeverity.Warning).ToArray();
+
+        foreach (var error in errors) Report(console, error, "[red]✘[/]");
+
+        // Warnings that apply to every file in the workspace — the legacy-extension notice on an
+        // unmigrated workspace is one per file — would otherwise bury the errors above them under
+        // a hundred identical paragraphs. Show one, count the rest, unless asked for everything.
+        foreach (var group in warnings.GroupBy(w => w.Code, StringComparer.Ordinal))
         {
-            console.MarkupLine(
-                $"[red]✘[/] [bold]{Markup.Escape(error.Code)}[/] {Markup.Escape(error.RelativePath ?? "(workspace)")}"
-                + (error.Line is { } line ? $":{line}" : string.Empty));
-            console.MarkupLine($"   {Markup.Escape(error.Message)}");
+            var shown = settings.Verbose ? group.ToArray() : group.Take(1).ToArray();
+            foreach (var warning in shown) Report(console, warning, "[yellow]![/]");
+
+            var hidden = group.Count() - shown.Length;
+            if (hidden > 0)
+                console.MarkupLine($"   [dim]… and {hidden} more {(hidden == 1 ? "file" : "files")} (-v to list)[/]");
         }
 
         var counts = Summarize(workspace.Files);
         console.WriteLine();
 
-        if (workspace.Errors.Count == 0)
+        var warningSuffix = warnings.Length == 0
+            ? string.Empty
+            : $" [yellow]{warnings.Length} {(warnings.Length == 1 ? "warning" : "warnings")}[/]";
+
+        if (errors.Length == 0)
         {
-            console.MarkupLine($"[green]OK[/]  {workspace.Files.Count} files loaded [dim]({counts})[/]");
+            console.MarkupLine($"[green]OK[/]  {workspace.Files.Count} files loaded [dim]({counts})[/]{warningSuffix}");
             return ExitCode.Ok;
         }
 
         console.MarkupLine(
-            $"[red]FAIL[/]  {workspace.Errors.Count} "
-            + $"{(workspace.Errors.Count == 1 ? "problem" : "problems")} in {workspace.Files.Count} files [dim]({counts})[/]");
+            $"[red]FAIL[/]  {errors.Length} "
+            + $"{(errors.Length == 1 ? "problem" : "problems")} in {workspace.Files.Count} files [dim]({counts})[/]{warningSuffix}");
         return ExitCode.WorkspaceError;
+    }
+
+    private static void Report(IAnsiConsole console, WorkspaceError error, string marker)
+    {
+        console.MarkupLine(
+            $"{marker} [bold]{Markup.Escape(error.Code)}[/] {Markup.Escape(error.RelativePath ?? "(workspace)")}"
+            + (error.Line is { } line ? $":{line}" : string.Empty));
+        console.MarkupLine($"   {Markup.Escape(error.Message)}");
     }
 
     private static string Summarize(IReadOnlyList<WorkspaceFile> files)

@@ -71,7 +71,7 @@ public static class WorkspaceInventory
 
     public static RequestDescriptionDto Describe(LoadedWorkspace workspace, RequestFile request)
     {
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         var block = ScanBlock(request.HttpBlock);
         var auth = RequestPipeline.ResolveAuth(workspace, request, stageName: null);
 
@@ -103,7 +103,7 @@ public static class WorkspaceInventory
 
     private static RequestSummaryDto Summarize(LoadedWorkspace workspace, RequestFile request)
     {
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         var block = ScanBlock(request.HttpBlock);
         var auth = RequestPipeline.ResolveAuth(workspace, request, stageName: null);
 
@@ -121,11 +121,11 @@ public static class WorkspaceInventory
     }
 
     private static bool IsInCollection(LoadedWorkspace workspace, RequestFile request, CollectionFile collection)
-        => CollectionLocator.ForFile(workspace, request.RelativePath)?.RelativePath == collection.RelativePath;
+        => CollectionLocator.ForRequest(workspace, request)?.RelativePath == collection.RelativePath;
 
     /// <summary>Falls back to the filename stem (everything before the first dot, so
-    /// <c>01-get.req.md</c> → <c>01-get</c>); a collection falls back to its folder name,
-    /// since every collection file is called <c>_collection.md</c>.</summary>
+    /// <c>01-get.req.tap</c> → <c>01-get</c>); a collection falls back to its folder name,
+    /// since every collection file has the same fixed name.</summary>
     private static string DisplayName(WorkspaceFile file)
     {
         if (file.Name is { Length: > 0 }) return file.Name;

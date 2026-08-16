@@ -1,12 +1,12 @@
 ---
 name: tap-studio
-description: "Run HTTP requests, ad-hoc calls, and test sets from a Tap Studio workspace via the tap-studio CLI — with auth handled by the workspace, never by you. USE WHEN: you need to hit an API that a Tap workspace already models (a *.req.md request, a collection, a test set or flow), verify an endpoint's behaviour, or fire an ad-hoc request that needs the workspace's configured auth/baseUrl. DO NOT USE FOR: editing workspace files (edit the markdown directly), driving the Studio web UI, or APIs no workspace covers (plain curl is fine there). INVOKES: the tap-studio CLI (dotnet)."
+description: "Run HTTP requests, ad-hoc calls, and test sets from a Tap Studio workspace via the tap-studio CLI — with auth handled by the workspace, never by you. USE WHEN: you need to hit an API that a Tap workspace already models (a *.req.tap request, a collection, a test set or flow), verify an endpoint's behaviour, or fire an ad-hoc request that needs the workspace's configured auth/baseUrl. DO NOT USE FOR: editing workspace files (edit the markdown directly), driving the Studio web UI, or APIs no workspace covers (plain curl is fine there). INVOKES: the tap-studio CLI (dotnet)."
 ---
 
 # tap-studio CLI (agent surface)
 
-`tap-studio` runs requests from a Tap workspace — a folder of markdown files (`tap.md`,
-`collections/**/*.req.md`, `*.auth.md`, `*.env.md`, `tests/*.test.md|*.flow.md`). The
+`tap-studio` runs requests from a Tap workspace — a folder of markdown files (`workspace.tap`,
+`collections/**/*.req.tap`, `*.auth.tap`, `*.env.tap`, `tests/*.test.tap|*.flow.tap`). The
 workspace owns base URLs, environments, variables, and **auth**: you never need a token,
 an API key, or a password, and you must never try to obtain one. The CLI resolves auth
 itself and redacts secrets from everything it prints in `--json` mode.
@@ -20,7 +20,7 @@ dotnet run --project src/backend/Tap.Studio.Cli -- <command> --workspace samples
 ```
 
 Elsewhere, it's the `tap-studio` dotnet tool. `--workspace` defaults to the nearest
-ancestor directory containing `tap.md` — or, when no ancestor has one, the first
+ancestor directory containing `workspace.tap` — or, when no ancestor has one, the first
 workspace found beneath the working directory (shallowest, then alphabetical; capped
 depth). Inside or above a workspace you can simply omit it.
 
@@ -36,6 +36,11 @@ tap-studio describe "GET /demo/methods" --json   # one request's template surfac
 tap-studio send "GET /demo/methods" --json       # run a saved request
 tap-studio test "Demo API smoke" --json          # run a test set or flow
 tap-studio vars --env dev              # resolved variable cascade, secrets masked
+tap-studio migrate --dry-run           # preview the .md -> .tap workspace rename
+
+# Requests inside a portable .http file are addressed by fragment path:
+tap-studio send collections/demo/orders.http#get-order
+tap-studio send "Get order"                # or by name, like any other request
 ```
 
 Targets are named by workspace-relative path, frontmatter `name:`, or filename stem.
@@ -56,7 +61,7 @@ tap-studio call POST /upload -c demo -d @payload.json --json
 ```
 
 - `--collection` is required; find names with `list collections --json`.
-- A collection can opt out of agent use (`agent: false` in its `_collection.md`, or the
+- A collection can opt out of agent use (`agent: false` in its `_collection.tap`, or the
   "Agent access" switch in the Studio). Such collections show `agentEnabled: false` in the
   inventory, their requests are omitted from discovery, and describe/send/call refuse with
   `E_AGENT_ACCESS_DISABLED`. Don't work around it (e.g. via curl) — ask the user to enable
@@ -101,7 +106,7 @@ or the URL guard.
 | 0 | everything ran and passed |
 | 1 | a test/assertion failed, or the sent request's assertions failed — the run itself was fine |
 | 2 | usage error: unknown/ambiguous name, bad option, malformed `--var`/`--header` |
-| 3 | workspace error: no `tap.md`, a file that doesn't parse |
+| 3 | workspace error: no `workspace.tap`, a file that doesn't parse |
 | 4 | auth needed a human (interactive OAuth) and none was available |
 | 130 | cancelled |
 
@@ -112,7 +117,7 @@ or the URL guard.
 - Interactive auth (browser PKCE) cannot be minted headlessly → exit 4. If the user has
   signed in through the Studio UI on this machine, `--use-cached-tokens` lets the run use
   their cached token. Suggest that flag on exit 4; don't loop retries.
-- Never read `~/.tap/auth-tokens.json`, `*.auth.md` field values, `.env` files, or user
+- Never read `~/.tap/auth-tokens.json`, `*.auth.tap` field values, `.env` files, or user
   secrets to work around auth — the CLI is the sanctioned path, and `--json` output is
   redacted precisely so you don't need them.
 - Redaction covers what the CLI prints. An upstream that echoes a credential back in its

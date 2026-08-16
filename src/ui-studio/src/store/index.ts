@@ -5,10 +5,11 @@ import type {
   AuthSummary, CollectionSummary, EnvSummary, FlowSummary, KnownWorkspace, TestSetSummary, TreeNode,
   WorkspaceFileKind, WorkspaceInfo,
 } from '../api/types'
+import { toCanonicalPath } from '../shell/tapFiles'
 
 /** One open file in the tab bar. */
 export interface OpenTab {
-  /** Workspace-relative path; '__manifest__' is reserved for the tap.md workspace editor. */
+  /** Workspace-relative path; '__manifest__' is reserved for the workspace.tap workspace editor. */
   path: string
   kind: WorkspaceFileKind
   /** Display label for the tab header. */
@@ -110,8 +111,32 @@ export const useTapStore = create<TapStore>()(
           const previousRoot = get().info?.root ?? null
           const prevActiveEnv = previousRoot ? get().activeEnvByRoot[previousRoot] : null
 
+          // Open tabs and the selected env are persisted by path, so a workspace that has just
+          // been through `tap-studio migrate` would restore a screenful of dead .md paths.
+          // Repoint anything whose canonical twin is now on disk.
+          const livePaths = new Set<string>()
+          const collectPaths = (nodes: typeof t) => {
+            for (const n of nodes) {
+              livePaths.add(n.path)
+              collectPaths(n.children ?? [])
+            }
+          }
+          collectPaths(t)
+          // Generic over the input so a non-null path stays non-null: tab paths are `string`,
+          // the active env is `string | null`, and both go through here.
+          const heal = <T extends string | null>(path: T): T => {
+            if (!path || livePaths.has(path)) return path
+            const canonical = toCanonicalPath(path)
+            return (canonical !== path && livePaths.has(canonical) ? canonical : path) as T
+          }
+
           set((state) => {
-            const nextActiveEnv = state.activeEnvByRoot[w.root] ?? prevActiveEnv ?? w.defaultEnv
+            const rawActiveEnv = state.activeEnvByRoot[w.root] ?? prevActiveEnv ?? w.defaultEnv
+            const nextActiveEnv = heal(rawActiveEnv)
+            const healedTabs = state.tabs.map((tab) => {
+              const path = heal(tab.path)
+              return path === tab.path ? tab : { ...tab, path }
+            })
             return {
               info: w,
               tree: t,
@@ -123,6 +148,8 @@ export const useTapStore = create<TapStore>()(
               flows: fl,
               generation: state.generation + 1,
               loadError: null,
+              tabs: healedTabs,
+              activeTab: heal(state.activeTab),
               activeEnvByRoot: { ...state.activeEnvByRoot, [w.root]: nextActiveEnv },
             }
           })

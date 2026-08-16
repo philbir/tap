@@ -2,7 +2,7 @@
 
 > Status: **draft v0**. Subject to change until v1.0. Every file Tap stores in your repo is plain Markdown with YAML frontmatter, so the format is reviewable as a normal git diff.
 
-A Tap **workspace** is a folder holding a `tap.md` manifest plus the typed files described
+A Tap **workspace** is a folder holding a `workspace.tap` manifest plus the typed files described
 below. Everything in it is meant to be checked into version control. Nothing in it ever
 contains a secret value — secrets live in **variable providers** (§12); workspace files carry
 only `{{provider:name}}` references, `secret: true` flags, or the file provider's encrypted
@@ -17,7 +17,7 @@ This document is the authoritative spec for the on-disk format. The Tap parser (
 1. **Git-native.** Every artifact is plain text. Renames work via `git mv`. Diffs are readable.
 2. **Composable.** A runnable request is the composition of *workspace + collection (+ stage) + auth + environment + request*. No single file is the whole story.
 3. **Readable on GitHub.** Frontmatter is the structured part; the body is human prose. A request file is a documentation page that happens to be executable.
-4. **Secret-safe by construction.** A literal secret never needs to occur in a workspace file. A field that needs one references a provider (`{{kv-prod:stripe-live-key}}`), or a variable declared `secret: true`; values resolve at render time, are traced by name only, and are redacted from anything echoed back out (§12.2, §13).
+4. **Secret-safe by construction.** A literal secret never needs to occur in a workspace file. A field that needs one references a provider (`{{kv-prod:stripe-live-key}}`), or a variable declared `secret: true`; values resolve at render time, are traced by name only, and are redacted from anything echoed back out (§12.3, §13).
 5. **One format, a handful of shapes.** Every file is `Markdown + YAML frontmatter`. The `kind` field plus the filename suffix tell the parser what shape to expect.
 6. **No required tooling to read.** Any text editor or any Markdown renderer can display a workspace. Tap adds editing, validation, execution, and live preview on top.
 
@@ -27,19 +27,37 @@ This document is the authoritative spec for the on-disk format. The Tap parser (
 
 | Kind | Filename suffix | Purpose |
 |---|---|---|
-| `request` | `*.req.md` | A single HTTP request template. |
-| `auth` | `*.auth.md` | A reusable authentication profile (bearer, oauth2, azure-cli, github, …). Lives either in `auth/` (workspace-scoped) or inside a collection (collection-scoped) — see §8.0. |
-| `env` | `*.env.md` | A named environment (variables plus provider bindings). |
-| `collection` | `_collection.md` *(at `collections/<slug>/`)* | A top-level group of requests. Owns the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. |
-| `flow` | `*.flow.md` | An ordered sequence of requests where each step can extract values from its response for the steps after it. Lives in `tests/` — see §10. |
-| `test` | `*.test.md` | A test set: named checks, each running one request or one flow, with set-scoped variables. Lives in `tests/` — see §11. |
-| `workspace` | `tap.md` *(at workspace root)* | Workspace-level config: name, default env, registered variable providers. |
+| `request` | `*.req.tap` | A single HTTP request template. |
+| `auth` | `*.auth.tap` | A reusable authentication profile (bearer, oauth2, azure-cli, github, …). Lives either in `auth/` (workspace-scoped) or inside a collection (collection-scoped) — see §8.0. |
+| `env` | `*.env.tap` | A named environment (variables plus provider bindings). |
+| `collection` | `_collection.tap` *(at `collections/<slug>/`)* | A top-level group of requests. Owns the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. |
+| `flow` | `*.flow.tap` | An ordered sequence of requests where each step can extract values from its response for the steps after it. Lives in `tests/` — see §10. |
+| `test` | `*.test.tap` | A test set: named checks, each running one request or one flow, with set-scoped variables. Lives in `tests/` — see §11. |
+| `workspace` | `workspace.tap` *(at workspace root)* | Workspace-level config: name, default env, registered variable providers. |
 
-Sub-directories inside a collection are pure grouping for the explorer tree — they carry no metadata, no variables, and no inherited defaults. Every request below a collection inherits its baseUrl, stages, default auth, default headers, and variables; variable sharing across a group of requests lives on `_collection.md`.
+Sub-directories inside a collection are pure grouping for the explorer tree — they carry no metadata, no variables, and no inherited defaults. Every request below a collection inherits its baseUrl, stages, default auth, default headers, and variables; variable sharing across a group of requests lives on `_collection.tap`.
 
-An `*.auth.md` placed inside a collection is *owned* by it: the profile's fields resolve against that collection's variables and its active stage. That's the only kind of file below a collection that inherits anything besides a request.
+An `*.auth.tap` placed inside a collection is *owned* by it: the profile's fields resolve against that collection's variables and its active stage. That's the only kind of file below a collection that inherits anything besides a request.
 
 The filename suffix is canonical. The `kind:` frontmatter field is required and must match the suffix. A mismatch is a hard parse error.
+
+### 2.0 The `.md` → `.tap` rename
+
+Before 0.7.0 every workspace file ended in `.md` — `orders.req.md`, `_collection.md`, and a manifest called `tap.md`. Nothing about the format changed in the rename: same YAML frontmatter, same markdown body, same fenced `http` blocks, same kind-by-suffix rule. Only the trailing extension moved, so that a Tap file is recognizable as one rather than reading as documentation.
+
+Both families load for the whole 0.7.x line:
+
+| | Canonical (0.7.0+) | Legacy (still read) |
+|---|---|---|
+| Manifest | `workspace.tap` | `tap.md` |
+| Collection | `_collection.tap` | `_collection.md` |
+| Everything else | `*.req.tap`, `*.auth.tap`, `*.env.tap`, `*.flow.tap`, `*.test.tap` | `*.req.md`, … |
+
+- **Reading** accepts either. A legacy file loads exactly as before and reports a `W_LEGACY_EXTENSION` warning, which does *not* fail `tap-studio lint`.
+- **Writing** is always canonical. New files get `.tap`; an existing legacy file is saved back in place rather than renamed, because renaming it behind your back would orphan every reference pointing at it.
+- **Migrating** is one command: `tap-studio migrate` (`--dry-run` to preview). It renames the files *and* rewrites the refs, which matters because a ref is a literal relative path carrying an extension — `auth: ../../auth/admin.auth.md` breaks the moment its target is renamed. Refs written as `id:` are unaffected.
+
+Support for the legacy family is scheduled for removal in 0.8.0.
 
 ### 2.1 Suggested directory layout
 
@@ -47,31 +65,31 @@ The filename suffix is canonical. The `kind:` frontmatter field is required and 
 my-service/
 ├── src/                                 ← your code
 └── tap/                                 ← the workspace root — any folder you point Tap at
-    ├── tap.md                           ← kind: workspace
+    ├── workspace.tap                           ← kind: workspace
     ├── auth/                            ← workspace-scoped profiles, shared by every collection
-    │   ├── stripe-bearer.auth.md
-    │   └── corp-oidc.auth.md
+    │   ├── stripe-bearer.auth.tap
+    │   └── corp-oidc.auth.tap
     ├── environments/
-    │   ├── local.env.md
-    │   ├── staging.env.md
-    │   └── prod.env.md
+    │   ├── local.env.tap
+    │   ├── staging.env.tap
+    │   └── prod.env.tap
     ├── tests/                           ← test sets and flows
-    │   ├── billing.test.md
-    │   └── checkout.flow.md
+    │   ├── billing.test.tap
+    │   └── checkout.flow.tap
     └── collections/
         └── stripe/
-            ├── _collection.md        ← kind: collection (owns baseUrl, default auth/headers, stages)
-            ├── stripe-oauth.auth.md  ← collection-scoped profile (sees this collection's vars/stages)
-            ├── create-customer.req.md
-            ├── get-customer.req.md
+            ├── _collection.tap        ← kind: collection (owns baseUrl, default auth/headers, stages)
+            ├── stripe-oauth.auth.tap  ← collection-scoped profile (sees this collection's vars/stages)
+            ├── create-customer.req.tap
+            ├── get-customer.req.tap
             └── refunds/              ← pure-grouping sub-folder
-                ├── issue.req.md
-                └── list.req.md
+                ├── issue.req.tap
+                └── list.req.tap
 ```
 
 The workspace root is simply the folder you open in Studio or pass to the CLI
 (`--workspace`, defaulting to the nearest ancestor of the working directory that contains
-`tap.md`). The loader walks that folder for the known suffixes — dotfolders included, so the
+`workspace.tap`). The loader walks that folder for the known suffixes — dotfolders included, so the
 older `.tap/` sub-folder layout keeps loading — while skipping package/VCS caches
 (`node_modules`, `.git`, `bin`, `obj`, …) and capping single files at 8 MiB. Tap also keeps
 a housekeeping `.tap/` directory under the root for the file provider's variable store
@@ -81,7 +99,7 @@ The four top-level directories (`auth/`, `environments/`, `tests/`, `collections
 structural: `auth/`, `environments/`, and `tests/` hold flat lists of typed files;
 `collections/` hosts one sub-directory per collection. Inside each collection, nested
 directories are freeform grouping with no metadata — variable sharing across a group of
-requests lives on `_collection.md`.
+requests lives on `_collection.tap`.
 
 Auth profiles are the one kind that can live in either place. Put a profile in `auth/`
 when several collections share it; put it inside a collection when its endpoints or
@@ -148,7 +166,7 @@ A literal `{` followed by `{` that you do not want interpolated is escaped as `\
 
 ---
 
-## 4. `workspace` — `tap.md`
+## 4. `workspace` — `workspace.tap`
 
 The single file at the workspace root. Created on `tap init`.
 
@@ -159,7 +177,7 @@ The single file at the workspace root. Created on `tap init`.
 | `kind` | `"workspace"` | yes | |
 | `name` | string | no | |
 | `id` | uuid | no | |
-| `defaultEnv` | path | no | Workspace-root-relative path to the `.env.md` file used when none is specified at execute time. |
+| `defaultEnv` | path | no | Workspace-root-relative path to the `.env.tap` file used when none is specified at execute time. |
 | `variableProviders` | array of provider configs | no | Registers the named variable providers available in this workspace. See below and §12. |
 | `defaultVariableProvider` | string | no | Provider that bare `{{name}}` tokens hit first after the cascade (and that receives un-targeted variable writes). An active env's own `defaultVariableProvider` overrides it. Legacy key `defaultProvider` is also read. |
 | `vars` | map<string, var-spec> | no | Workspace-level variables (lowest precedence). Same var-spec shape as §5.1. |
@@ -183,7 +201,7 @@ one. The built-in `system` provider (§12.1) is always registered by the host.
 kind: workspace
 id: 0192-3a4c-bb71-7c1d-9e8f0a1b2c3d
 name: acme-billing
-defaultEnv: environments/local.env.md
+defaultEnv: environments/local.env.tap
 defaultVariableProvider: file
 variableProviders:
 - name: env      # host env vars, gated by TAP_VARS_ALLOWED / TAP_SECRETS_ALLOWED (§12.1)
@@ -207,13 +225,13 @@ vars:
 # Acme Billing
 
 API workspace for the billing service. Owned by @platform. Production access
-runs through `prod.env.md` and requires Azure Key Vault membership in the
+runs through `prod.env.tap` and requires Azure Key Vault membership in the
 `billing-eng` group.
 ```
 
 ---
 
-## 5. `request` — `*.req.md`
+## 5. `request` — `*.req.tap`
 
 A single executable request. The most-edited file kind.
 
@@ -269,7 +287,7 @@ If multiple `http` blocks are present, the parser fails with `E_MULTIPLE_REQUEST
 kind: request
 id: 0192-3a4d-7000-7b91-a0c1d2e3f405
 name: Create customer
-auth: ../../auth/stripe-bearer.auth.md
+auth: ../../auth/stripe-bearer.auth.tap
 tags: [customer, write]
 vars:
   customer.email:
@@ -434,9 +452,9 @@ either way — the difference is only indentation, and it is invisible in an edi
 
 ---
 
-## 6. `collection` — `_collection.md`
+## 6. `collection` — `_collection.tap`
 
-A top-level group of requests, owning the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. Lives at `collections/<slug>/_collection.md`.
+A top-level group of requests, owning the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. Lives at `collections/<slug>/_collection.tap`.
 
 ### 6.1 Frontmatter
 
@@ -463,7 +481,7 @@ kind: collection
 id: 0192-3a4d-9000-7a01-1234-5678-9abc-def0
 name: Stripe
 baseUrl: https://api.stripe.com
-defaultAuth: ../../auth/stripe-bearer.auth.md
+defaultAuth: ../../auth/stripe-bearer.auth.tap
 defaultHeaders:
   Stripe-Version: "2025-04-30"
   Accept: application/json
@@ -471,7 +489,7 @@ stages:
 - name: live
 - name: test
   baseUrl: https://api.stripe.com
-  defaultAuth: ../../auth/stripe-test-bearer.auth.md
+  defaultAuth: ../../auth/stripe-test-bearer.auth.tap
 defaultStage: live
 ---
 
@@ -483,7 +501,7 @@ inherits the baseUrl, default auth, and default headers automatically.
 
 ---
 
-## 7. `env` — `*.env.md`
+## 7. `env` — `*.env.tap`
 
 A named environment. Activated by Tap at execute time; supplies the env tier of the variable
 cascade and binds provider prefixes for the duration of the run.
@@ -507,8 +525,8 @@ directly where it's needed, or bind the prefix with `providerAliases` so one spe
 across environments.
 
 The provider-binding fields make the one-vault-per-environment pattern work: declare
-`kv-dev` and `kv-prod` once (in `tap.md` or the system settings), then have
-`dev.env.md` bind `kv: kv-dev` and `prod.env.md` bind `kv: kv-prod`. Requests keep a
+`kv-dev` and `kv-prod` once (in `workspace.tap` or the system settings), then have
+`dev.env.tap` bind `kv: kv-dev` and `prod.env.tap` bind `kv: kv-prod`. Requests keep a
 single spelling — `{{kv:clientSecret}}` — and switching the environment switches the
 vault. Explicit `{{provider:name}}` tokens never fall through; `strictVariables`
 extends the same guarantee to bare tokens.
@@ -540,8 +558,10 @@ the `kv-prod` vault, and every resolution is traced by name (never by value).
 
 When Tap renders a request, it merges variable scopes in this order (later overrides earlier):
 
-1. `tap.md` `vars`
-2. Owning `_collection.md` `vars` (the collection the request lives under)
+0. **Portable** — a `.http` file's own `@name = value` lines (§13.5.5). Only present for that
+   file kind, and deliberately the weakest tier.
+1. `workspace.tap` `vars`
+2. Owning `_collection.tap` `vars` (the collection the request lives under)
 3. Active collection stage's `vars`
 4. Active `env.md` `vars`
 5. Request file `vars`
@@ -550,6 +570,13 @@ When Tap renders a request, it merges variable scopes in this order (later overr
 A later scope redefining a name also redefines its sensitivity — an env that overrides a
 secret with a literal test value is no longer holding a secret.
 
+**`{{baseUrl}}` is built in.** Before the request block is expanded, Tap binds `baseUrl` to the
+owning collection's base URL — the active stage's override when it has one — already expanded and
+with any trailing `/` trimmed. It binds only when no scope from tier 1 upward defines the name, so
+declaring your own `baseUrl` var keeps working unchanged. Writing `GET {{baseUrl}}/orders` is
+therefore equivalent to `GET /orders` inside Tap, and unlike the relative form it also resolves in
+tools that know nothing about collections (§13.5.5).
+
 The merged cascade wins over providers for bare `{{name}}` tokens; `{{provider:name}}`
 bypasses it. Resolution is **single-pass**: values are substituted verbatim and never
 re-scanned, so a variable cannot reference another variable (and reference cycles cannot
@@ -557,7 +584,7 @@ occur — the `E_VAR_CYCLE` code is reserved).
 
 ---
 
-## 8. `auth` — `*.auth.md`
+## 8. `auth` — `*.auth.tap`
 
 A reusable authentication profile. Used by requests via the `auth:` frontmatter field, or applied as a collection default.
 
@@ -568,28 +595,28 @@ fields can reference:
 
 | Location | Scope | Cascade its fields resolve against |
 |---|---|---|
-| `auth/**/*.auth.md` | **workspace** — shared by every collection | workspace < env |
-| `collections/<slug>/**/*.auth.md` | **collection** — owned by that collection | workspace < collection < stage < env |
+| `auth/**/*.auth.tap` | **workspace** — shared by every collection | workspace < env |
+| `collections/<slug>/**/*.auth.tap` | **collection** — owned by that collection | workspace < collection < stage < env |
 
 Both are referenced the same way, by relative path from the referencing file:
 
 ```yaml
 # a request inside collections/stripe/, pointing at a workspace profile
-auth: ../../auth/stripe-bearer.auth.md
+auth: ../../auth/stripe-bearer.auth.tap
 
 # the same request pointing at its own collection's profile
-auth: stripe-oauth.auth.md
+auth: stripe-oauth.auth.tap
 ```
 
 Pick collection scope when the profile's token URL, client id, audience, or credentials are
 already expressed as collection (or stage) variables:
 
 ```yaml
-# collections/stripe/_collection.md
+# collections/stripe/_collection.tap
 kind: collection
 name: Stripe
 baseUrl: '{{API_URL}}'
-defaultAuth: stripe-oauth.auth.md
+defaultAuth: stripe-oauth.auth.tap
 vars:
   API_URL: https://api.stripe.test
   IDP_URL: https://idp.stripe.test
@@ -602,7 +629,7 @@ stages:
 ```
 
 ```yaml
-# collections/stripe/stripe-oauth.auth.md
+# collections/stripe/stripe-oauth.auth.tap
 kind: auth
 name: Stripe OAuth
 type: oauth2
@@ -770,10 +797,10 @@ Use sparingly. If you find yourself reaching for `custom`, file an issue — lik
 
 ---
 
-## 9. `collection` — `_collection.md`
+## 9. `collection` — `_collection.tap`
 
 A **collection** is the top-level grouping for requests. Each collection lives at
-`collections/<slug>/_collection.md`; the slug is the directory name and serves as the
+`collections/<slug>/_collection.tap`; the slug is the directory name and serves as the
 collection's id-on-disk. Nested directories below the collection are pure grouping
 (no metadata, no inheritance) — every request, no matter how deeply nested, belongs
 to exactly one collection.
@@ -784,7 +811,7 @@ See §6 — collections own the base URL, default headers, default auth, stages,
 
 ---
 
-## 10. `flow` — `*.flow.md`
+## 10. `flow` — `*.flow.tap`
 
 A **flow** runs several requests in order and carries values from one response into the next.
 It is the answer to "does this multi-step exchange still work" — create an order, read the id
@@ -824,7 +851,7 @@ vars:
   sku: ABC-1
 steps:
 - name: Create order
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   vars:
     item: '{{sku}}'
   extract:
@@ -835,7 +862,7 @@ steps:
   assertions:
   - status: 201
 - name: Fetch it back
-  request: ../collections/demo/get-order.req.md
+  request: ../collections/demo/get-order.req.tap
   vars:
     id: '{{orderId}}'
   assertions:
@@ -914,7 +941,7 @@ who wants a value pinned simply doesn't extract over it.
 
 ---
 
-## 11. `test` — `*.test.md`
+## 11. `test` — `*.test.tap`
 
 A **test set** is a named group of checks: set-scoped variables plus a list of tests, each of
 which runs either one request or one flow, and passes when nothing it asserts fails.
@@ -955,13 +982,13 @@ vars:
 onFailure: continue
 tests:
 - name: Rejects an unknown SKU
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   vars:
     item: nope
   assertions:
   - status: 404
 - name: Full checkout
-  flow: ./checkout.flow.md
+  flow: ./checkout.flow.tap
 ---
 ```
 
@@ -989,7 +1016,7 @@ tests:
 ## 12. Variable providers
 
 A **variable provider** is a named, typed source of values that `{{name}}` and
-`{{provider:name}}` tokens resolve against (§3.2). Providers are declared in `tap.md`'s
+`{{provider:name}}` tokens resolve against (§3.2). Providers are declared in `workspace.tap`'s
 `variableProviders:` array (§4.1) or at system scope in the host's settings; a workspace
 provider shadows a same-named system one. Each provider reports per-value sensitivity
 (`IsSecret`), which drives masking and redaction everywhere a value could be echoed.
@@ -1002,6 +1029,7 @@ provider shadows a same-named system one. Each provider reports per-value sensit
 | `file` | A YAML store per provider at `<workspace>/.tap/.vars/<name>.yml`; `secret: true` values are encrypted at rest (AES-256-GCM, key derived from a passphrase) | read/write | `encryptionKey` — better supplied via the `TAP_FILE_PROVIDER_KEY` env var (or `TAP_FILE_PROVIDER_KEY_<NAME>`) than committed next to the ciphertext |
 | `azkv` | Azure Key Vault via `DefaultAzureCredential` (picks up `az login`, managed identity, …). Every value is secret. | read | `vaultName` (required), `tenantId`, `prefix` |
 | `1p` | 1Password via the `op` CLI (desktop-app / biometric auth on the host) | read | `mode`: `environment` (default; a 1Password Environment's variables), `item` (`vault` + `item` — one item's fields), or `vault` (`vault` — one variable per item) |
+| `aspire` | A resource's allocated URL, read from the standard `services__<resource>__<scheme>__<index>` environment variables | read | none — always registered (§12.2) |
 | `system` | The host's `system.json` settings store — the same file the Settings UI edits. Always registered; no declaration needed. | read/write | — |
 
 #### `env` allowlist
@@ -1026,7 +1054,36 @@ export TAP_SECRETS_ALLOWED="DEMO_*_TOKEN,AZURE_*"
 If neither variable is set, the `env` provider exposes nothing — deny-by-default is the safe
 default. References to names that don't match either pattern list fail as unknown.
 
-### 12.2 Resolution rules
+### 12.2 The `aspire` provider and the CI story
+
+`{{aspire:orders-api}}` resolves to that resource's allocated URL, so a collection can say:
+
+```yaml
+baseUrl: '{{aspire:orders-api}}'
+```
+
+and hit whatever port the AppHost handed out this run. Unlike the other types it needs no
+declaration — it is always registered, because it only resolves names the environment already
+advertises and returns nothing otherwise. A workspace or system provider that claims the name
+`aspire` still shadows it.
+
+It reads Aspire's **standard service-discovery convention**, not an Aspire API:
+`services__<resource>__<scheme>__<index>`, preferring `https` over `http` and the lowest index.
+That is the whole point — the same workspace runs unchanged in three places:
+
+```bash
+# Under an AppHost: injected automatically for every resource you WithReference().
+# From the CLI on your machine: same, if you run inside the AppHost's environment.
+# In CI, with no Aspire at all — just export the variable yourself:
+export services__orders-api__https__0=https://staging.example.com
+tap-studio test "Orders smoke"
+```
+
+Values are never marked secret: an allocated URL is not a credential, and masking it would
+redact the field you most need to read in a failing report. A missing resource fails with
+`E_PROVIDER_RESOLUTION_FAILED` naming the exact environment variable to set.
+
+### 12.3 Resolution rules
 
 - A resolution produces a string value plus an `IsSecret` flag.
 - Resolutions are cached in memory for the duration of one render — two tokens naming the
@@ -1041,7 +1098,7 @@ default. References to names that don't match either pattern list fail as unknow
   secret (`variablesUsed`, §13) — never the values. Anything echoed to an agent surface is
   additionally scrubbed by the render's redactor (§13).
 
-### 12.3 Adding a custom provider
+### 12.4 Adding a custom provider
 
 Tap will support out-of-tree providers via a plugin model (post-v0). For v0 the built-in set is the supported surface.
 
@@ -1109,11 +1166,143 @@ names were consulted.
 
 ---
 
+## 13.5 `.http` files — the portable request format
+
+Tap reads `.http` files as a first-class request source. This is the format Visual Studio
+scaffolds into every new ASP.NET Core project, and the one VS Code REST Client, JetBrains,
+httpyac, and Kulala share. A `.http` file in a workspace is loaded, rendered, authenticated,
+asserted, and executed by exactly the same engine as a `*.req.tap` — it is not an import step,
+and Tap never rewrites the file.
+
+### 13.5.1 One file, several requests
+
+Requests are separated by `###`. Each becomes its own request, addressed by a **fragment path**:
+
+```
+collections/demo/orders.http#get-order
+```
+
+The fragment is the canonical identity — it stays stable when requests are added or removed
+above it, which an ordinal would not. It is also what a `*.flow.tap` step or `*.test.tap` entry
+references. Where a file holds exactly one request, the bare file path resolves too.
+
+A request's name comes from the first of: a `# @name` directive, the `###` separator's title, a
+slug derived from the method and last path segment (`GET /api/v1/orders` → `get-orders`), then
+its ordinal.
+
+### 13.5.2 What is supported
+
+| Construct | Behaviour |
+|---|---|
+| `### Title` | Request separator; the title names the request. |
+| `METHOD URL [HTTP/1.1]` | Request line. Indented continuation lines starting `?` or `&` fold into the URL. |
+| Headers, blank line, body | As in a `*.req.tap` fenced `http` block — the same parser reads both. |
+| `# comment` / `// comment` | Both accepted. |
+| `@name = value` | File variable, visible to every request in the file (declaration order need not precede use). Sits at the **portable** tier — the weakest in the cascade, so every workspace scope overrides it (§13.5.5). |
+| `< ./file` | Body include, same semantics as in a `*.req.tap`. |
+| `# @name x` | Names the request. |
+| `# @timeout 30` | Seconds → the request's transport timeout. |
+| `{{var}}`, `{{provider:name}}` | Identical to Tap's own interpolation. |
+| `{{$guid}}` `{{$uuid}}` `{{$timestamp}}` `{{$isoTimestamp}}` `{{$randomInt [min max]}}` | Generated at render time. A token resolves once per render, so the same `{{$guid}}` in a header and the body is one value — useful as a correlation id. Available in `*.req.tap` too. |
+
+Constructs belonging to a specific tool are **recognized, skipped, and reported as warnings**
+(`W_HTTP_UNSUPPORTED_CONSTRUCT`) naming the Tap equivalent — JetBrains `< {% %}` / `> {% %}`
+scripts, httpyac `??` assertions, `run` / `import`, `>>` response redirects, and request
+chaining (`{{login.response.body.$.id}}`, which a flow does instead). A malformed request drops
+only itself; the rest of the file still loads.
+
+### 13.5.3 Tap directives
+
+Tap's own features ride in comments, so a file carrying them still opens and sends normally in
+every other tool:
+
+| Directive | Effect |
+|---|---|
+| `# @tap-collection <slug>` | Attach to a collection from anywhere in the repo — inherits its baseUrl, default headers, default auth, and stages. Files under `collections/<slug>/` inherit by location and need no directive. |
+| `# @tap-auth <path\|id:uuid>` | Same semantics as a request's `auth:` frontmatter key. |
+| `# @tap-assert <expression>` | One assertion, in the one-line form below. Repeatable. |
+| `# @tap-secret <var>[, <var>]` | Marks file variables secret, so their values are redacted everywhere Tap reports a request. |
+| `# @tap-protocol websocket` | Same as the `protocol:` frontmatter key. |
+| `# @tap-tag a, b` | Same as `tags:`. |
+
+Directives above the first request are **file-wide defaults**. The same directive inside a
+request's comment block overrides the file default — except assertions, tags, and secrets, which
+accumulate, since a file-level assertion applying to every request is the reason to write one.
+
+An unknown `# @tap-*` key warns rather than being silently inert: a typo'd `@tap-asert` would
+otherwise leave you believing an assertion is running.
+
+### 13.5.4 The one-line assertion form
+
+`.http` files have no YAML, so `# @tap-assert` uses an expression spelling of the same model
+described in §5.5. It produces the identical `AssertSpec` and is validated by the identical
+rules, so an assertion means and reports the same thing in either file kind.
+
+```
+# @tap-assert status == 200
+# @tap-assert status 2xx
+# @tap-assert header content-type contains application/json
+# @tap-assert header etag                     # no operator → exists
+# @tap-assert body $.id exists
+# @tap-assert $.items count 3
+# @tap-assert duration < 2000
+```
+
+Shape is `<extractor> [selector] [operator] [value]`, with the same sugar as the YAML form: a
+bare value means `equals`, and nothing at all means `exists`. Extractors are `status`,
+`duration`, `header <name>`, `body`, `body <$.jsonpath>` (or a bare `$.jsonpath`), and
+`xpath <expr>`. Operators accept symbol or word spellings — `==` `=` `equals` `is`, `!=`,
+`contains`, `not-contains`, `starts-with`, `ends-with`, `matches`, `<` `<=` `>` `>=`, `exists`,
+`count`, `length`, `type`, `in`, `between`.
+
+### 13.5.5 Running the same file inside and outside Tap
+
+A `.http` file is expected to keep working in Visual Studio and REST Client, where nothing knows
+about collections. That rules out the relative request line: `GET /orders` only resolves because
+Tap prepends the collection's base URL, and elsewhere it is not a URL at all.
+
+The portable spelling is a file variable plus the built-in `{{baseUrl}}` (§7.3):
+
+```
+@baseUrl = http://localhost:5000
+
+### Ping
+# @tap-assert status 2xx
+GET {{baseUrl}}/
+Accept: application/json
+```
+
+Outside Tap, `@baseUrl` is the only definition there is, so the request goes to
+`http://localhost:5000/`. Inside Tap, the file's own variables are the **weakest** tier of the
+cascade, so the collection's base URL — and the active stage's, and any `env` that redefines the
+name — wins instead. One file, both meanings, no edit in between.
+
+That inversion is specific to `.http` files. A `*.req.tap`'s `vars:` are authored for Tap and stay
+at their usual tier, above the collection.
+
+Two consequences worth knowing:
+
+- Selecting a stage moves a portable request, exactly as it moves a `*.req.tap` one. Had the file's
+  own `@baseUrl` won, the stage picker would have silently done nothing.
+- A relative request line still works and still inherits the collection's base URL. The portable
+  form is an option, not a requirement — and a file that will only ever run inside Tap can use
+  either.
+
+### 13.5.6 Editing
+
+Tap never reformats a `.http` file. There is no canonical `.http` emitter: the file on disk stays
+the source of truth in its own format, and Studio edits it as raw source. In Studio the file has
+its own editor — the requests it holds, each sendable on its own, above the raw text — reachable
+from **Edit…** on the file's row in the explorer. Send runs the text currently on screen, saved or
+not, so iterating does not require a save between edits.
+
+---
+
 ## 14. References between files
 
 Two ways to point from one file to another:
 
-1. **Relative path** (recommended for v0): `auth: ../../auth/stripe-bearer.auth.md`, or `auth: stripe-oauth.auth.md` for a sibling inside the same collection. Paths resolve relative to the file that declares them and never escape the workspace root. Survives `git mv` provided both files move together. Clearer in diffs.
+1. **Relative path** (recommended for v0): `auth: ../../auth/stripe-bearer.auth.tap`, or `auth: stripe-oauth.auth.tap` for a sibling inside the same collection. Paths resolve relative to the file that declares them and never escape the workspace root. Survives `git mv` provided both files move together. Clearer in diffs.
 2. **Id reference**: `auth: id:0192-3a4d-9000-...`. Tap maintains an index built from `id:` fields. Survives rename without coordinated moves but requires the index to be up-to-date.
 
 The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Tap's writer always emits relative paths.
@@ -1125,7 +1314,7 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 - A new file with no `id:` gets a UUIDv7 assigned by the writer on first save.
 - The id is the durable identity. Renaming the file preserves the id.
 - Cross-file `id:` references resolve through the workspace index; if an id has no owner, references to it produce `E_DANGLING_REF`.
-- The format version is implicit in this document. Files do not carry a version field in v0; a future breaking change will introduce a `tapFormat: "1.x"` field in `tap.md`.
+- The format version is implicit in this document. Files do not carry a version field in v0; a future breaking change will introduce a `tapFormat: "1.x"` field in `workspace.tap`.
 
 ---
 
@@ -1137,6 +1326,8 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 | `E_FRONTMATTER_MALFORMED_YAML` | Frontmatter is not valid YAML 1.2 (also reported for unreadable or oversized files). |
 | `E_KIND_MISMATCH` | `kind:` does not match the filename suffix, or the filename matches no known suffix. |
 | `E_KIND_MISSING` | `kind:` field absent. |
+| `E_EXTENSION_COLLISION` | The same logical file exists under both extension families (`orders.req.md` beside `orders.req.tap`) — what a half-finished migration leaves behind. The canonical file wins; the legacy one is not loaded. |
+| `W_LEGACY_EXTENSION` | *Warning.* The file loaded but uses the pre-0.7.0 `.md` extension (§2.0). Run `tap-studio migrate`. Does not fail `lint`. |
 | `E_UNKNOWN_FIELD` | A frontmatter field is unrecognized or malformed for that kind (bad `protocol:`, duplicate stage name, dangling `defaultStage`, invalid `agent:` shape, duplicate path/id in the index, …). |
 | `E_NO_REQUEST_BLOCK` | A `request` file has no fenced `http` block. |
 | `E_MULTIPLE_REQUEST_BLOCKS` | A `request` file has more than one fenced `http` block. |
@@ -1167,8 +1358,8 @@ The following are deliberate omissions, slated for later versions:
 
 - Assertions on responses: now a first-class request field via `assertions:` (§5.5). Still
   out of scope — collection-level default assertions and assertions on WebSocket frames.
-- Request chaining: now a first-class kind via `*.flow.md` (§10), grouped into test sets by
-  `*.test.md` (§11). Still out of scope — parallel execution, data-driven tests (one test × N
+- Request chaining: now a first-class kind via `*.flow.tap` (§10), grouped into test sets by
+  `*.test.tap` (§11). Still out of scope — parallel execution, data-driven tests (one test × N
   rows of variables), extracting a value back into a variable provider, per-step retry /
   wait-for polling.
 - **`aws-sigv4` signing** (§8.9) and **`apiKey` injection into query/cookie** plus
@@ -1188,8 +1379,8 @@ The following are deliberate omissions, slated for later versions:
 Given the workspace from §2.1 and the files in §4.2, §5.3, §6.2, §7.2, §8.2:
 
 ```
-$ tap-studio send collections/stripe/create-customer.req.md \
-    --env environments/prod.env.md \
+$ tap-studio send collections/stripe/create-customer.req.tap \
+    --env environments/prod.env.tap \
     --var customer.email=jane@example.com --var "customer.name=Jane Doe"
 ```
 
@@ -1208,7 +1399,7 @@ email=jane%40example.com&name=Jane%20Doe
 With `metadata.variablesUsed` recording the audit trail:
 
 ```
-var     baseUrl                       ← collections/stripe/_collection.md
+var     baseUrl                       ← collections/stripe/_collection.tap
 var     customer.email                ← --var
 var     customer.name                 ← --var
 secret  kv-prod : stripe-live-key     (isSecret — value never recorded)

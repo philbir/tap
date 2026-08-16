@@ -37,7 +37,7 @@ public sealed record CollectionSummaryDto(
 public sealed record RequestSummaryDto(
     string Name,
     string Path,
-    /// <summary>Path of the owning collection's <c>_collection.md</c>, or null for a request
+    /// <summary>Path of the owning collection's <c>_collection.tap</c>, or null for a request
     /// outside any collection.</summary>
     string? Collection,
     string Method,

@@ -33,7 +33,7 @@ tap-studio test "Order API" --filter refund  # only the tests whose name contain
 
 A selection matching nothing exits 2 rather than reporting a green run over zero tests.
 
-The workspace is found by walking up from the working directory to the nearest `tap.md`, the
+The workspace is found by walking up from the working directory to the nearest `workspace.tap`, the
 way `git` finds a repo. `--workspace <dir>` overrides it.
 
 ## Input variables
@@ -75,7 +75,7 @@ collapse into a `<details>`; failing ones stay open.
 | 0 | Everything that ran, passed. |
 | 1 | A test or assertion failed. |
 | 2 | Usage error — unknown or ambiguous name, bad option. |
-| 3 | Workspace error — no `tap.md`, a file that doesn't parse. |
+| 3 | Workspace error — no `workspace.tap`, a file that doesn't parse. |
 | 4 | Auth couldn't be acquired without a human. |
 | 130 | Cancelled. |
 

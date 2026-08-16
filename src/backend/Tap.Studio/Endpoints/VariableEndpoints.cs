@@ -147,6 +147,7 @@ public static class VariableEndpoints
     private static string ScopeName(VariableScope s) => s switch
     {
         VariableScope.Provider => "provider",
+        VariableScope.Portable => "portable",
         VariableScope.Workspace => "workspace",
         VariableScope.Collection => "collection",
         VariableScope.Stage => "stage",

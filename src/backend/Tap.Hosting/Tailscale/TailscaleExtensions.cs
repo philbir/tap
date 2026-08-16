@@ -1,9 +1,9 @@
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.Tailscale;
 using Aspire.Hosting.Tunnels;
 using Microsoft.Extensions.DependencyInjection;
 using Tap.Core.Cloudflare;
+using Aspire.Hosting.Eventing;
 
 namespace Aspire.Hosting;
 
@@ -30,13 +30,19 @@ public static class TailscaleExtensions
         string dockerImage = "tailscale/tailscale:latest",
         bool publicExpose = false)
     {
-#pragma warning disable CS0618 // Eventing-based replacement is not yet wired; lifecycle hook works fine today.
-        builder.Services.TryAddLifecycleHook<TailscaleLifecycleHook>();
-#pragma warning restore CS0618
+        // Provisioning runs once per app, not once per tunnel, so the subscription is guarded
+        // the way TryAddLifecycleHook used to guard itself — AddCloudflaredTunnel /
+        // AddTailscaleFunnel can legitimately be called several times.
+        if (builder.Services.All(s => s.ServiceType != typeof(TailscaleProvisioner)))
+        {
+            builder.Services.AddSingleton<TailscaleProvisioner>();
+            builder.Eventing.Subscribe<BeforeStartEvent>((e, ct) =>
+                e.Services.GetRequiredService<TailscaleProvisioner>().RunAsync(e.Model, ct));
+        }
 
         // Command is the script interpreter; the actual bootstrapper script path is
-        // generated and bound by the lifecycle hook (it needs the resolved upstream URL).
-        var (command, _) = TailscaleLifecycleHook.ScriptInterpreter();
+        // generated and bound by the provisioner (it needs the resolved upstream URL).
+        var (command, _) = TailscaleProvisioner.ScriptInterpreter();
         var resource = new TailscaleFunnelResource(name, command, builder.Environment.ContentRootPath)
         {
             HostMode = hostMode,

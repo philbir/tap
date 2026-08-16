@@ -1,7 +1,7 @@
 ---
 kind: request
 name: Whoami (auth code + PKCE)
-auth: ../../../auth/demo-oauth-pkce.auth.md
+auth: ../../../auth/demo-oauth-pkce.auth.tap
 tags: [demo, auth, oauth2, pkce]
 ---
 

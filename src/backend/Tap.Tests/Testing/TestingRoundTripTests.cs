@@ -14,19 +14,19 @@ namespace Tap.Tests.Testing;
 public class TestingRoundTripTests
 {
     [Theory]
-    [InlineData("steps:\n- request: ./a.req.md")]
-    [InlineData("steps:\n- name: First\n  request: ./a.req.md\n- name: Second\n  request: ./b.req.md")]
+    [InlineData("steps:\n- request: ./a.req.tap")]
+    [InlineData("steps:\n- name: First\n  request: ./a.req.tap\n- name: Second\n  request: ./b.req.tap")]
     [InlineData("steps:\n- request: id:0192-3a4d-7000-7b91-a0c1d2e3f405")]
-    [InlineData("steps:\n- request: ./a.req.md\n  vars:\n    id: '{{orderId}}'")]
-    [InlineData("steps:\n- request: ./a.req.md\n  extract:\n  - var: orderId\n    jsonpath: $.order.id")]
-    [InlineData("steps:\n- request: ./a.req.md\n  extract:\n  - var: raw\n    body:")]
-    [InlineData("steps:\n- request: ./a.req.md\n  extract:\n  - var: code\n    status:")]
-    [InlineData("steps:\n- request: ./a.req.md\n  extract:\n  - var: token\n    regex: 'session=([^;]+)'\n    group: 1")]
-    [InlineData("steps:\n- request: ./a.req.md\n  extract:\n  - var: page\n    header: x-page\n    default: '1'")]
-    [InlineData("steps:\n- request: ./a.req.md\n  extract:\n  - var: next\n    jsonpath: $.next\n    required: false")]
-    [InlineData("steps:\n- request: ./a.req.md\n  assertions:\n  - status: 201\n  - jsonpath: $.id")]
-    [InlineData("steps:\n- request: ./a.req.md\n  continueOnFailure: true\n  skip: true")]
-    [InlineData("vars:\n  sku: ABC-1\nsteps:\n- request: ./a.req.md\ntags: [smoke]")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  vars:\n    id: '{{orderId}}'")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  extract:\n  - var: orderId\n    jsonpath: $.order.id")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  extract:\n  - var: raw\n    body:")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  extract:\n  - var: code\n    status:")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  extract:\n  - var: token\n    regex: 'session=([^;]+)'\n    group: 1")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  extract:\n  - var: page\n    header: x-page\n    default: '1'")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  extract:\n  - var: next\n    jsonpath: $.next\n    required: false")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  assertions:\n  - status: 201\n  - jsonpath: $.id")]
+    [InlineData("steps:\n- request: ./a.req.tap\n  continueOnFailure: true\n  skip: true")]
+    [InlineData("vars:\n  sku: ABC-1\nsteps:\n- request: ./a.req.tap\ntags: [smoke]")]
     public void Flow_survives_parse_emit_parse(string fragment)
     {
         var first = ParseFlow(fragment);
@@ -42,13 +42,13 @@ public class TestingRoundTripTests
     }
 
     [Theory]
-    [InlineData("tests:\n- request: ./a.req.md")]
-    [InlineData("tests:\n- name: One\n  request: ./a.req.md\n- name: Two\n  flow: ./b.flow.md")]
+    [InlineData("tests:\n- request: ./a.req.tap")]
+    [InlineData("tests:\n- name: One\n  request: ./a.req.tap\n- name: Two\n  flow: ./b.flow.tap")]
     [InlineData("tests:\n- flow: id:0192-3a4d-7000-7b91-a0c1d2e3f405")]
-    [InlineData("tests:\n- request: ./a.req.md\n  vars:\n    item: nope\n  assertions:\n  - status: 404")]
-    [InlineData("tests:\n- request: ./a.req.md\n  skip: true")]
-    [InlineData("onFailure: stop\ntests:\n- request: ./a.req.md")]
-    [InlineData("vars:\n  customer: cus_demo\ntests:\n- request: ./a.req.md\ntags: [smoke, orders]")]
+    [InlineData("tests:\n- request: ./a.req.tap\n  vars:\n    item: nope\n  assertions:\n  - status: 404")]
+    [InlineData("tests:\n- request: ./a.req.tap\n  skip: true")]
+    [InlineData("onFailure: stop\ntests:\n- request: ./a.req.tap")]
+    [InlineData("vars:\n  customer: cus_demo\ntests:\n- request: ./a.req.tap\ntags: [smoke, orders]")]
     public void Test_set_survives_parse_emit_parse(string fragment)
     {
         var first = ParseTestSet(fragment);
@@ -66,7 +66,7 @@ public class TestingRoundTripTests
     [Fact]
     public void Variable_tokens_in_step_vars_survive_verbatim()
     {
-        var flow = ParseFlow("steps:\n- request: ./a.req.md\n  vars:\n    id: '{{orderId}}'");
+        var flow = ParseFlow("steps:\n- request: ./a.req.tap\n  vars:\n    id: '{{orderId}}'");
         var emitted = Emit(flow);
 
         Assert.Contains("'{{orderId}}'", emitted, StringComparison.Ordinal);
@@ -77,14 +77,14 @@ public class TestingRoundTripTests
     [Fact]
     public void A_jsonpath_selector_is_not_quoted_into_noise()
     {
-        var emitted = Emit(ParseFlow("steps:\n- request: ./a.req.md\n  extract:\n  - var: id\n    jsonpath: $.order.id"));
+        var emitted = Emit(ParseFlow("steps:\n- request: ./a.req.tap\n  extract:\n  - var: id\n    jsonpath: $.order.id"));
         Assert.Contains("jsonpath: $.order.id", emitted, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Default_onFailure_leaves_the_key_out()
     {
-        Assert.DoesNotContain("onFailure", Emit(ParseTestSet("tests:\n- request: ./a.req.md")), StringComparison.Ordinal);
+        Assert.DoesNotContain("onFailure", Emit(ParseTestSet("tests:\n- request: ./a.req.tap")), StringComparison.Ordinal);
     }
 
     [Fact]
@@ -95,7 +95,7 @@ public class TestingRoundTripTests
             {
                 new FlowStepSpecDto
                 {
-                    Request = "./a.req.md",
+                    Request = "./a.req.tap",
                     Extract = [new ExtractSpecDto { Var = "id", Source = "jsonpath" }],
                 },
             },
@@ -109,7 +109,7 @@ public class TestingRoundTripTests
     public void Client_supplied_tests_have_to_target_one_thing()
     {
         var ex = Assert.Throws<WorkspaceParseException>(() => TestingSpecMapper.ToModel(
-            new[] { new TestEntrySpecDto { Request = "./a.req.md", Flow = "./b.flow.md" } },
+            new[] { new TestEntrySpecDto { Request = "./a.req.tap", Flow = "./b.flow.tap" } },
             TestSetPath));
 
         Assert.Equal(WorkspaceErrorCode.E_TEST_INVALID, ex.Error.Code);
@@ -127,7 +127,7 @@ public class TestingRoundTripTests
             [
                 new FlowStepSpecDto
                 {
-                    Request = "./a.req.md",
+                    Request = "./a.req.tap",
                     Vars = new Dictionary<string, string> { ["  "] = "orphan", ["id"] = "7" },
                 },
             ],

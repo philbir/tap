@@ -24,7 +24,8 @@ public static class ExecuteEndpoint
         {
             try
             {
-                var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec).ConfigureAwait(false);
+                var rendered = await svc.RenderAsync(
+                    body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec, draftSource: body.Source).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
                 rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
 
@@ -176,7 +177,8 @@ public static class ExecuteEndpoint
 
         app.MapPost("/api/execute/tls-diagnose", async (ExecuteRequestDto body, WorkspaceService svc, CancellationToken ct) =>
         {
-            var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec).ConfigureAwait(false);
+            var rendered = await svc.RenderAsync(
+                body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec, draftSource: body.Source).ConfigureAwait(false);
             return Results.Ok(await HttpTransport.DiagnoseAsync(new Uri(rendered.Url), ct).ConfigureAwait(false));
         });
     }

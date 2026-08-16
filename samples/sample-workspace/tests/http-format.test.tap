@@ -1,0 +1,11 @@
+---
+kind: test
+name: HTTP format smoke
+tests:
+  - name: list methods via .http
+    request: ../collections/demo/orders.http#list-methods
+  - name: echo payload via .http
+    request: ../collections/demo/orders.http#echo-a-payload
+---
+
+Proves a test set can reference requests that live inside a portable `.http` file.

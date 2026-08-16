@@ -27,8 +27,8 @@ public readonly record struct AuthContext(CollectionFile? Collection, Collection
 /// Identity of a cached runtime token: the auth profile plus the collection stage and the
 /// environment that were in effect when it was minted. Two stages of the same collection can
 /// point a profile at different token endpoints, and so can two environments — a client id or
-/// authority that comes out of <c>dev.env.md</c> mints a different token than the same profile
-/// resolved against <c>prod.env.md</c>. None of those may share a cache entry. Workspace-scoped
+/// authority that comes out of <c>dev.env.tap</c> mints a different token than the same profile
+/// resolved against <c>prod.env.tap</c>. None of those may share a cache entry. Workspace-scoped
 /// profiles carry a null <see cref="Stage"/>; a workspace with no env carries a null
 /// <see cref="Env"/>.
 /// </summary>
@@ -66,7 +66,7 @@ public static class AuthScopeResolver
         if (collection is null) return new AuthContext(null, null, env);
 
         var applies = requestPath is null
-            || (CollectionLocator.ForFile(workspace, requestPath) is { } requestCollection
+            || (CollectionLocator.ForRequestPath(workspace, requestPath) is { } requestCollection
                 && string.Equals(requestCollection.RelativePath, collection.RelativePath, StringComparison.OrdinalIgnoreCase));
 
         var stage = (applies ? collection.FindStage(stageName) : null)

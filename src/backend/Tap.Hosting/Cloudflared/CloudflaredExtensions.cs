@@ -1,9 +1,9 @@
 using Aspire.Hosting.ApplicationModel;
 using Aspire.Hosting.Cloudflared;
-using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.Tunnels;
 using Microsoft.Extensions.DependencyInjection;
 using Tap.Core.Cloudflared;
+using Aspire.Hosting.Eventing;
 
 namespace Aspire.Hosting;
 
@@ -31,9 +31,15 @@ public static class CloudflaredExtensions
         CloudflaredHostMode hostMode = CloudflaredHostMode.Process,
         string dockerImage = "cloudflare/cloudflared:latest")
     {
-#pragma warning disable CS0618 // Eventing-based replacement is not yet wired; lifecycle hook works fine today.
-        builder.Services.TryAddLifecycleHook<CloudflaredLifecycleHook>();
-#pragma warning restore CS0618
+        // Provisioning runs once per app, not once per tunnel, so the subscription is guarded
+        // the way TryAddLifecycleHook used to guard itself — AddCloudflaredTunnel /
+        // AddTailscaleFunnel can legitimately be called several times.
+        if (builder.Services.All(s => s.ServiceType != typeof(CloudflaredProvisioner)))
+        {
+            builder.Services.AddSingleton<CloudflaredProvisioner>();
+            builder.Eventing.Subscribe<BeforeStartEvent>((e, ct) =>
+                e.Services.GetRequiredService<CloudflaredProvisioner>().RunAsync(e.Model, ct));
+        }
 
         var command = hostMode == CloudflaredHostMode.Docker ? "docker" : "cloudflared";
         var resource = new CloudflaredTunnelResource(name, command, builder.Environment.ContentRootPath)

@@ -18,7 +18,7 @@ public class ValueExtractorTests
 
     private static ExtractedValue ExtractOne(string entry, ResponseSnapshot response)
     {
-        var flow = ParseFlow($"steps:\n- request: ./a.req.md\n  extract:\n  {entry}");
+        var flow = ParseFlow($"steps:\n- request: ./a.req.tap\n  extract:\n  {entry}");
         var results = ValueExtractor.Extract(Assert.Single(flow.Steps).Extract, response);
         return Assert.Single(results);
     }
@@ -185,7 +185,7 @@ public class ValueExtractorTests
     {
         var flow = ParseFlow("""
             steps:
-            - request: ./a.req.md
+            - request: ./a.req.tap
               extract:
               - var: missing
                 jsonpath: $.nope

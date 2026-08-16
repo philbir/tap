@@ -18,8 +18,8 @@ internal static class AgentTestData
     public static VariableProviderRegistry Registry(params IVariableProvider[] providers)
         => new(providers, providers.Length > 0 ? providers[0].Name : null);
 
-    public static WorkspaceFile DemoCollection(string baseUrl = "http://api.demo.test", string? defaultAuth = "./bearer.auth.md")
-        => Parse("collections/demo/_collection.md", $"""
+    public static WorkspaceFile DemoCollection(string baseUrl = "http://api.demo.test", string? defaultAuth = "./bearer.auth.tap")
+        => Parse("collections/demo/_collection.tap", $"""
             ---
             kind: collection
             name: Demo
@@ -34,7 +34,7 @@ internal static class AgentTestData
             Demo collection.
             """);
 
-    public static readonly WorkspaceFile BearerAuth = Parse("collections/demo/bearer.auth.md", """
+    public static readonly WorkspaceFile BearerAuth = Parse("collections/demo/bearer.auth.tap", """
         ---
         kind: auth
         name: Demo Bearer

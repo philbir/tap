@@ -4,6 +4,7 @@ using Tap.Studio.Variables;
 using Tap.Workspace.Model;
 using Tap.Workspace.Rendering;
 using Tap.Workspace.Variables;
+using Tap.Workspace;
 
 namespace Tap.Studio.Endpoints;
 
@@ -96,7 +97,7 @@ public static class CatalogEndpoints
         {
             // Masked (***) secret settings round-trip from the GET above — restore the
             // on-disk values before emitting, and hold saves to the descriptor's required
-            // fields so a typo'd provider doesn't land in tap.md.
+            // fields so a typo'd provider doesn't land in workspace.tap.
             if (spec.VariableProviders is { Count: > 0 } incoming)
             {
                 var stored = svc.Current.Manifest?.VariableProviders ?? [];
@@ -113,14 +114,14 @@ public static class CatalogEndpoints
                         return Results.BadRequest(new WorkspaceErrorDto(
                             WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
                             $"Provider '{p.Name}': required setting '{missing}' is empty.",
-                            "tap.md", null));
+                            WorkspaceLoader.ManifestFileName, null));
                     }
                     restored.Add(p with { Settings = settings });
                 }
                 spec = spec with { VariableProviders = restored };
             }
 
-            return SaveSpec(svc, "tap.md", WorkspaceSpecEmitter.ToFileSource(spec));
+            return SaveSpec(svc, WorkspaceLoader.ManifestFileName, WorkspaceSpecEmitter.ToFileSource(spec));
         });
     }
 

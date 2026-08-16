@@ -15,6 +15,9 @@
     <!-- ProjectReference (not <Reference>) so the Aspire.AppHost.Sdk source generator
          emits Projects.Tap_Studio for AddProject<T>. -->
     <ProjectReference Include="..\..\src\backend\Tap.Studio\Tap.Studio.csproj" />
+    <!-- The hosting library that provides AddTapStudio. IsAspireProjectResource=false
+         because it is a library, not a launchable project — same rule as AddTap. -->
+    <ProjectReference Include="..\..\src\backend\Tap.Hosting\Tap.Hosting.csproj" IsAspireProjectResource="false" />
     <ProjectReference Include="..\Demo.Api\Demo.Api.csproj" />
   </ItemGroup>
 </Project>

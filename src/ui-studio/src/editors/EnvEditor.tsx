@@ -109,7 +109,7 @@ export function EnvEditor({ path }: Props) {
  * optional strict mode (no fall-through past that provider), and alias → provider
  * bindings so requests can use a stable prefix like `{{kv:secret}}` whose target vault
  * follows the selected environment. Providers themselves are declared in Settings
- * (system scope) or tap.md (workspace scope) — this tab only points at them.
+ * (system scope) or workspace.tap (workspace scope) — this tab only points at them.
  */
 interface AliasRow { id: number; alias: string; target: string }
 

@@ -15,7 +15,10 @@ public sealed record WorkspaceInfoDto(
     string Root,
     string? DefaultEnv,
     IReadOnlyList<string> Providers,
-    IReadOnlyList<WorkspaceErrorDto> Errors);
+    IReadOnlyList<WorkspaceErrorDto> Errors,
+    /// <summary>"normal" or "aspire". Aspire means the workspace is pinned by the host —
+    /// the UI locks the switcher and badges the header instead of offering an action that 409s.</summary>
+    string Mode = "normal");
 
 /// <summary>Entry in the workspace switcher dropdown. <c>Available</c> is false if the
 /// folder no longer contains a <c>.tap/</c> directory — the UI greys it out. <c>Git</c> is
@@ -101,7 +104,13 @@ public sealed record CreateFolderDto(string Path);
 /// of the destination.</summary>
 public sealed record MoveItemDto(string From, string To);
 
-public sealed record WorkspaceErrorDto(string Code, string Message, string? Path, int? Line);
+/// <summary>A workspace problem on the wire. <c>Severity</c> is "error" or "warning";
+/// warnings (deprecations) are reported but do not make a workspace invalid.</summary>
+/// <summary>A workspace file's raw text, for kinds Studio edits as source rather than
+/// through a structured spec.</summary>
+public sealed record RawSourceDto(string Path, string Content);
+
+public sealed record WorkspaceErrorDto(string Code, string Message, string? Path, int? Line, string Severity = "error");
 
 public sealed record TreeNodeDto(
     string Path,
@@ -178,7 +187,7 @@ public sealed record EnvDetailDto(
 
 /// <summary>Listing-row representation of a collection. <see cref="Exists"/> is false when
 /// the directory <c>collections/&lt;slug&gt;/</c> is present on disk but has no
-/// <c>_collection.md</c> yet — the editor uses that to render a create-on-save form.</summary>
+/// <c>_collection.tap</c> yet — the editor uses that to render a create-on-save form.</summary>
 public sealed record CollectionSummaryDto(
     string Slug,
     string Name,
@@ -201,7 +210,7 @@ public sealed record CollectionStageDto(
 
 /// <summary>Detail view of a collection. <see cref="Slug"/> is the directory name under
 /// <c>collections/</c>; the metadata file lives at
-/// <c>collections/&lt;slug&gt;/_collection.md</c>. Collections own the baseUrl, optional
+/// <c>collections/&lt;slug&gt;/_collection.tap</c>. Collections own the baseUrl, optional
 /// stages, default auth/headers, plus their own vars / tags / markdown body — what used
 /// to live on a separate <c>api</c> file.</summary>
 public sealed record CollectionDetailDto(
@@ -377,6 +386,28 @@ public sealed record SaveFileDto(string Content);
 /// writing so a broken file never lands on disk.
 /// </summary>
 public sealed record SaveSourceDto(string Path, string Content);
+
+/// <summary>Body for <c>POST /api/http/parse</c> — the <c>.http</c> file being edited and the
+/// unsaved text currently in the editor.</summary>
+public sealed record ParseHttpFileDto(string Path, string Content);
+
+/// <summary>One request found in a <c>.http</c> file.</summary>
+/// <param name="Path">Its fragment path (<c>orders.http#get-order</c>) — the identity that
+/// addresses it everywhere else, and what an execute call sends back as its <c>Path</c>.</param>
+/// <param name="Line">1-based line of the request line, for scrolling the editor to it.</param>
+public sealed record HttpRequestSummaryDto(
+    string Path,
+    string Name,
+    string Method,
+    string Url,
+    int Line);
+
+/// <summary>What <c>POST /api/http/parse</c> found. Errors and warnings are reported together —
+/// a file that fails to parse still lists whatever requests survived, because per-request error
+/// isolation is the whole point of <see cref="Tap.Workspace.Parsing.HttpFileParser"/>.</summary>
+public sealed record ParseHttpFileResultDto(
+    IReadOnlyList<HttpRequestSummaryDto> Requests,
+    IReadOnlyList<WorkspaceErrorDto> Errors);
 
 // -----------------------------------------------------------------------------------------
 // Typed PUT specs — clients send structured props, the server emits canonical YAML.
@@ -571,7 +602,7 @@ public sealed record EvaluateAssertsResponseDto(
     AssertSummaryDto Summary);
 
 // -----------------------------------------------------------------------------------------
-// Testing — flows (*.flow.md, §10) and test sets (*.test.md, §11), plus the shapes a run
+// Testing — flows (*.flow.tap, §10) and test sets (*.test.tap, §11), plus the shapes a run
 // streams back. Editors ship the *SpecDto; the server emits the canonical YAML.
 // -----------------------------------------------------------------------------------------
 
@@ -960,12 +991,20 @@ public sealed record RenderedRequestDto(
 
 public sealed record VariableTraceDto(string VariableProvider, string Name, bool Resolved, bool IsSecret, double DurationMs);
 
+/// <param name="Spec">An unsaved editor draft of a structured request, built in-memory through
+/// the emit pipeline instead of being read off disk. Does not apply to <c>.http</c> requests —
+/// those have no canonical spec form, so their draft arrives as <paramref name="Source"/>.</param>
+/// <param name="Source">The unsaved raw text of the <c>.http</c> file <paramref name="Path"/>
+/// points into. The file is parsed in-memory and the fragment named by <paramref name="Path"/>
+/// is executed, so the user runs what is on screen rather than what was last saved. Ignored for
+/// every other kind, and mutually exclusive with <paramref name="Spec"/>.</param>
 public sealed record ExecuteRequestDto(
     string Path,
     string? Env,
     IReadOnlyDictionary<string, string>? Overrides,
     string? Stage,
-    RequestSpecDto? Spec = null);
+    RequestSpecDto? Spec = null,
+    string? Source = null);
 
 public sealed record ExecutionResultDto(
     int Status,
@@ -1190,8 +1229,11 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(GraphQLSchemaResponseDto))]
 [JsonSerializable(typeof(FileUploadResponseDto))]
 [JsonSerializable(typeof(Tap.Studio.Endpoints.GraphQLSchemaEndpoint.IntrospectionBody))]
+[JsonSerializable(typeof(RawSourceDto))]
 [JsonSerializable(typeof(WorkspaceErrorDto))]
 [JsonSerializable(typeof(SaveSourceDto))]
+[JsonSerializable(typeof(ParseHttpFileDto))]
+[JsonSerializable(typeof(ParseHttpFileResultDto))]
 [JsonSerializable(typeof(IReadOnlyList<RequestSummaryDto>))]
 [JsonSerializable(typeof(IReadOnlyList<AuthSummaryDto>))]
 [JsonSerializable(typeof(IReadOnlyList<EnvSummaryDto>))]

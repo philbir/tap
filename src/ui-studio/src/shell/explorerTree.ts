@@ -1,17 +1,21 @@
 import type { TreeNode } from '../api/types'
+import { COLLECTION_FILE, resolveCollectionFile } from './tapFiles'
 
 /** Logical node displayed by the explorer.
  *
  *  Shape per `kind`:
  *  - `collection` — top-level directory under `.tap/collections/`. Carries optional
- *                   metadata via `_collection.md` (baseUrl, stages, defaults, vars).
+ *                   metadata via `_collection.tap` (baseUrl, stages, defaults, vars).
  *  - `folder`     — pure grouping directory inside a collection. No metadata.
  *  - `request`    — leaf request file. Inherits everything from its containing collection.
  *  - `auth`       — leaf auth profile owned by the collection it sits in. Resolves its
  *                   `{{var}}` refs against that collection's variables and stages.
  *                   Workspace-scoped profiles live under `auth/` and don't appear here.
+ *  - `httpfile`   — a portable `.http` file. Groups the requests it holds, so it *renders*
+ *                   like a folder — but it is one file, and its row acts like one: it opens
+ *                   in the `.http` editor and deletes as a file.
  */
-export type ExplorerKind = 'collection' | 'folder' | 'request' | 'auth'
+export type ExplorerKind = 'collection' | 'folder' | 'request' | 'auth' | 'httpfile'
 
 export interface ExplorerNode {
   kind: ExplorerKind
@@ -26,7 +30,7 @@ export interface ExplorerNode {
 }
 
 /** Build the Requests view: one row per `collections/<slug>/` directory, with nested
- *  folders, auth profiles, and requests below. The metadata file `_collection.md` is
+ *  folders, auth profiles, and requests below. The metadata file `_collection.tap` is
  *  hidden — its display name surfaces on the collection node. */
 export function buildRequestsView(tree: TreeNode[]): ExplorerNode[] {
   const collectionsRoot = findCollectionsRoot(tree)
@@ -79,20 +83,15 @@ export function buildAuthView(tree: TreeNode[]): ExplorerNode[] {
 
 const COLLECTIONS_ROOT = 'collections'
 
-/** Basename of a collection's metadata file. A collection is addressed by its directory
- *  (`collections/<slug>`) everywhere in the UI — tabs, the editor, the API slug — while
- *  on disk the metadata lives in this file inside it. */
-export const COLLECTION_FILE = '_collection.md'
-
-/** `collections/<slug>/_collection.md` → `collections/<slug>`. */
+/** `collections/<slug>/_collection.tap` → `collections/<slug>`. */
 export function collectionDirOf(filePath: string): string {
   const cut = filePath.lastIndexOf('/')
   return cut < 0 ? filePath : filePath.slice(0, cut)
 }
 
-/** `collections/<slug>` → `collections/<slug>/_collection.md`. */
-export function collectionFileOf(dirPath: string): string {
-  return `${dirPath}/${COLLECTION_FILE}`
+/** `collections/<slug>` → the collection file inside it, canonical name first. */
+export function collectionFileOf(dirPath: string, exists?: (path: string) => boolean): string {
+  return exists ? resolveCollectionFile(dirPath, exists) : `${dirPath}/${COLLECTION_FILE}`
 }
 
 function findCollectionsRoot(tree: TreeNode[]): TreeNode | undefined {
@@ -100,7 +99,7 @@ function findCollectionsRoot(tree: TreeNode[]): TreeNode | undefined {
 }
 
 /** Turn a `collections/<slug>/` directory node into a collection node, taking its display
- *  name off the `_collection.md` child when there is one. */
+ *  name off the `_collection.tap` child when there is one. */
 function collectionNode(dir: TreeNode): ExplorerNode {
   const slug = dir.path.split('/').pop() ?? dir.path
   const meta = dir.children.find((c) => c.kind === 'collection')
@@ -132,9 +131,13 @@ function pruneToAuth(node: TreeNode): ExplorerNode | null {
 }
 
 function visitCollectionChild(node: TreeNode): ExplorerNode | null {
-  if (node.kind === 'directory') {
+  // A .http file groups its requests the same way a sub-folder does, so it recurses like one —
+  // but it keeps its own kind. Calling it a folder is what made its context menu offer "New
+  // request" and "Delete folder" for something that is neither.
+  if (node.kind === 'directory' || node.kind === 'httpfile') {
     const folder: ExplorerNode = {
-      kind: 'folder', path: node.path, name: node.name, source: node, children: [],
+      kind: node.kind === 'httpfile' ? 'httpfile' : 'folder',
+      path: node.path, name: node.name, source: node, children: [],
     }
     for (const c of node.children) {
       const built = visitCollectionChild(c)
@@ -151,7 +154,9 @@ function visitCollectionChild(node: TreeNode): ExplorerNode | null {
 
 /** Sub-folders first, then the collection's own auth profiles, then requests — config
  *  before payload. Ties broken by display name. */
-const KIND_ORDER: Record<ExplorerKind, number> = { collection: 0, folder: 0, auth: 1, request: 2 }
+const KIND_ORDER: Record<ExplorerKind, number> = {
+  collection: 0, folder: 0, httpfile: 0, auth: 1, request: 2,
+}
 
 function byKindThenName(a: ExplorerNode, b: ExplorerNode): number {
   if (KIND_ORDER[a.kind] !== KIND_ORDER[b.kind]) return KIND_ORDER[a.kind] - KIND_ORDER[b.kind]

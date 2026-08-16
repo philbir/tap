@@ -5,7 +5,7 @@ using YamlDotNet.RepresentationModel;
 namespace Tap.Studio.Specs;
 
 /// <summary>
-/// Emits canonical YAML for a <c>*.flow.md</c> file (§10 of <c>docs/workspace-format.md</c>).
+/// Emits canonical YAML for a <c>*.flow.tap</c> file (§10 of <c>docs/workspace-format.md</c>).
 ///
 /// <para>Everything routes through <see cref="TestingSpecMapper"/> on the way in, so a client
 /// can't save a step the parser would refuse to load — the PUT fails with
@@ -33,7 +33,7 @@ public static class FlowSpecEmitter
 }
 
 /// <summary>
-/// Emits canonical YAML for a <c>*.test.md</c> file (§11 of <c>docs/workspace-format.md</c>).
+/// Emits canonical YAML for a <c>*.test.tap</c> file (§11 of <c>docs/workspace-format.md</c>).
 /// <c>onFailure</c> is written only when it isn't the default, keeping existing files
 /// diff-clean — the same rule <see cref="RequestSpecEmitter"/> applies to <c>protocol</c>.
 /// </summary>

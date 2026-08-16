@@ -23,6 +23,7 @@ import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
+import { COLLECTION_FILE } from '../shell/tapFiles'
 
 interface Props {
   path: string
@@ -58,7 +59,7 @@ export function AuthEditor({ path }: Props) {
   const collectionSlug = detail?.collection ?? null
   const variableContext = useMemo<VariableContext>(() => ({
     envPath: activeEnv ?? undefined,
-    collectionPath: collectionSlug ? `collections/${collectionSlug}/_collection.md` : undefined,
+    collectionPath: collectionSlug ? `collections/${collectionSlug}/${COLLECTION_FILE}` : undefined,
   }), [activeEnv, collectionSlug])
 
   const [spec, setSpec] = useState<AuthSpec | null>(null)

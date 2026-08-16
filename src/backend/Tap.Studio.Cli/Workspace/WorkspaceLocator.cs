@@ -11,12 +11,13 @@ namespace Tap.Studio.Cli.Workspace;
 /// is breadth-first in ordinal order, so "the first one" is deterministic — the shallowest,
 /// then alphabetically first — and it is bounded (depth cap, dot- and dependency-directory
 /// skips) so a giant tree doesn't turn a typo'd command into a filesystem crawl. Both
-/// layouts are recognised: a folder holding <c>tap.md</c> directly, and the older
-/// <c>.tap/</c> subfolder.</para>
+/// layouts are recognised: a folder holding <c>workspace.tap</c> directly, and the older
+/// <c>.tap/</c> subfolder. The pre-0.7.0 manifest name (<c>workspace.tap</c>) is accepted for as long
+/// as the loader reads the legacy extension family.</para>
 /// </summary>
 public static class WorkspaceLocator
 {
-    public const string ManifestFileName = "tap.md";
+    public const string ManifestFileName = Tap.Workspace.WorkspaceLoader.ManifestFileName;
     public const string TapDirectoryName = ".tap";
 
     /// <summary>How deep the downward fallback looks. Workspaces live near the top of a
@@ -108,14 +109,14 @@ public static class WorkspaceLocator
     /// <summary>True when <paramref name="directory"/> is (or contains) a workspace root.</summary>
     public static bool TryManifestRoot(string directory, out string root)
     {
-        if (File.Exists(Path.Combine(directory, ManifestFileName)))
+        if (Tap.Workspace.WorkspaceLoader.HasManifest(directory))
         {
             root = directory;
             return true;
         }
 
         var nested = Path.Combine(directory, TapDirectoryName);
-        if (File.Exists(Path.Combine(nested, ManifestFileName)))
+        if (Tap.Workspace.WorkspaceLoader.HasManifest(nested))
         {
             root = nested;
             return true;

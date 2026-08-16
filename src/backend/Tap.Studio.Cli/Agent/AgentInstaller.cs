@@ -121,8 +121,8 @@ public sealed class AgentInstaller(string projectDir, string home)
             run by the `tap-studio` CLI or its MCP tools, with auth handled by the workspace).
 
             - Before running requests against it, read `{root}/tap-studio/SKILL.md`.
-            - Before creating or editing workspace files (`*.req.md`, `_collection.md`,
-              `*.auth.md`, `*.env.md`, `*.flow.md`, `*.test.md`), read
+            - Before creating or editing workspace files (`*.req.tap`, `_collection.tap`,
+              `*.auth.tap`, `*.env.tap`, `*.flow.tap`, `*.test.tap`), read
               `{root}/tap-author/SKILL.md` and the files under `{root}/tap-author/references/`.
             {BlockEnd}
             """;

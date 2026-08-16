@@ -1,8 +1,6 @@
 import { Box } from '@mantine/core'
-import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react'
-import * as monaco from 'monaco-editor'
-import { useEffect, useRef } from 'react'
-import { ensureThemes, useMonacoTheme } from './monacoSetup'
+import { MonacoEditor } from './MonacoEditor'
+import { useMonacoTheme } from './monacoSetup'
 import type { RawSubType } from './body-mode'
 
 /**
@@ -33,16 +31,6 @@ const LANGUAGE_BY_SUB: Record<RawSubType, string> = {
 
 export function RawBodyEditor({ value, onChange, rawSub, height = 460 }: RawBodyEditorProps) {
   const theme = useMonacoTheme()
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
-
-  // Theme follow-through, same pattern as SourceTab.
-  useEffect(() => {
-    if (!editorRef.current) return
-    monaco.editor.setTheme(theme)
-  }, [theme])
-
-  const beforeMount: BeforeMount = (m) => ensureThemes(m)
-  const onMount: OnMount = (editor) => { editorRef.current = editor }
 
   return (
     <Box
@@ -50,32 +38,15 @@ export function RawBodyEditor({ value, onChange, rawSub, height = 460 }: RawBody
         border: '1px solid var(--mantine-color-default-border)',
         borderRadius: 'var(--mantine-radius-sm)',
         overflow: 'hidden',
+        height: typeof height === 'number' ? `${height}px` : height,
       }}
     >
-      <Editor
-        height={height}
+      <MonacoEditor
         language={LANGUAGE_BY_SUB[rawSub]}
         value={value}
-        onChange={(v) => onChange(v ?? '')}
+        onChange={onChange}
         theme={theme}
-        beforeMount={beforeMount}
-        onMount={onMount}
-        options={{
-          minimap: { enabled: false },
-          fontSize: 12,
-          fontFamily: 'var(--mono)',
-          tabSize: 2,
-          insertSpaces: true,
-          scrollBeyondLastLine: false,
-          scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
-          automaticLayout: true,
-          wordWrap: 'on',
-          lineNumbersMinChars: 3,
-          padding: { top: 8, bottom: 8 },
-          // Schema validation for JSON without a schema is just visual noise; the
-          // user is composing a request body, not authoring a JSON file.
-          formatOnPaste: true,
-        }}
+        options={{ formatOnPaste: true }}
       />
     </Box>
   )

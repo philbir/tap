@@ -17,7 +17,7 @@ import {
   TestProviderControl, descriptorFor, useProviderTypes,
 } from './providerMeta'
 
-/** Workspace manifest editor — `tap.md`. Typed state; server emits canonical YAML. */
+/** Workspace manifest editor — `workspace.tap`. Typed state; server emits canonical YAML. */
 export function WorkspaceEditor() {
   const generation = useTapStore((s) => s.generation)
   const envs = useTapStore((s) => s.envs)
@@ -86,7 +86,7 @@ export function WorkspaceEditor() {
   async function save() {
     if (!spec) return
     // A provider row without a name would be silently skipped by the parser on the next
-    // load — block the save instead of letting the row vanish from tap.md.
+    // load — block the save instead of letting the row vanish from workspace.tap.
     if ((spec.variableProviders ?? []).some((p) => p.origin !== 'system' && !p.name.trim())) {
       setError('Every variable provider needs a name — fill in the empty Name field before saving.')
       return
@@ -109,7 +109,7 @@ export function WorkspaceEditor() {
 
   const providers = spec.variableProviders ?? []
   // Filter out system-origin providers from the workspace editor — they're managed in
-  // app config, not tap.md. Workspace-origin providers stay editable.
+  // app config, not workspace.tap. Workspace-origin providers stay editable.
   const workspaceProviders = providers.filter(p => p.origin !== 'system')
   const isWritable = (p: ProviderConfig) =>
     (descriptorFor(providerTypes, p.type)?.mode ?? modeForProviderType(p.type)) === 'readwrite'
@@ -212,7 +212,7 @@ export function WorkspaceEditor() {
         </Tabs.Panel>
 
         <Tabs.Panel value="source">
-          <SourceTab path="tap.md" source={detail.source} label="tap.md" />
+          <SourceTab path="workspace.tap" source={detail.source} label="workspace.tap" />
         </Tabs.Panel>
       </Tabs>
     </EditorShell>

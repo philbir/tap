@@ -56,7 +56,7 @@ public static class FilesystemEndpoints
                 bool hasTap = false;
                 try
                 {
-                    hasTap = File.Exists(Path.Combine(dirAbs, WorkspaceLoader.ManifestFileName));
+                    hasTap = WorkspaceLoader.HasManifest(dirAbs);
                 }
                 catch { /* unreadable — leave hasTap=false */ }
 
@@ -69,7 +69,7 @@ public static class FilesystemEndpoints
             // GetDirectoryName returns "" for a root path on Unix and null on Windows roots.
             var hasParent = !string.IsNullOrEmpty(parent) && !string.Equals(parent, target, StringComparison.Ordinal);
 
-            var isWorkspace = File.Exists(Path.Combine(target, WorkspaceLoader.ManifestFileName));
+            var isWorkspace = WorkspaceLoader.HasManifest(target);
             var git = GitInspector.Inspect(target);
 
             return Results.Ok(new BrowseResponseDto(

@@ -4,9 +4,9 @@ using YamlDotNet.RepresentationModel;
 namespace Tap.Studio.Specs;
 
 /// <summary>
-/// Emits the canonical YAML for a <c>_collection.md</c>. Field order: kind / id / name /
+/// Emits the canonical YAML for a <c>_collection.tap</c>. Field order: kind / id / name /
 /// baseUrl / defaultAuth / defaultHeaders / vars / tags / stages / defaultStage / agent.
-/// The file always lives at <c>collections/&lt;slug&gt;/_collection.md</c>.
+/// The file always lives at <c>collections/&lt;slug&gt;/_collection.tap</c>.
 /// </summary>
 public static class CollectionSpecEmitter
 {

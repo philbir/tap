@@ -16,7 +16,7 @@ public static class FileParser
         var suffixKind = KindResolver.FromFileName(fileName)
             ?? throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_KIND_MISMATCH,
-                $"Filename '{fileName}' does not match any known Tap workspace suffix. Expected one of: *.req.md, *.auth.md, *.env.md, _collection.md, tap.md.",
+                $"Filename '{fileName}' does not match any known Tap workspace suffix. Expected one of: {KindResolver.KnownNamesDescription}.",
                 relativePath));
 
         var split = FrontmatterReader.Read(content, relativePath);
@@ -393,7 +393,7 @@ public static class FileParser
 
     /// <summary>
     /// <c>^[A-Za-z][A-Za-z0-9_-]*$</c> — the shape the interpolation regex already assumes for a
-    /// <c>{{provider:name}}</c> prefix, enforced here so a hostile <c>tap.md</c> can't hand a
+    /// <c>{{provider:name}}</c> prefix, enforced here so a hostile <c>workspace.tap</c> can't hand a
     /// path fragment to a file-backed provider.
     /// </summary>
     private static bool IsValidProviderName(string name)

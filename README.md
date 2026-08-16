@@ -60,7 +60,7 @@ inbound    Internet ─▶ Cloudflare Tunnel / Tailscale ─▶ Tap capture prox
                                                         Inspector UI
                                                         requests · SSE · WS · replay
 
-outbound   request.req.md + auth profile + environment ─▶ Tap Studio ─▶ any API
+outbound   request.req.tap + auth profile + environment ─▶ Tap Studio ─▶ any API
            └──────── Markdown, in your repo ─────────┘     executor
 ```
 
@@ -184,6 +184,10 @@ The other direction: **you** are the client. Studio is a full HTTP request workb
 compose, authenticate, execute, document — with a workspace that lives in your repository as
 plain Markdown.
 
+Already using Aspire? `builder.AddTapStudio<Projects.Tap_Studio>().WithApi(orders)` runs Studio
+as a companion resource of your AppHost, pinned to a workspace folder in the repo and pointed at
+your APIs — see [Run it from your Aspire AppHost](docs/studio.md#run-it-from-your-aspire-apphost).
+
 📖 **Full reference: [docs/studio.md](docs/studio.md)** ·
 📄 **On-disk format: [docs/workspace-format.md](docs/workspace-format.md)**
 
@@ -197,7 +201,7 @@ plain Markdown.
 | **Real responses** | Status, duration, size, syntax-highlighted body with image and binary previews, plus **Headers**, the exact **Request** that went on the wire, the auth/variable **Flow**, and which **Secrets** were resolved. |
 | **Streaming** | SSE responses stream in live; requests marked `protocol: websocket` open a real socket and append frames as they arrive. |
 | **Many authentication flows** | OAuth 2.0 / OIDC (authorization code + PKCE, client credentials, ROPC, device code), Microsoft Entra, Azure CLI (direct + on-behalf-of), GitHub (PAT / `gh` CLI / GitHub App / OAuth App), AWS SigV4, signed JWT, bearer, basic, API key, and custom headers. |
-| **Flows and test sets** | A **flow** (`*.flow.md`) runs requests in order and carries values out of one response into the next; a **test set** (`*.test.md`) groups checks that each run one request or one whole flow. The **Testing** tab authors both and streams every result as it lands. |
+| **Flows and test sets** | A **flow** (`*.flow.tap`) runs requests in order and carries values out of one response into the next; a **test set** (`*.test.tap`) groups checks that each run one request or one whole flow. The **Testing** tab authors both and streams every result as it lands. |
 | **The same verdict in CI** | The `tap-studio` .NET tool runs those flows and test sets headlessly — JUnit, TRX, JSON, or Markdown reports, and exit codes a pipeline can branch on. Same engine as the UI, so a pull-request check and the Testing tab are one computation. |
 | **AI assistance** | Hand the request to GitHub Copilot CLI or Claude Code — running locally, with your existing CLI login — and get a proposed edit you review before saving. |
 | **Git-native workspace** | Requests, collections, auth profiles, environments, flows, and test sets are Markdown files. Built-in branch, diff, stage, and commit. |
@@ -240,16 +244,16 @@ decide whether to keep it. Secrets are always referenced as `{{variables}}`, nev
 
 ```
 .tap/
-├── tap.md                                ← workspace: name, providers, default env
-├── auth/corp-entra.auth.md               ← auth profile shared by every collection
-├── environments/local.env.md             ← named variable set
+├── workspace.tap                                ← workspace: name, providers, default env
+├── auth/corp-entra.auth.tap               ← auth profile shared by every collection
+├── environments/local.env.tap             ← named variable set
 ├── tests/
-│   ├── checkout.flow.md                  ← requests in order, values carried across
-│   └── billing.test.md                   ← a set of checks over requests and flows
+│   ├── checkout.flow.tap                  ← requests in order, values carried across
+│   └── billing.test.tap                   ← a set of checks over requests and flows
 └── collections/billing/
-    ├── _collection.md                    ← baseUrl, stages, default auth/headers
-    ├── billing-oauth.auth.md             ← auth profile scoped to this collection
-    └── create-customer.req.md            ← one request, as a fenced http block
+    ├── _collection.tap                    ← baseUrl, stages, default auth/headers
+    ├── billing-oauth.auth.tap             ← auth profile scoped to this collection
+    └── create-customer.req.tap            ← one request, as a fenced http block
 ```
 
 Because a request is a couple of lines of Markdown, review, blame, cherry-pick, and revert all
@@ -269,12 +273,12 @@ kind: flow
 name: Checkout
 steps:
 - name: Create the order
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   extract:
   - var: orderId                          # bind it out of the response…
     jsonpath: $.order.id
 - name: Read it back
-  request: ../collections/demo/get-order.req.md
+  request: ../collections/demo/get-order.req.tap
   vars:
     id: '{{orderId}}'                     # …and the next step reads it
 ```

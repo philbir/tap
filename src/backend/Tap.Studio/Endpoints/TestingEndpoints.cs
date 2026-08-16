@@ -150,7 +150,7 @@ public static class TestingEndpoints
     private static string DisplayName(WorkspaceFile file)
         => string.IsNullOrWhiteSpace(file.Name) ? Stem(file.RelativePath) : file.Name!;
 
-    /// <summary>Filename stem without the two-part suffix — <c>checkout.flow.md</c> → <c>checkout</c>.</summary>
+    /// <summary>Filename stem without the two-part suffix — <c>checkout.flow.tap</c> → <c>checkout</c>.</summary>
     private static string Stem(string relativePath)
     {
         var file = Path.GetFileName(relativePath);

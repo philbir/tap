@@ -20,6 +20,7 @@ plain text in your git repo.
 
 - [Why another HTTP client](#why-another-http-client)
 - [Install and run](#install-and-run)
+- [Run it from your Aspire AppHost](#run-it-from-your-aspire-apphost)
 - [The workspace](#the-workspace)
 - [Composing a request](#composing-a-request)
 - [Assertions](#assertions)
@@ -102,42 +103,120 @@ scripts/build-desktop.sh --dev    # publish sidecar + tauri dev
 
 ---
 
+## Run it from your Aspire AppHost
+
+If your solution already has an Aspire AppHost, Studio can run as a companion resource of it —
+started, health-checked, and linked from the dashboard alongside your APIs, pointed at a
+workspace folder that lives in the repo.
+
+```csharp
+var orders  = builder.AddProject<Projects.Orders_Api>("orders-api");
+var billing = builder.AddProject<Projects.Billing_Api>("billing-api");
+
+var studio = builder.AddTapStudio<Projects.Tap_Studio>()
+    .WithWorkspaceFolder("tap")   // default; resolved against the AppHost directory
+    .WithApi(orders)
+    .WithApi(billing);
+```
+
+That single call does the following:
+
+- Starts Studio in **aspire mode**: the workspace is pinned to `tap/`, the workspace switcher is
+  locked, and the header shows an Aspire badge. Pinning matters — without it Studio would open
+  whichever workspace that developer last used on that machine.
+- Waits for each API, health-checks Studio at `/health`, and adds it to the dashboard as
+  **Tap Studio**.
+- Injects the standard service-discovery variables for every `WithApi`, so a collection can say
+  `baseUrl: '{{aspire:orders-api}}'` and hit whatever port was allocated this run (§12.2 of
+  [workspace-format.md](workspace-format.md)).
+
+`WithApi(api, waitFor: false)` opts out of waiting for a slow-starting API.
+
+### csproj requirements
+
+Two references in the **AppHost** project:
+
+```xml
+<!-- Makes Aspire's source generator emit Projects.Tap_Studio. -->
+<ProjectReference Include="path/to/Tap.Studio.csproj" />
+
+<!-- The hosting library. IsAspireProjectResource=false because it is a library,
+     not a launchable project. -->
+<ProjectReference Include="path/to/Tap.Hosting.csproj" IsAspireProjectResource="false" />
+```
+
+Building `Tap.Studio` builds its React UI, so this route needs **yarn on PATH**. The packaged
+`Tap.Aspire.Hosting.Studio` NuGet removes both the project reference and the yarn requirement.
+
+### Seeding an OAuth client
+
+Studio's redirect URI is only known once its port is allocated, so it is exposed as a
+`ReferenceExpression`:
+
+```csharp
+identity.WithEnvironment("STUDIO_CALLBACK_URL", studio.CallbackUrl);
+```
+
+### The same workspace in CI
+
+Nothing about the workspace is Aspire-specific. `{{aspire:orders-api}}` reads the standard
+`services__<resource>__<scheme>__<index>` variables, so CI runs it by exporting them:
+
+```bash
+export services__orders-api__https__0=https://staging.example.com
+tap-studio test "Orders smoke"
+```
+
+### While it's running
+
+The workspace switcher is locked and the header shows an **Aspire** badge — the folder is part of
+the solution's definition rather than a per-user preference, so changing it means changing
+`WithWorkspaceFolder(...)`.
+
+The header also links to the **desktop app**. A Studio started by an AppHost lives in a browser tab
+that goes away with `aspire run`; the desktop app opens the same workspace folder without the
+AppHost having to be up. Download it from
+[the install docs](https://philbir.github.io/tap/#studio-install) or straight from
+[GitHub Releases](https://github.com/philbir/tap/releases/latest).
+
+A worked example lives in [`samples/Studio.AppHost`](../samples/Studio.AppHost/Program.cs).
+
 ## The workspace
 
-A workspace is a directory containing a `tap.md` manifest. Everything in it is meant to be
+A workspace is a directory containing a `workspace.tap` manifest. Everything in it is meant to be
 committed. Seven file kinds, all Markdown + YAML frontmatter:
 
 | Kind | File | Owns |
 |---|---|---|
-| `workspace` | `tap.md` | Name, default environment, variable providers, workspace-wide vars. |
-| `collection` | `collections/<slug>/_collection.md` | Base URL, named stages, default auth, default headers, collection vars. |
-| `request` | `*.req.md` | One HTTP (or WebSocket) call, as a fenced `http` block. |
-| `auth` | `auth/*.auth.md` or `collections/<slug>/*.auth.md` | A reusable authentication profile — shared workspace-wide, or owned by one collection. |
-| `env` | `environments/*.env.md` | A named set of variables. |
-| `flow` | `tests/*.flow.md` | Requests run in order, passing values from one response to the next. |
-| `test` | `tests/*.test.md` | A set of checks, each running one request or one flow. |
+| `workspace` | `workspace.tap` | Name, default environment, variable providers, workspace-wide vars. |
+| `collection` | `collections/<slug>/_collection.tap` | Base URL, named stages, default auth, default headers, collection vars. |
+| `request` | `*.req.tap` | One HTTP (or WebSocket) call, as a fenced `http` block. |
+| `auth` | `auth/*.auth.tap` or `collections/<slug>/*.auth.tap` | A reusable authentication profile — shared workspace-wide, or owned by one collection. |
+| `env` | `environments/*.env.tap` | A named set of variables. |
+| `flow` | `tests/*.flow.tap` | Requests run in order, passing values from one response to the next. |
+| `test` | `tests/*.test.tap` | A set of checks, each running one request or one flow. |
 
 ```
 my-service/
 ├── src/                          ← your code
 └── .tap/
-    ├── tap.md
+    ├── workspace.tap
     ├── auth/
-    │   ├── stripe-bearer.auth.md
-    │   └── corp-entra.auth.md
+    │   ├── stripe-bearer.auth.tap
+    │   └── corp-entra.auth.tap
     ├── environments/
-    │   ├── local.env.md
-    │   └── prod.env.md
+    │   ├── local.env.tap
+    │   └── prod.env.tap
     ├── tests/
-    │   ├── billing.test.md   ← a set of checks
-    │   └── checkout.flow.md  ← requests in order, values carried across
+    │   ├── billing.test.tap   ← a set of checks
+    │   └── checkout.flow.tap  ← requests in order, values carried across
     └── collections/
         └── stripe/
-            ├── _collection.md    ← baseUrl, stages, default auth/headers
-            ├── stripe-oauth.auth.md  ← auth owned by this collection
-            ├── create-customer.req.md
+            ├── _collection.tap    ← baseUrl, stages, default auth/headers
+            ├── stripe-oauth.auth.tap  ← auth owned by this collection
+            ├── create-customer.req.tap
             └── refunds/          ← plain grouping folder, no metadata
-                └── issue.req.md
+                └── issue.req.tap
 ```
 
 A runnable request is the *composition* of workspace + collection (+ stage) + auth +
@@ -166,7 +245,7 @@ The request editor is one URL bar plus seven tabs:
 | **Variables** | Request-scoped variables with descriptions, defaults, and `required` flags. |
 | **Meta** | Name, tags, protocol (`http` / `websocket`). |
 | **Docs** | Markdown documentation rendered under the request. This is the request file's body. |
-| **Source** | The generated `*.req.md`, read-only. |
+| **Source** | The generated `*.req.tap`, read-only. |
 
 The URL bar splits the collection's base URL from the path, so a request stores
 `/v1/customers` and picks up `https://api.stripe.com` (or the active stage's override) at
@@ -246,7 +325,7 @@ still work end to end?"* — with two file kinds, both living in `tests/`.
 
 ### Flows — requests in order, values carried across
 
-A **flow** (`*.flow.md`) runs requests in sequence and passes values from one response into
+A **flow** (`*.flow.tap`) runs requests in sequence and passes values from one response into
 the next. Each step names a request, may override its variables, and may **extract** values
 out of its response for the steps below:
 
@@ -255,12 +334,12 @@ kind: flow
 name: Checkout
 steps:
 - name: Create the order
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   extract:
   - var: orderId
     jsonpath: $.order.id
 - name: Read it back
-  request: ../collections/demo/get-order.req.md
+  request: ../collections/demo/get-order.req.tap
   vars:
     id: '{{orderId}}'
 ```
@@ -283,7 +362,7 @@ happened.
 
 ### Test sets — a group of checks
 
-A **test set** (`*.test.md`) is a list of tests, each running either one request or one whole
+A **test set** (`*.test.tap`) is a list of tests, each running either one request or one whole
 flow, plus variables that apply to the entire run:
 
 ```yaml
@@ -293,12 +372,12 @@ vars:
   customer: cus_demo
 tests:
 - name: Rejects an unknown SKU
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   vars: { item: nope }
   assertions:
   - status: 404
 - name: Full checkout
-  flow: ./checkout.flow.md
+  flow: ./checkout.flow.tap
 ```
 
 Set variables are the last word on what the requests see — above the environment, above the
@@ -362,7 +441,7 @@ stdout — the mode built for scripts and AI agents. See [agent-surface.md](agen
 
 `<name>` is a path, the `name:` from the frontmatter, or the filename stem — so the thing you
 read off the Testing tab is the thing you can type. `--list` shows what's available. The
-workspace is found by walking up from the working directory to the nearest `tap.md` — or,
+workspace is found by walking up from the working directory to the nearest `workspace.tap` — or,
 when no ancestor has one, by taking the first workspace beneath the working directory
 (shallowest first, then alphabetical, to a bounded depth). Standing at a repo root whose
 workspace lives in a subfolder therefore just works; `--workspace` pins it explicitly.
@@ -442,7 +521,7 @@ This repo runs its own sample set that way on every push — see
 | 0 | Everything that ran, passed. |
 | 1 | A test or assertion failed. |
 | 2 | Usage error — unknown or ambiguous name, bad option. |
-| 3 | Workspace error — no `tap.md`, a file that doesn't parse. |
+| 3 | Workspace error — no `workspace.tap`, a file that doesn't parse. |
 | 4 | Auth couldn't be acquired without a human. |
 | 130 | Cancelled. |
 
@@ -495,7 +574,7 @@ authoring one) — lives in [agent-surface.md](agent-surface.md).
 
 ## Authentication
 
-Studio's auth profiles are reusable files (`*.auth.md`) referenced by requests or set as a
+Studio's auth profiles are reusable files (`*.auth.tap`) referenced by requests or set as a
 collection default. Creating one starts in a three-step wizard — pick a scope + template,
 fill the required fields, review — so you don't have to know the underlying field names.
 
@@ -575,14 +654,14 @@ Write `\{{` for a literal brace pair.
 
 The cascade, lowest precedence first:
 
-1. `tap.md` `vars`
-2. the owning `_collection.md` `vars`
+1. `workspace.tap` `vars`
+2. the owning `_collection.tap` `vars`
 3. the active collection **stage**
-4. the active `*.env.md`
+4. the active `*.env.tap`
 5. the request's own `vars`
 6. per-run overrides
 
-Providers are declared in `tap.md` under `variableProviders` (a workspace provider shadows a
+Providers are declared in `workspace.tap` under `variableProviders` (a workspace provider shadows a
 same-named system one):
 
 | Type | Source |
@@ -640,8 +719,8 @@ Because requests are Markdown, a change to a request is a change to a couple of 
 ## Importing from Postman
 
 `POST /api/collections/import/postman` (Create → Collection → *Import from Postman* in the UI)
-converts a Postman collection export into a Tap collection: one `_collection.md` plus a
-`*.req.md` per request, with folders preserved as grouping directories.
+converts a Postman collection export into a Tap collection: one `_collection.tap` plus a
+`*.req.tap` per request, with folders preserved as grouping directories.
 
 ---
 

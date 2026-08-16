@@ -2,7 +2,7 @@
 kind: collection
 name: GitHub
 baseUrl: https://api.github.com
-defaultAuth: github-cli.auth.md
+defaultAuth: github-cli.auth.tap
 defaultHeaders:
   Accept: application/vnd.github+json
   User-Agent: tap-studio-demo/0.1

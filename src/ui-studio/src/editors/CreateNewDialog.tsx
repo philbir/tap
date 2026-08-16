@@ -3,8 +3,8 @@ import {
   SimpleGrid, Stack, Text, TextInput, UnstyledButton,
 } from '@mantine/core'
 import {
-  IconAlertCircle, IconArrowsSplit2, IconChecklist, IconFolders, IconLock, IconPlus, IconSend,
-  IconUpload, IconWorld,
+  IconAlertCircle, IconArrowsSplit2, IconChecklist, IconFileCode, IconFolders, IconLock, IconPlus,
+  IconSend, IconUpload, IconWorld,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -12,6 +12,7 @@ import { api, ApiError } from '../api/client'
 import type { CollectionSummary, WorkspaceFileKind } from '../api/types'
 import { useTapStore } from '../store'
 import { AuthWizard } from './AuthWizard'
+import { COLLECTION_FILE, fileNameFor, httpFileNameFor } from '../shell/tapFiles'
 
 interface Props {
   open: boolean
@@ -19,7 +20,10 @@ interface Props {
   onCreated: (path: string, kind: WorkspaceFileKind) => void
 }
 
-type CreatableKind = 'request' | 'auth' | 'env' | 'collection' | 'test' | 'flow'
+type CreatableKind = 'request' | 'httpfile' | 'auth' | 'env' | 'collection' | 'test' | 'flow'
+
+/** Both kinds that land inside a collection and take an optional sub-folder. */
+const COLLECTION_SCOPED: CreatableKind[] = ['request', 'httpfile']
 
 interface KindOption {
   kind: CreatableKind
@@ -31,6 +35,7 @@ interface KindOption {
 
 const KIND_OPTIONS: KindOption[] = [
   { kind: 'request', label: 'Request', description: 'A single HTTP call template', icon: IconSend, color: 'tap' },
+  { kind: 'httpfile', label: '.http file', description: 'Portable REST Client / Visual Studio format — several requests in one file, never reformatted', icon: IconFileCode, color: 'blue' },
   { kind: 'collection', label: 'Collection', description: 'A group of requests with a baseUrl, stages, default auth/headers, vars', icon: IconFolders, color: 'blue' },
   { kind: 'auth', label: 'Auth profile', description: 'Bearer, basic, OAuth2, AWS sigv4, …', icon: IconLock, color: 'orange' },
   { kind: 'env', label: 'Environment', description: 'Per-environment variables and secret refs', icon: IconWorld, color: 'grape' },
@@ -64,13 +69,13 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
   const reload = useTapStore((s) => s.reload)
   const [kind, setKind] = useState<CreatableKind>('request')
   const [name, setName] = useState('')
-  /** For Request: which collection to drop the request into. */
+  /** For Request / .http file: which collection to drop the file into. */
   const [collectionSlug, setCollectionSlug] = useState<string | null>(null)
   /** For Auth: which collection owns the profile, or `WORKSPACE_SCOPE` for a shared one
    *  under `auth/`. A collection-scoped profile can reference that collection's variables
    *  and stages; a workspace-scoped one only sees workspace + env. */
   const [authScope, setAuthScope] = useState<string>(WORKSPACE_SCOPE)
-  /** For Request: optional sub-folder path inside the chosen collection. */
+  /** For Request / .http file: optional sub-folder path inside the chosen collection. */
   const [subFolder, setSubFolder] = useState<string>('')
   const [collections, setCollections] = useState<CollectionSummary[]>([])
   const [error, setError] = useState<string | null>(null)
@@ -94,9 +99,10 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
     api.collections().then(setCollections).catch(() => setCollections([]))
   }, [open])
 
-  // Auto-pick the first collection when the dialog opens or the kind switches to request.
+  // Auto-pick the first collection when the dialog opens or the kind switches to one that
+  // lives inside a collection.
   useEffect(() => {
-    if (kind === 'request' && collectionSlug === null && collections.length > 0) {
+    if (COLLECTION_SCOPED.includes(kind) && collectionSlug === null && collections.length > 0) {
       setCollectionSlug(collections[0].slug)
     }
   }, [kind, collectionSlug, collections])
@@ -110,17 +116,18 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
   const targetPath = useMemo(() => {
     if (!slug) return ''
     switch (kind) {
-      case 'request': {
+      case 'request':
+      case 'httpfile': {
         if (!collectionSlug) return ''
         const sub = subFolder.replace(/\\/g, '/').replace(/^\/+|\/+$/g, '')
         const prefix = sub ? `collections/${collectionSlug}/${sub}` : `collections/${collectionSlug}`
-        return `${prefix}/${slug}.req.md`
+        return `${prefix}/${kind === 'httpfile' ? httpFileNameFor(slug) : fileNameFor('req', slug)}`
       }
-      case 'auth': return `${authDir}/${slug}.auth.md`
-      case 'env': return `environments/${slug}.env.md`
-      case 'collection': return `collections/${slug}/_collection.md`
-      case 'test': return `tests/${slug}.test.md`
-      case 'flow': return `tests/${slug}.flow.md`
+      case 'auth': return `${authDir}/${fileNameFor('auth', slug)}`
+      case 'env': return `environments/${fileNameFor('env', slug)}`
+      case 'collection': return `collections/${slug}/${COLLECTION_FILE}`
+      case 'test': return `tests/${fileNameFor('test', slug)}`
+      case 'flow': return `tests/${fileNameFor('flow', slug)}`
     }
   }, [kind, slug, collectionSlug, subFolder, authDir])
 
@@ -206,6 +213,13 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
           if (!collectionSlug) { setError('Pick a collection.'); setBusy(false); return }
           await api.saveRequestSpec({ path: targetPath, id: null, name, method: 'GET', url: '/' })
           break
+        // The one kind with no spec emitter: a .http file is authored as raw text, so it is
+        // created as raw text. The server still parses it before writing, which is why the
+        // starter has a real request line — an empty file is not a valid .http file.
+        case 'httpfile':
+          if (!collectionSlug) { setError('Pick a collection.'); setBusy(false); return }
+          await api.saveSource(targetPath, httpFileStarter(name))
+          break
         case 'env':
           await api.saveEnvSpec({ path: targetPath, id: null, name })
           break
@@ -251,7 +265,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
     >
       <Stack gap="md">
         <Text size="sm" c="dimmed">
-          Add a workspace artifact. Tap writes a Markdown file to <Code>.tap/</Code> in your repo.
+          Add a workspace artifact. Tap writes a plain-text file to <Code>.tap/</Code> in your repo.
         </Text>
 
         <SimpleGrid cols={2}>
@@ -287,6 +301,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
             kind === 'collection' ? 'e.g. Stripe API'
               : kind === 'auth' ? 'e.g. Stripe bearer'
               : kind === 'env' ? 'e.g. Local'
+              : kind === 'httpfile' ? 'e.g. Orders'
               : 'e.g. Create customer'
           }
           value={name}
@@ -308,11 +323,13 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
           />
         )}
 
-        {kind === 'request' && (
+        {COLLECTION_SCOPED.includes(kind) && (
           <>
             <Select
               label="Collection"
-              description="Requests live inside a collection; pick one or create the collection first."
+              description={kind === 'httpfile'
+                ? "The collection supplies the baseUrl and auth its requests inherit, so relative URLs like `/orders` resolve."
+                : 'Requests live inside a collection; pick one or create the collection first.'}
               data={collectionOptions}
               value={collectionSlug}
               onChange={setCollectionSlug}
@@ -399,7 +416,10 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
         )}
 
         {targetPath && kind !== 'auth' && !(kind === 'collection' && collectionMode === 'postman') && (
-          <Text size="xs" c="dimmed">Created at <Code fz="xs">.tap/{targetPath}</Code></Text>
+          <Text size="xs" c="dimmed">
+            Created at <Code fz="xs">.tap/{targetPath}</Code>
+            {kind === 'httpfile' && ' — a portable starter that also runs in Visual Studio and REST Client.'}
+          </Text>
         )}
         {kind === 'collection' && collectionMode === 'postman' && slug && (
           <Text size="xs" c="dimmed">Imported into <Code fz="xs">.tap/collections/{slug}/</Code></Text>
@@ -431,7 +451,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
               loading={busy}
               disabled={
                 !slug
-                || (kind === 'request' && !collectionSlug)
+                || (COLLECTION_SCOPED.includes(kind) && !collectionSlug)
                 || (kind === 'collection' && collectionMode === 'postman' && !postman)
               }
             >
@@ -454,6 +474,31 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
     )}
     </>
   )
+}
+
+/**
+ * Starter content for a new `.http` file.
+ *
+ * Written to run outside Tap as well as in it. A bare `GET /` would only work here — nothing
+ * but Tap knows to prepend the collection's base URL — so the file declares `@baseUrl` and
+ * builds its request line from that. Visual Studio and REST Client resolve the declaration;
+ * inside Tap the collection (and the selected stage) override it, because a `.http` file's own
+ * variables are the weakest scope in the cascade.
+ */
+function httpFileStarter(name: string): string {
+  return [
+    '# A portable .http file. It opens and sends in Visual Studio, VS Code REST Client,',
+    '# JetBrains, httpyac and Kulala; the "# @tap-*" lines are inert comments there.',
+    '#',
+    "# @baseUrl is the fallback those tools use. Inside Tap the collection's baseUrl wins,",
+    '# so selecting a stage or an environment moves this request.',
+    '@baseUrl = http://localhost:5000',
+    '',
+    `### ${name}`,
+    'GET {{baseUrl}}/',
+    'Accept: application/json',
+    '',
+  ].join('\n')
 }
 
 function nameToSlug(name: string): string {

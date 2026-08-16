@@ -53,7 +53,7 @@ public static partial class AiRequestAssistant
     {
         var sb = new StringBuilder();
         sb.AppendLine("You are Tap Studio's request assistant — you help craft and edit HTTP requests for the Tap workbench.");
-        sb.AppendLine("Tap stores each request as a `*.req.md` file. You never write files; instead you propose a structured request that the user previews and applies.");
+        sb.AppendLine("Tap stores each request as a `*.req.tap` file. You never write files; instead you propose a structured request that the user previews and applies.");
         sb.AppendLine();
         sb.AppendLine("## How to respond");
         sb.AppendLine("Write a short, friendly markdown explanation of what you changed and why (1-3 sentences).");
@@ -68,7 +68,7 @@ public static partial class AiRequestAssistant
         sb.AppendLine("  \"url\": \"string — may contain {{variables}}; absolute or collection-relative\",");
         sb.AppendLine("  \"headers\": [ { \"name\": \"Header-Name\", \"value\": \"value, may use {{vars}}\" } ],");
         sb.AppendLine("  \"requestBody\": \"string | null — raw request body (JSON/text/etc.)\",");
-        sb.AppendLine("  \"auth\": \"string | null — relative path to a .auth.md profile, or 'none' to opt out\",");
+        sb.AppendLine("  \"auth\": \"string | null — relative path to a .auth.tap profile, or 'none' to opt out\",");
         sb.AppendLine("  \"protocol\": \"http | websocket — omit or 'http' for normal requests\",");
         sb.AppendLine("  \"tags\": [ \"optional\", \"labels\" ],");
         sb.AppendLine("  \"body\": \"markdown documentation shown under the request — see the Docs rule below\"");

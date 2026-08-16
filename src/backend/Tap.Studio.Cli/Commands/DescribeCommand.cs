@@ -24,7 +24,7 @@ public sealed class DescribeCommand : Command<DescribeCommand.Settings>
         public string Target { get; init; } = string.Empty;
 
         [CommandOption("-w|--workspace <DIR>")]
-        [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
+        [Description("Workspace directory. Defaults to the nearest ancestor containing workspace.tap, or the first workspace found beneath the working directory.")]
         public string? WorkspaceDirectory { get; init; }
 
         [CommandOption("--json")]

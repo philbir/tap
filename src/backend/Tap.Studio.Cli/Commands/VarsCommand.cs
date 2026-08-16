@@ -75,7 +75,7 @@ public sealed class VarsCommand : Command<VarsCommand.Settings>
             request = (RequestFile)found.File;
         }
 
-        var collection = request is not null ? CollectionLocator.ForFile(workspace, request.RelativePath) : null;
+        var collection = request is not null ? CollectionLocator.ForRequest(workspace, request) : null;
         var stage = collection?.FindStage(settings.Stage) ?? collection?.FindStage(collection.DefaultStage);
 
         if (!VariableInputs.TryCollect(settings.VarFiles, settings.Vars, out var overrides, out var varError))

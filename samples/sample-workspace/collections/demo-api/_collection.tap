@@ -1,0 +1,5 @@
+---
+kind: collection
+name: demo-api
+baseUrl: '{{aspire:demo-api}}'
+---

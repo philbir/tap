@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Lifecycle;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Tap.Core.Cloudflare;
@@ -10,17 +9,25 @@ using Tap.Core.Cloudflared;
 
 namespace Aspire.Hosting.Cloudflared;
 
-#pragma warning disable CS0618 // Eventing-based replacement is not yet wired; lifecycle hook works fine today.
-internal sealed class CloudflaredLifecycleHook(
-    ILogger<CloudflaredLifecycleHook> logger,
+/// <summary>
+/// Provisions every <see cref="CloudflaredTunnelResource"/> before the app starts: verifies the
+/// binary, resolves or creates named tunnels through the Cloudflare API, writes credentials,
+/// mints dynamic hostnames, and ensures DNS. Anything that needs a hostname before cloudflared
+/// launches belongs here rather than in the extension methods.
+///
+/// <para>Driven by the <c>BeforeStartEvent</c> subscription in
+/// <see cref="CloudflaredExtensions.AddCloudflaredTunnel"/>. It used to be an
+/// <c>IDistributedApplicationLifecycleHook</c>, which Aspire 13 obsoleted.</para>
+/// </summary>
+internal sealed class CloudflaredProvisioner(
+    ILogger<CloudflaredProvisioner> logger,
     ResourceLoggerService resourceLoggers,
     ResourceNotificationService resourceNotifications)
-    : IDistributedApplicationLifecycleHook
 {
     private static readonly Regex QuickTunnelUrlPattern =
         new(@"https?://[a-z0-9-]+\.trycloudflare\.com", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    public async Task BeforeStartAsync(DistributedApplicationModel appModel, CancellationToken cancellationToken = default)
+    public async Task RunAsync(DistributedApplicationModel appModel, CancellationToken cancellationToken)
     {
         var tunnels = appModel.Resources.OfType<CloudflaredTunnelResource>().ToList();
         if (tunnels.Count == 0)
@@ -43,7 +50,6 @@ internal sealed class CloudflaredLifecycleHook(
             }
         }
     }
-#pragma warning restore CS0618
 
     private async Task WatchQuickTunnelLogsAsync(CloudflaredTunnelResource tunnel, CancellationToken ct)
     {

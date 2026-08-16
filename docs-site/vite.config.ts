@@ -21,15 +21,25 @@ const resolveVersion = () => {
   }
 };
 
-export default defineConfig({
-  base: "./",
-  plugins: [react()],
-  define: {
-    "import.meta.env.VITE_TAP_VERSION": JSON.stringify(resolveVersion()),
-    "import.meta.env.VITE_TAP_REPO_URL": JSON.stringify("https://github.com/philbir/tap"),
-  },
-  build: {
-    outDir: "dist",
-    emptyOutDir: true,
-  },
+export default defineConfig(() => {
+  // Aspire allocates the port and passes it as PORT (same contract src/ui-studio uses).
+  // The fallback matches the docs-site entry in .claude/launch.json.
+  const port = Number(process.env["PORT"] ?? 5397);
+
+  return {
+    base: "./",
+    plugins: [react()],
+    define: {
+      "import.meta.env.VITE_TAP_VERSION": JSON.stringify(resolveVersion()),
+      "import.meta.env.VITE_TAP_REPO_URL": JSON.stringify("https://github.com/philbir/tap"),
+    },
+    server: {
+      port,
+      strictPort: true,
+    },
+    build: {
+      outDir: "dist",
+      emptyOutDir: true,
+    },
+  };
 });

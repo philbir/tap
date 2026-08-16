@@ -4,14 +4,16 @@ using Tap.Studio.Specs;
 using Tap.Workspace;
 using Tap.Workspace.Model;
 using Tap.Execution.Workspace;
+using Tap.Workspace.Parsing;
+using Tap.Workspace.Rendering;
 
 namespace Tap.Studio.Endpoints;
 
 /// <summary>
 /// <c>/api/collections/...</c> — read + write the structured spec for a
-/// <c>_collection.md</c>. Collections live at <c>collections/&lt;slug&gt;/_collection.md</c>;
+/// <c>_collection.tap</c>. Collections live at <c>collections/&lt;slug&gt;/_collection.tap</c>;
 /// the client passes the slug as the path segment (e.g. <c>demo</c>) and the server appends
-/// the rest. A collection directory without <c>_collection.md</c> still returns a
+/// the rest. A collection directory without a collection file still returns a
 /// <see cref="CollectionDetailDto"/> with <c>Exists=false</c> so the editor can render a
 /// create-on-save form.
 /// </summary>
@@ -63,8 +65,7 @@ public static class CollectionEndpoints
         {
             if (!IsValidSlug(slug)) return Results.NotFound();
             var ws = svc.Current;
-            var path = $"{CollectionsRoot}/{slug}/_collection.md";
-            if (ws.FindByPath(path) is CollectionFile c)
+            if (CollectionLocator.ForSlug(ws, slug) is { } c)
             {
                 return Results.Ok(new CollectionDetailDto(
                     Slug: slug,
@@ -78,7 +79,7 @@ public static class CollectionEndpoints
                     Vars: c.Vars,
                     Tags: c.Tags,
                     Body: c.Body,
-                    Source: svc.ReadSource(path),
+                    Source: svc.ReadSource(c.RelativePath),
                     Stages: c.Stages.Select(s => new CollectionStageDto(
                         Name: s.Name,
                         BaseUrl: s.BaseUrl,
@@ -120,7 +121,7 @@ public static class CollectionEndpoints
             Directory.CreateDirectory(dirAbs);
 
             var content = CollectionSpecEmitter.ToFileSource(spec);
-            var relPath = $"{CollectionsRoot}/{spec.Slug}/_collection.md";
+            var relPath = $"{CollectionsRoot}/{spec.Slug}/{KindResolver.CollectionFileName}";
             try { svc.Save(relPath, content); return Results.NoContent(); }
             catch (WorkspaceParseException ex)
             {
@@ -225,7 +226,7 @@ public static class CollectionEndpoints
         var parts = relativePath.Replace('\\', '/').Split('/');
         if (parts.Length != 3) return null;
         if (!string.Equals(parts[0], CollectionsRoot, StringComparison.OrdinalIgnoreCase)) return null;
-        if (!string.Equals(parts[2], "_collection.md", StringComparison.OrdinalIgnoreCase)) return null;
+        if (KindResolver.Resolve(parts[2]) is not { Kind: WorkspaceKind.Collection }) return null;
         return parts[1];
     }
 

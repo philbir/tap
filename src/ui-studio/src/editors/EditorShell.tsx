@@ -1,7 +1,7 @@
 import { ActionIcon, Alert, Badge, Box, Button, Group, ScrollArea, TextInput, Title, Tooltip } from '@mantine/core'
 import { useHotkeys } from '@mantine/hooks'
 import {
-  IconAlertCircle, IconArrowsSplit2, IconChecklist, IconDeviceFloppy, IconFolders,
+  IconAlertCircle, IconArrowsSplit2, IconChecklist, IconDeviceFloppy, IconFileCode, IconFolders,
   IconLayoutDashboard, IconLock, IconPencil, IconPlug, IconSend, IconWorld,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
@@ -50,6 +50,7 @@ const KIND_COLOR: Record<string, string> = {
   Workspace: 'tap',
   Flow: 'violet',
   'Test set': 'teal',
+  'HTTP file': 'blue',
 }
 
 const KIND_ICON: Record<string, TablerIcon> = {
@@ -61,6 +62,7 @@ const KIND_ICON: Record<string, TablerIcon> = {
   Collection: IconFolders,
   Flow: IconArrowsSplit2,
   'Test set': IconChecklist,
+  'HTTP file': IconFileCode,
 }
 
 export function EditorShell(props: EditorShellProps) {

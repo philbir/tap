@@ -4,6 +4,7 @@ import {
   IconBrandGit,
   IconChecklist,
   IconDotsVertical,
+  IconFileCode,
   IconFolder, IconFolders, IconLayoutDashboard, IconLock, IconSend, IconSettings, IconWorld, IconX,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
@@ -24,6 +25,7 @@ const KIND_ICON: Record<WorkspaceFileKind, TablerIcon> = {
   folder: IconFolder,
   settings: IconSettings,
   'git-diff': IconBrandGit,
+  httpfile: IconFileCode,
 }
 const KIND_COLOR: Partial<Record<WorkspaceFileKind, string>> = {
   request: 'var(--mantine-color-tap-6)',

@@ -3,7 +3,7 @@ namespace Tap.Workspace.Variables;
 /// <summary>
 /// Declarative configuration for one provider instance. Built from either system-level
 /// app configuration (<c>Studio:VariableProviders:[]</c> in appsettings) or workspace-level
-/// frontmatter (<c>variableProviders:</c> in <c>tap.md</c>).
+/// frontmatter (<c>variableProviders:</c> in <c>workspace.tap</c>).
 ///
 /// <para><see cref="Name"/> is the user-facing identifier referenced in <c>{{name:var}}</c>
 /// tokens and on the variable view's per-provider chips. It must be unique within the
@@ -29,7 +29,7 @@ public sealed record VariableProviderConfig
 
     /// <summary>Where this provider was configured. <see cref="ProviderOrigin.System"/> means
     /// it came from app config; <see cref="ProviderOrigin.Workspace"/> means it came from the
-    /// active workspace's <c>tap.md</c>. Workspace providers can shadow same-named system
+    /// active workspace's <c>workspace.tap</c>. Workspace providers can shadow same-named system
     /// providers within the scope of that workspace.</summary>
     public required ProviderOrigin Origin { get; init; }
 }

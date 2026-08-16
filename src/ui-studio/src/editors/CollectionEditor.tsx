@@ -20,13 +20,14 @@ import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
+import { COLLECTION_FILE } from '../shell/tapFiles'
 
 interface Props {
   /** Workspace-relative path of the collection directory (e.g. `collections/demo`). */
   path: string
 }
 
-/** Collection editor. The on-disk metadata file lives at `<path>/_collection.md`; the
+/** Collection editor. The on-disk metadata file lives at `<path>/_collection.tap`; the
  *  collection owns the base URL, optional stages, default auth + headers, plus vars/tags.
  *  Requests living under the collection inherit all of it. */
 export function CollectionEditor({ path }: Props) {
@@ -36,8 +37,8 @@ export function CollectionEditor({ path }: Props) {
   const collections = useTapStore((s) => s.collections)
   const tagSuggestions = useTagDictionary()
   const slug = useMemo(() => path.split('/').pop() ?? path, [path])
-  // Auth refs in the collection file are relative to `collections/<slug>/_collection.md`.
-  const collectionFilePath = `${path}/_collection.md`
+  // Auth refs in the collection file are relative to `collections/<slug>/_collection.tap`.
+  const collectionFilePath = `${path}/${COLLECTION_FILE}`
 
   const [detail, setDetail] = useState<CollectionDetail | null>(null)
   const [spec, setSpec] = useState<CollectionSpec | null>(null)
@@ -182,7 +183,7 @@ export function CollectionEditor({ path }: Props) {
             />
             {!detail.exists && (
               <Text size="xs" c="dimmed">
-                No <Code fz="xs">_collection.md</Code> on disk yet — saving will create it.
+                No <Code fz="xs">_collection.tap</Code> on disk yet — saving will create it.
               </Text>
             )}
           </Stack>

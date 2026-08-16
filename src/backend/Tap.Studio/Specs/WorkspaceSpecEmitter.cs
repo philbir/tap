@@ -4,7 +4,7 @@ using YamlDotNet.RepresentationModel;
 namespace Tap.Studio.Specs;
 
 /// <summary>
-/// Emits the canonical YAML for <c>tap.md</c>. The variable-providers shape is structured:
+/// Emits the canonical YAML for <c>workspace.tap</c>. The variable-providers shape is structured:
 /// each entry carries <c>name</c>, <c>type</c>, and a <c>settings</c> block. <c>mode</c> is
 /// not on disk — it's a static property of the provider type. The manifest also carries an
 /// optional <c>defaultVariableProvider:</c> string at the root.

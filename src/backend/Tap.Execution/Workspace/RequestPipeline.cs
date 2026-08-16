@@ -2,6 +2,7 @@ using Tap.Execution.Auth;
 using Tap.Workspace;
 using Tap.Workspace.Asserts;
 using Tap.Workspace.Model;
+using Tap.Workspace.Parsing;
 using Tap.Workspace.Rendering;
 
 namespace Tap.Execution.Workspace;
@@ -64,7 +65,7 @@ public sealed class RequestPipeline(IWorkspaceHost host)
         // collection and stage — which is what the cascade resolves from.
         var request = requestPath is not null && host.Workspace.FindByPath(requestPath) is RequestFile found
             ? found
-            : new RequestFile { Kind = WorkspaceKind.Request, RelativePath = requestPath ?? "unsaved.req.md" };
+            : new RequestFile { Kind = WorkspaceKind.Request, RelativePath = requestPath ?? "unsaved" + KindResolver.SuffixFor(WorkspaceKind.Request) };
 
         var env = ResolveEnv(envPath);
         var renderer = new WorkspaceRenderer(host.Workspace, host.CreateRegistry(env));
@@ -180,7 +181,7 @@ public sealed class RequestPipeline(IWorkspaceHost host)
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
         if (workspace.Resolve(request.Auth, requestDir) is AuthFile direct) return direct;
 
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         if (collection is null) return null;
 
         var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;

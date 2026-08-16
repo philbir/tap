@@ -113,17 +113,17 @@ inherits the collection's baseUrl, default headers, variables, and auth:
 ```bash
 tap-studio call GET /users/42 -c demo --json
 tap-studio call POST /things -c demo -H 'Content-Type: application/json' -d @body.json --json
-tap-studio call GET /demo/auth/whoami -c demo --auth ./whoami-collection-auth.auth.md --json
+tap-studio call GET /demo/auth/whoami -c demo --auth ./whoami-collection-auth.auth.tap --json
 ```
 
-Under the hood the request is synthesized through the same parser as a saved `.req.md`
+Under the hood the request is synthesized through the same parser as a saved `.req.tap`
 and executed by the same runner as a test step — a dynamic call and a saved request
 cannot behave differently. The URL guard from the trust model applies: relative URLs
 only, checked again after variable expansion, unless `--allow-any-url` is passed
 explicitly.
 
 A productive agent pattern: `call` an endpoint to learn its real shape, then write the
-`.req.md` with assertions pinned to what was observed, then `send` the saved file.
+`.req.tap` with assertions pinned to what was observed, then `send` the saved file.
 
 ## MCP servers
 
@@ -161,7 +161,7 @@ counterpart prints.
 
 ## Per-collection agent control
 
-A collection can fence itself off from agents in its `_collection.md`:
+A collection can fence itself off from agents in its `_collection.tap`:
 
 ```yaml
 agent: false            # shorthand

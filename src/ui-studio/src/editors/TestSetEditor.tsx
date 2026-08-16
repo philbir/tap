@@ -28,11 +28,12 @@ import { useSpecEditor } from './useSpecEditor'
 import { useTestRun } from './useTestRun'
 import { flatVarsToRows, rowsToFlatVars } from './varRows'
 import { VariablesPanel } from './VariablesPanel'
+import { labelForPath } from '../shell/tapFiles'
 
 interface Props { path: string }
 
 /**
- * Editor for a `*.test.md` — a named group of checks, each running one request or one flow.
+ * Editor for a `*.test.tap` — a named group of checks, each running one request or one flow.
  *
  * Where the flow editor is a composer, this is a runner: the list is what to check, the Run
  * button is the point, and each row can be re-run on its own so a single failure doesn't
@@ -449,5 +450,5 @@ function rowsToVars(rows: KvRow[]): Record<string, string> | null {
 }
 
 function basename(path: string): string {
-  return path.split('/').pop()?.replace(/\.(test|flow|req)\.md$/i, '') ?? path
+  return labelForPath(path)
 }

@@ -21,6 +21,8 @@ import { Sidebar } from './shell/Sidebar'
 import { TabBar } from './shell/TabBar'
 import { bootstrapStore, MANIFEST_TAB_PATH, SETTINGS_TAB_PATH, useHasActiveWorkspace, useTapStore } from './store'
 import { useTheme } from './workspace/useTheme'
+import { labelForPath } from './shell/tapFiles'
+import { HttpFileEditor } from './editors/HttpFileEditor'
 
 const HEADER_HEIGHT = 52
 
@@ -54,8 +56,13 @@ export function App() {
       openTab({ path: MANIFEST_TAB_PATH, kind: 'workspace', label: 'Workspace' })
       return
     }
+    if (node.kind === 'httpfile') {
+      // The file node opens the raw editor; its request children open the request editor.
+      openTab({ path: node.path, kind: 'httpfile', label: node.name })
+      return
+    }
     if (node.kind === 'collection') {
-      // The tree hands us the `collections/<slug>/_collection.md` metadata file, but the
+      // The tree hands us the `collections/<slug>/_collection.tap` metadata file, but the
       // collection editor is keyed on the collection *directory* — open the same tab the
       // Requests view opens for that collection instead of a second, broken one.
       const dir = collectionDirOf(node.path)
@@ -66,7 +73,7 @@ export function App() {
   }, [openTab])
 
   const openByPathKind = useCallback((path: string, kind: WorkspaceFileKind) => {
-    const label = path.split('/').pop()?.replace(/\.(req|auth|env|test|flow)\.md$/, '') ?? path
+    const label = labelForPath(path)
     openTab({ path, kind, label })
   }, [openTab])
 
@@ -145,6 +152,7 @@ export function App() {
                 {active?.kind === 'flow' && <FlowEditor key={active.path} path={active.path} />}
                 {active?.kind === 'settings' && <SettingsEditor />}
                 {active?.kind === 'git-diff' && <GitDiffEditor key={active.path} path={active.path} />}
+                {active?.kind === 'httpfile' && <HttpFileEditor key={active.path} path={active.path} />}
               </Box>
             </Box>
           </Panel>

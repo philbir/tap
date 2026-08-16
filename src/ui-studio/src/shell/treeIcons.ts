@@ -1,4 +1,5 @@
 import type { FileTreeIcons } from '@pierre/trees'
+import { COLLECTION_FILE, LEGACY_COLLECTION_FILE, MANIFEST_FILE } from './tapFiles'
 
 /**
  * Sprite of Tabler outline icons remapped onto the pierre file tree, so request/auth/env
@@ -40,6 +41,13 @@ const TAP_ICON_SPRITE = `
             stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M5 4h4l3 3h7a2 2 0 0 1 2 2v8a2 2 0 0 1 -2 2h-14a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2" />
     </symbol>
+    <symbol id="tap-icon-file-code" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+      <path d="M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z" />
+      <path d="M10 13l-1 2l1 2" />
+      <path d="M14 13l1 2l-1 2" />
+    </symbol>
   </svg>
 `
 
@@ -65,6 +73,13 @@ const FOLDER_CLOSED_MASK =
 const FOLDER_OPEN_MASK =
   "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M5 19l2.757 -7.351a1 1 0 0 1 .936 -.649h12.307a1 1 0 0 1 .986 1.164l-.996 5.211a2 2 0 0 1 -1.964 1.625h-14.026a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v2'/></svg>\")"
 
+// A .http row expands like a folder because it holds several requests, but it is one file —
+// so it gets the file-code glyph instead of a folder, matching the icon its tab and its editor
+// header already use. Same mask mechanism as the folder above, keyed off the display path
+// pierre stamps on every row (folder rows carry a trailing '/').
+const FILE_CODE_MASK =
+  "url(\"data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><path d='M14 3v4a1 1 0 0 0 1 1h4'/><path d='M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2z'/><path d='M10 13l-1 2l1 2'/><path d='M14 13l1 2l-1 2'/></svg>\")"
+
 const TAP_TREE_UNSAFE_CSS = `
   :host {
     --trees-bg: var(--mantine-color-body);
@@ -78,6 +93,7 @@ const TAP_TREE_UNSAFE_CSS = `
   svg:has(use[href="#tap-icon-world"])   { color: var(--mantine-color-grape-6); }
   svg:has(use[href="#tap-icon-folders"]) { color: var(--mantine-color-yellow-6); }
   svg:has(use[href="#tap-icon-folder"])  { color: var(--mantine-color-yellow-6); }
+  svg:has(use[href="#tap-icon-file-code"]) { color: var(--mantine-color-blue-6); }
 
   /* Selection styling: pierre paints a strong tap-light band on the selected row.
      Tone it down to just bold + keep the foreground colour so the selection reads
@@ -131,6 +147,17 @@ const TAP_TREE_UNSAFE_CSS = `
     -webkit-mask: ${FOLDER_OPEN_MASK} center / contain no-repeat;
     mask: ${FOLDER_OPEN_MASK} center / contain no-repeat;
   }
+
+  /* .http rows: folder-shaped (they expand to their requests) but a single file, so the glyph
+     is file-code rather than a folder, in the same blue the rest of the UI badges this kind
+     with. Both the collapsed and expanded selectors are spelled out — the open-folder rule
+     above has equal specificity, and matching it explicitly beats relying on source order. */
+  [data-item-type="folder"][data-item-path$=".http/"] [data-item-section="icon"]::after,
+  [data-item-type="folder"][data-item-path$=".http/"][aria-expanded="true"] [data-item-section="icon"]::after {
+    background-color: var(--mantine-color-blue-6);
+    -webkit-mask: ${FILE_CODE_MASK} center / contain no-repeat;
+    mask: ${FILE_CODE_MASK} center / contain no-repeat;
+  }
 `
 
 const customIcon = (name: string) => ({ name, viewBox: '0 0 24 24', width: 16, height: 16 })
@@ -141,12 +168,13 @@ export const TAP_ICONS = {
   world: customIcon('tap-icon-world'),
   folders: customIcon('tap-icon-folders'),
   folder: customIcon('tap-icon-folder'),
+  fileCode: customIcon('tap-icon-file-code'),
 } as const
 
 /** Build a FileTree icon config that maps the given per-basename overrides onto our
  *  shared sprite + theme CSS.
  *
- *  Display paths in the requests/auth views strip the `.req.md` / `.auth.md` suffix,
+ *  Display paths in the requests/auth views strip the `.req.tap` / `.auth.tap` suffix,
  *  so pierre's `byFileExtension` can't see what kind a file is. Instead, the host
  *  view (Sidebar) builds an explicit `display-basename → icon` map at the same time
  *  it strips the suffix, and hands it to this builder. */
@@ -159,14 +187,27 @@ export function makeTapTreeIcons(byBasename?: Record<string, ReturnType<typeof c
       folder: TAP_ICONS.folder,
     },
     // Compound-extension fallbacks for paths that didn't go through display-stripping
-    // (e.g. the Filesystem view).
+    // (e.g. the Filesystem view). Both extension families appear while workspaces are
+    // mid-migration, and a file with no icon reads as 'unrecognized', so list both.
     byFileExtension: {
+      'req.tap': TAP_ICONS.send,
+      'auth.tap': TAP_ICONS.lock,
+      'env.tap': TAP_ICONS.world,
+      'flow.tap': TAP_ICONS.send,
+      'test.tap': TAP_ICONS.send,
       'req.md': TAP_ICONS.send,
       'auth.md': TAP_ICONS.lock,
       'env.md': TAP_ICONS.world,
+      'flow.md': TAP_ICONS.send,
+      'test.md': TAP_ICONS.send,
+      // The Filesystem view renders a .http file as the plain file row it is, so it picks its
+      // icon up here rather than from the folder-shaped override in the CSS above.
+      http: TAP_ICONS.fileCode,
     },
     byFileName: {
-      '_collection.md': TAP_ICONS.folders,
+      [COLLECTION_FILE]: TAP_ICONS.folders,
+      [LEGACY_COLLECTION_FILE]: TAP_ICONS.folders,
+      [MANIFEST_FILE]: TAP_ICONS.folders,
       ...(byBasename ?? {}),
     },
   }

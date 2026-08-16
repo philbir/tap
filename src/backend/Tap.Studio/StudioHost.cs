@@ -124,6 +124,7 @@ public static class StudioHost
         builder.Services.AddSingleton<IVariableProviderFactory, AzureKeyVaultVariableProviderFactory>();
         builder.Services.AddSingleton<IVariableProviderFactory, OnePasswordVariableProviderFactory>();
         builder.Services.AddSingleton<IVariableProviderFactory, SystemVariableProviderFactory>();
+        builder.Services.AddSingleton<IVariableProviderFactory, AspireVariableProviderFactory>();
         builder.Services.AddSingleton<ProviderRegistryBuilder>();
         builder.Services.AddSingleton<Tap.Studio.AzureDiscovery.AzureDiscoveryService>();
 
@@ -139,6 +140,33 @@ public static class StudioHost
         // so it announces the folder it is about to read. A desktop launch that appears to
         // hang is nearly always this line with a root nobody meant to open (see
         // StudioOptions.WorkspaceRoot); saying so up front is what makes that visible.
+        // Scaffold before the first load, not after: the loader is what the UI serves, and a
+        // workspace scaffolded afterwards would show up empty until the watcher caught up.
+        if (options.IsWorkspacePinned)
+        {
+            try
+            {
+                var scaffold = AspireWorkspaceScaffold.Run(
+                    options.WorkspaceRoot,
+                    AspireWorkspaceScaffold.ReadApiNames(app.Configuration));
+
+                if (!scaffold.IsNoOp)
+                {
+                    // Logged rather than silent: this writes files into the developer's repo, and
+                    // the Aspire dashboard's resource console is where they will look for why.
+                    app.Logger.LogInformation(
+                        "Scaffolded {Count} file(s) into {Root}: {Files}",
+                        scaffold.Created.Count, options.WorkspaceRoot, string.Join(", ", scaffold.Created));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A read-only or unwritable folder is worth a warning, never a failed boot —
+                // Studio is still perfectly usable against whatever is already there.
+                app.Logger.LogWarning(ex, "Could not scaffold the workspace at {Root}", options.WorkspaceRoot);
+            }
+        }
+
         var bootRoot = SafeActivePath(app, options);
         StartupSignal.Progress("workspace.loading", $"Loading workspace {bootRoot}");
         var workspaceClock = System.Diagnostics.Stopwatch.StartNew();
@@ -184,12 +212,26 @@ public static class StudioHost
         app.Use(HostAllowlist(allowedHosts, allowAnyHost));
         app.Use(RejectCrossOriginRequests);
 
+        // Liveness for Aspire's WithHttpHealthCheck and WaitFor. Deliberately cheap — Kestrel is
+        // answering and the workspace object exists — because a health check that walks the
+        // workspace would make an AppHost's startup gate on a filesystem scan. A workspace that
+        // loaded *with errors* is still healthy: the whole point of degrading to
+        // "loaded with errors" is that Studio stays usable so you can fix them.
+        app.MapGet("/health", (WorkspaceService svc) => Results.Ok(new
+        {
+            status = "healthy",
+            mode = svc.Mode.ToString().ToLowerInvariant(),
+            workspace = svc.RootDirectory,
+            files = svc.Current.Files.Count,
+        })).ExcludeFromDescription();
+
         WorkspaceEndpoints.Map(app);
         RequestEndpoints.Map(app);
         CatalogEndpoints.Map(app);
         CollectionEndpoints.Map(app);
         TagEndpoints.Map(app);
         StreamEndpoints.Map(app);
+        HttpFileEndpoints.Map(app);
         ExecuteEndpoint.Map(app);
         ExecuteStreamEndpoint.Map(app);
         AssertEndpoints.Map(app);
@@ -266,6 +308,10 @@ public static class StudioHost
     /// </summary>
     private static string SafeActivePath(WebApplication app, StudioOptions options)
     {
+        // Pinned hosts ignore the known-workspace list entirely, so reading it here would label
+        // the progress message with a folder we are not about to open.
+        if (options.IsWorkspacePinned) return options.WorkspaceRoot;
+
         try
         {
             return app.Services.GetRequiredService<KnownWorkspaceStore>().ActivePath;

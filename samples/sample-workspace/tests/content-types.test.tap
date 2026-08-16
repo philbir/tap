@@ -5,11 +5,11 @@ vars:
   user.name: smoke-runner
 tests:
 - name: JSON
-  request: ../collections/demo/content/json.req.md
+  request: ../collections/demo/content/json.req.tap
 - name: XML
-  request: ../collections/demo/content/xml.req.md
+  request: ../collections/demo/content/xml.req.tap
 - name: A missing page is a 404
-  request: ../collections/demo/content/status-404.req.md
+  request: ../collections/demo/content/status-404.req.tap
 tags: [demo, smoke]
 ---
 

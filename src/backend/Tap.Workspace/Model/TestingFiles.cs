@@ -1,7 +1,7 @@
 namespace Tap.Workspace.Model;
 
 /// <summary>
-/// A <c>*.flow.md</c> file: an ordered sequence of requests where each step can bind values out
+/// A <c>*.flow.tap</c> file: an ordered sequence of requests where each step can bind values out
 /// of its response for the steps that follow. See §10 of <c>docs/workspace-format.md</c>.
 ///
 /// <para>A flow composes existing requests — it never inlines one. That keeps a request the
@@ -61,7 +61,7 @@ public enum TestFailureMode
 }
 
 /// <summary>
-/// A <c>*.test.md</c> file: set-scoped variables plus a list of checks, each running one request
+/// A <c>*.test.tap</c> file: set-scoped variables plus a list of checks, each running one request
 /// or one flow. See §11 of <c>docs/workspace-format.md</c>.
 /// </summary>
 public sealed record TestSetFile : WorkspaceFile

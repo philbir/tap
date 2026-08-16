@@ -66,6 +66,18 @@ public static class VariableViewBuilder
                 Variables: providerVariables));
         }
 
+        // Portable layer first: a .http file's own `@name = value` lines are the weakest scope,
+        // so listing (and merging) them before the workspace is what makes the panel agree with
+        // the renderer about which definition actually wins.
+        if (requestPath is not null && workspace.FindByPath(requestPath) is RequestFile portableReq
+            && portableReq.PortableVars.Count > 0)
+        {
+            sets.Add(BuildSet(
+                VariableScope.Portable, portableReq.RelativePath,
+                Path.GetFileName(HttpFragment.FilePath(portableReq.RelativePath)),
+                portableReq.PortableVars));
+        }
+
         if (workspace.Manifest is { } manifest)
         {
             sets.Add(BuildSet(VariableScope.Workspace, manifest.RelativePath, manifest.Name ?? "workspace", manifest.Vars));
@@ -78,7 +90,7 @@ public static class VariableViewBuilder
         }
         else if (requestPath is not null)
         {
-            collection = CollectionLocator.ForFile(workspace, requestPath);
+            collection = CollectionLocator.ForRequestPath(workspace, requestPath);
         }
 
         if (collection is not null)
@@ -110,6 +122,29 @@ public static class VariableViewBuilder
         if (requestPath is not null && workspace.FindByPath(requestPath) is RequestFile req2)
         {
             sets.Add(BuildSet(VariableScope.Request, req2.RelativePath, req2.Name ?? Path.GetFileNameWithoutExtension(req2.RelativePath), req2.Vars));
+        }
+
+        // The built-in `baseUrl`, mirroring WorkspaceRenderer.BindBaseUrlAsync: bound only when no
+        // *Tap* scope claimed the name, and carrying the raw template (the panel resolves tokens
+        // itself, exactly as the collection chip does). Without it, a portable `{{baseUrl}}` would
+        // paint as an unknown variable in the very editors this feature exists to serve.
+        //
+        // Portable is excluded from the check on purpose, and it is the case that matters: a file
+        // declaring its own `@baseUrl` is precisely when the built-in has to win, or this panel
+        // would report the standalone fallback as the winner while the renderer sends elsewhere.
+        if (collection is not null && !sets.Any(s => s.Scope is not (VariableScope.Provider or VariableScope.Portable)
+                                                  && s.Variables.Any(v => v.Name == WorkspaceRenderer.BaseUrlVariable)))
+        {
+            var activeStage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
+            var template = !string.IsNullOrWhiteSpace(activeStage?.BaseUrl) ? activeStage!.BaseUrl : collection.BaseUrl;
+            if (!string.IsNullOrWhiteSpace(template))
+            {
+                sets.Add(new VariableSet(
+                    VariableScope.Collection, collection.RelativePath, "baseUrl", ProviderName: null,
+                    [new Variable(
+                        WorkspaceRenderer.BaseUrlVariable, template!.TrimEnd('/'), IsSensitive: false,
+                        VariableScope.Collection, collection.RelativePath, ProviderName: null)]));
+            }
         }
 
         // Merged result mirrors what a bare {{name}} token actually resolves to. Provider
@@ -174,6 +209,11 @@ public enum VariableScope
     /// <summary>Materialized from a configured <see cref="IVariableProvider"/> (env, file,
     /// azkv, …). The set's <c>ProviderName</c> identifies which one.</summary>
     Provider,
+
+    /// <summary>A <c>.http</c> file's own <c>@name = value</c> lines — what the file resolves to
+    /// outside Tap, and therefore the weakest scope inside it. See
+    /// <see cref="Model.RequestFile.PortableVars"/>.</summary>
+    Portable,
     Workspace,
     Collection,
     Stage,

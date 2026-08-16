@@ -44,3 +44,15 @@ public interface IRefreshableVariableProvider
 {
     void InvalidateListCache();
 }
+
+/// <summary>
+/// Implemented by providers that can say something more useful than "not found" when a lookup
+/// misses. A miss on most providers means "you didn't put it there"; on some it means "you
+/// didn't set this specific environment variable", and saying which one is the difference
+/// between a dead end and a fix.
+/// </summary>
+public interface IExplainsMissingValues
+{
+    /// <summary>One sentence appended to the resolution failure for <paramref name="name"/>.</summary>
+    string ExplainMiss(string name);
+}

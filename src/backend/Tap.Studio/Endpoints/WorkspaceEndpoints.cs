@@ -22,7 +22,10 @@ public static class WorkspaceEndpoints
                 Root: ws.RootDirectory,
                 DefaultEnv: ws.Manifest?.DefaultEnv?.RelativePath,
                 Providers: ws.Manifest?.VariableProviders.Select(p => p.Name).ToArray() ?? [],
-                Errors: ws.Errors.Select(e => new WorkspaceErrorDto(e.Code, e.Message, e.RelativePath, e.Line)).ToArray());
+                Errors: ws.Errors.Select(e => new WorkspaceErrorDto(
+                    e.Code, e.Message, e.RelativePath, e.Line,
+                    e.Severity.ToString().ToLowerInvariant())).ToArray(),
+                Mode: svc.Mode.ToString().ToLowerInvariant());
             return Results.Ok(info);
         });
 
@@ -36,6 +39,22 @@ public static class WorkspaceEndpoints
         {
             // Watcher already reloads automatically; this is a manual nudge for the UI.
             return Results.NoContent();
+        });
+
+        // Raw-source read. Every structured kind gets its source inside its detail DTO, but a
+        // .http file has no structured detail — the raw text IS the document — so it needs a way
+        // to fetch it on its own.
+        g.MapGet("/source", (string path, WorkspaceService svc) =>
+        {
+            try { return Results.Ok(new RawSourceDto(path, svc.ReadSource(path))); }
+            catch (InvalidOperationException ex)
+            {
+                return Results.BadRequest(new WorkspaceErrorDto("invalid-path", ex.Message, path, null));
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                return Results.BadRequest(new WorkspaceErrorDto("unreadable", ex.Message, path, null));
+            }
         });
 
         // Raw-source save (used by every editor's Source tab). WorkspaceService.Save
@@ -149,8 +168,19 @@ public static class WorkspaceEndpoints
             return Results.Ok((IReadOnlyList<KnownWorkspaceDto>)dtos);
         });
 
-        w.MapPost("/", (AddWorkspaceDto body, KnownWorkspaceStore store) =>
+        // Pinned mode: the workspace root is part of the AppHost's definition, not a user
+        // preference, so every door that would change it is closed. 409 rather than 404 — the
+        // endpoint exists, the state forbids it.
+        static IResult PinnedConflict() => Results.Conflict(new
         {
+            code = "workspace-pinned",
+            message = "This Studio is hosted by an Aspire AppHost and is pinned to its workspace folder. "
+                    + "Change it in the AppHost's WithWorkspaceFolder(...) call.",
+        });
+
+        w.MapPost("/", (AddWorkspaceDto body, KnownWorkspaceStore store, WorkspaceService svc) =>
+        {
+            if (svc.IsWorkspacePinned) return PinnedConflict();
             try
             {
                 var added = store.Add(body.Path);
@@ -163,12 +193,14 @@ public static class WorkspaceEndpoints
 
         w.MapPost("/activate", (ActivateWorkspaceDto body, WorkspaceService svc) =>
         {
+            if (svc.IsWorkspacePinned) return PinnedConflict();
             try { svc.SwitchTo(body.Path); return Results.NoContent(); }
             catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { code = "missing-folder", message = ex.Message }); }
         });
 
-        w.MapDelete("/", (string path, KnownWorkspaceStore store) =>
+        w.MapDelete("/", (string path, KnownWorkspaceStore store, WorkspaceService svc) =>
         {
+            if (svc.IsWorkspacePinned) return PinnedConflict();
             try { store.Remove(path); return Results.NoContent(); }
             catch (InvalidOperationException ex) { return Results.BadRequest(new { code = "active-workspace", message = ex.Message }); }
         });
@@ -192,9 +224,39 @@ public static class WorkspaceEndpoints
             }
         }
 
+        // A .http file holds several requests, so it gets its own node with those requests as
+        // children. Emitting them flat would read as N unrelated siblings and lose the one thing
+        // the user needs to see — that they share a file, and editing one means editing it.
+        foreach (var group in ws.Files
+            .Where(f => HttpFragment.HasFragment(f.RelativePath))
+            .GroupBy(f => HttpFragment.FilePath(f.RelativePath), StringComparer.OrdinalIgnoreCase)
+            .OrderBy(g => g.Key, StringComparer.OrdinalIgnoreCase))
+        {
+            var httpDir = Path.GetDirectoryName(group.Key)?.Replace('\\', '/') ?? string.Empty;
+            EnsureDir(nodesByDir, httpDir);
+
+            var children = group
+                .OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase)
+                .Select(f => new TreeNodeDto(
+                    Path: f.RelativePath,
+                    Kind: WorkspaceKind.Request.ToString().ToLowerInvariant(),
+                    Name: f.Name ?? HttpFragment.Split(f.RelativePath).Fragment ?? f.RelativePath,
+                    Id: f.Id,
+                    Children: []))
+                .ToArray();
+
+            nodesByDir[httpDir].Add(new TreeNodeDto(
+                Path: group.Key,
+                Kind: "httpfile",
+                Name: Path.GetFileName(group.Key),
+                Id: null,
+                Children: children));
+        }
+
         foreach (var f in ws.Files.OrderBy(f => f.RelativePath, StringComparer.OrdinalIgnoreCase))
         {
-            if (f.Kind == WorkspaceKind.Workspace) continue; // tap.md surfaced via /api/workspace
+            if (f.Kind == WorkspaceKind.Workspace) continue; // workspace.tap surfaced via /api/workspace
+            if (HttpFragment.HasFragment(f.RelativePath)) continue; // grouped under its file above
             var dir = Path.GetDirectoryName(f.RelativePath)?.Replace('\\', '/') ?? string.Empty;
             EnsureDir(nodesByDir, dir);
 

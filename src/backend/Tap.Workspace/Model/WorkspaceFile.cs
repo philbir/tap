@@ -12,7 +12,7 @@ public abstract record WorkspaceFile
 {
     public required WorkspaceKind Kind { get; init; }
 
-    /// <summary>Workspace-relative path with forward slashes (e.g. <c>collections/customer/create.req.md</c>).</summary>
+    /// <summary>Workspace-relative path with forward slashes (e.g. <c>collections/customer/create.req.tap</c>).</summary>
     public required string RelativePath { get; init; }
 
     /// <summary>Stable id (UUIDv7). Auto-assigned by the writer on first save if absent.</summary>
@@ -78,7 +78,7 @@ public sealed record EnvFile : WorkspaceFile
 
     /// <summary>Alias → provider-name map applied while this env is active. Lets requests
     /// use a stable prefix (<c>{{kv:secret}}</c>) whose target vault is chosen per env
-    /// (<c>kv: kv-dev</c> in dev.env.md, <c>kv: kv-prod</c> in prod.env.md). Providers are
+    /// (<c>kv: kv-dev</c> in dev.env.tap, <c>kv: kv-prod</c> in prod.env.tap). Providers are
     /// still declared once at workspace/system scope; the env only points at them.</summary>
     public IReadOnlyDictionary<string, string> ProviderAliases { get; init; } =
         new Dictionary<string, string>();
@@ -94,7 +94,7 @@ public sealed record EnvFile : WorkspaceFile
 /// A top-level grouping under <c>collections/</c>. A collection owns the base URL and the
 /// optional <see cref="Stages"/>, default auth, default headers, collection-scoped variables,
 /// display name, and tags — what used to live on a separate <c>ApiFile</c> in <c>apis/</c>.
-/// Its file lives at <c>collections/&lt;slug&gt;/_collection.md</c>; nested directories
+/// Its file lives at <c>collections/&lt;slug&gt;/_collection.tap</c>; nested directories
 /// below it are pure grouping (no metadata). Sits between workspace and env in the variable
 /// cascade.
 /// </summary>
@@ -143,7 +143,7 @@ public sealed record CollectionFile : WorkspaceFile
 
 /// <summary>
 /// Agent-surface policy for a collection — the <c>agent:</c> frontmatter key on
-/// <c>_collection.md</c>. Written as a bare bool (<c>agent: false</c>) or a mapping
+/// <c>_collection.tap</c>. Written as a bare bool (<c>agent: false</c>) or a mapping
 /// (<c>agent: { enabled: false }</c>); the mapping form is the extension point for more
 /// granular control later (allowed methods, dynamic-request opt-out, …). Enabled by
 /// default: the option exists to fence specific collections off from agents, not to make
@@ -183,6 +183,18 @@ public sealed record RequestFile : WorkspaceFile
 {
     public WorkspaceRef? Auth { get; init; }
 
+    /// <summary>
+    /// Explicit owning-collection slug, set by a <c>.http</c> file's <c># @tap-collection</c>
+    /// directive. Null means the usual rule applies — the collection is whichever one the file
+    /// sits under in <c>collections/</c>.
+    ///
+    /// <para>This exists because a portable <c>.http</c> file's whole appeal is living next to
+    /// the code it exercises rather than being filed into Tap's directory layout. The directive
+    /// lets such a file claim a collection's baseUrl, headers, auth, and stages from anywhere in
+    /// the repo.</para>
+    /// </summary>
+    public string? CollectionRef { get; init; }
+
     /// <summary>Wire protocol — <c>http</c> (default) or <c>websocket</c>. Set from the
     /// <c>protocol:</c> frontmatter field. Drives baseUrl scheme normalization in the
     /// renderer and transport selection in the executor.</summary>
@@ -198,6 +210,20 @@ public sealed record RequestFile : WorkspaceFile
     public int HttpBlockStartLine { get; init; }
 
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
+        new Dictionary<string, VarSpec>();
+
+    /// <summary>
+    /// Variables the request brought with it from a portable source — the <c>@name = value</c>
+    /// lines of a <c>.http</c> file. Always empty for a Tap-authored <c>.req.tap</c>.
+    ///
+    /// <para><b>These are the weakest scope in the cascade, below the workspace manifest.</b>
+    /// That inversion is the whole point: a <c>.http</c> file is expected to run in Visual
+    /// Studio and REST Client too, where its <c>@baseUrl</c> is the only definition there is.
+    /// Inside Tap the workspace, collection, stage, and environment are deliberate
+    /// configuration and must win, or selecting a stage would silently do nothing to a file
+    /// that carries its own fallback. See §5.7 of <c>docs/workspace-format.md</c>.</para>
+    /// </summary>
+    public IReadOnlyDictionary<string, VarSpec> PortableVars { get; init; } =
         new Dictionary<string, VarSpec>();
 
     /// <summary>Declared expectations about the response, evaluated after every execution.

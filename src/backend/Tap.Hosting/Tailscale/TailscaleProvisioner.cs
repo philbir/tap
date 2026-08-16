@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.RegularExpressions;
 using Aspire.Hosting.ApplicationModel;
-using Aspire.Hosting.Lifecycle;
 using Aspire.Hosting.Tunnels;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -10,13 +9,20 @@ using Tap.Core.Cloudflare;
 
 namespace Aspire.Hosting.Tailscale;
 
-#pragma warning disable CS0618 // Eventing-based replacement is not yet wired; lifecycle hook works fine today.
-internal sealed class TailscaleLifecycleHook(
-    ILogger<TailscaleLifecycleHook> logger,
+/// <summary>
+/// Generates and wires the per-resource bootstrapper for every
+/// <see cref="TailscaleFunnelResource"/> before the app starts, and watches its logs to
+/// back-fill the MagicDNS name once it resolves.
+///
+/// <para>Driven by the <c>BeforeStartEvent</c> subscription in
+/// <see cref="TailscaleExtensions.AddTailscaleFunnel"/>. It used to be an
+/// <c>IDistributedApplicationLifecycleHook</c>, which Aspire 13 obsoleted.</para>
+/// </summary>
+internal sealed class TailscaleProvisioner(
+    ILogger<TailscaleProvisioner> logger,
     ResourceLoggerService resourceLoggers,
     ResourceNotificationService resourceNotifications,
     IHostApplicationLifetime applicationLifetime)
-    : IDistributedApplicationLifecycleHook
 {
     private static readonly Regex HostnamePattern =
         new(@"TAP_TAILSCALE_HOSTNAME=([a-z0-9.\-]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -26,7 +32,7 @@ internal sealed class TailscaleLifecycleHook(
 
     private int _cleanedUp;
 
-    public async Task BeforeStartAsync(DistributedApplicationModel appModel, CancellationToken cancellationToken = default)
+    public async Task RunAsync(DistributedApplicationModel appModel, CancellationToken cancellationToken)
     {
         var tunnels = appModel.Resources.OfType<TailscaleFunnelResource>().ToList();
         if (tunnels.Count == 0)
@@ -55,7 +61,6 @@ internal sealed class TailscaleLifecycleHook(
 
         RegisterShutdownCleanup(tunnels);
     }
-#pragma warning restore CS0618
 
     /// <summary>
     /// Belt-and-braces teardown for public funnels on the system daemon. The bootstrapper's

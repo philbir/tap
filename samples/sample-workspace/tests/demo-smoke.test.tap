@@ -5,15 +5,15 @@ vars:
   user.name: smoke-runner
 tests:
 - name: Verbs echo
-  request: ../collections/demo/methods/01-get.req.md
+  request: ../collections/demo/methods/01-get.req.tap
 - name: POST round-trips its body
-  request: ../collections/demo/methods/02-post.req.md
+  request: ../collections/demo/methods/02-post.req.tap
 - name: JSON content type
-  request: ../collections/demo/content/json.req.md
+  request: ../collections/demo/content/json.req.tap
 - name: A missing page is a 404
-  request: ../collections/demo/content/status-404.req.md
+  request: ../collections/demo/content/status-404.req.tap
 - name: Book add-and-read
-  flow: ./graphql-book.flow.md
+  flow: ./graphql-book.flow.tap
   assertions:
   - jsonpath: $.data.book.author
     equals: Fred Brooks

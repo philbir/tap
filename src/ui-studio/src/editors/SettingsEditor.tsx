@@ -3,19 +3,19 @@ import {
   Table, Tabs, Text, TextInput, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import { notifications } from '@mantine/notifications'
-import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 import {
   IconAlertCircle, IconCheck, IconChevronDown, IconChevronRight, IconCode, IconDeviceFloppy, IconEye, IconEyeOff,
   IconKey, IconPlus, IconRefresh, IconSearch, IconServer, IconSparkles, IconTrash, IconVariable, IconX,
 } from '@tabler/icons-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
   AiConfig, AiModelOption, AiProviderName, ProviderTypeDescriptor, SaveAiConfig, SaveSystemSettings,
   SystemProvider, SystemSettings, SystemVariable,
 } from '../api/types'
-import { ensureThemes, useMonacoTheme } from './monacoSetup'
+import { MonacoEditor } from './MonacoEditor'
+import { useMonacoTheme } from './monacoSetup'
 import { TabCount } from './EditorShell'
 import {
   BrowseProviderControl, ProviderSettingsFields, ProviderTypeIcon, ProviderTypeSelect,
@@ -322,7 +322,7 @@ function ProvidersTab({
       {providers.length === 0 && (
         <Alert color="gray" variant="light" icon={<IconServer size={14} />}>
           No system-scope variable providers configured. Add one to make its variables
-          available to every workspace. Workspace-level providers in <Code fz="xs">tap.md</Code> always
+          available to every workspace. Workspace-level providers in <Code fz="xs">workspace.tap</Code> always
           shadow same-named system providers.
         </Alert>
       )}
@@ -674,11 +674,12 @@ function SourceJsonTab({
   }
   saveRef.current = save
 
-  const beforeMount: BeforeMount = (m) => ensureThemes(m)
-  const onMount: OnMount = (editor) => {
+  // Re-runs after a hidden tab is shown again, because that re-creates the editor and takes
+  // any command bound to the previous instance with it.
+  const onReady = useCallback((editor: monaco.editor.IStandaloneCodeEditor) => {
     editorRef.current = editor
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current())
-  }
+  }, [])
 
   return (
     <Stack gap="xs" h="100%">
@@ -733,28 +734,12 @@ function SourceJsonTab({
           overflow: 'hidden',
         }}
       >
-        <Editor
-          height="100%"
+        <MonacoEditor
           language="json"
           value={draft}
-          onChange={(v) => setDraft(v ?? '')}
+          onChange={setDraft}
           theme={monacoTheme}
-          beforeMount={beforeMount}
-          onMount={onMount}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 12,
-            fontFamily: 'var(--mono)',
-            tabSize: 2,
-            insertSpaces: true,
-            renderWhitespace: 'selection',
-            scrollBeyondLastLine: false,
-            scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
-            automaticLayout: true,
-            wordWrap: 'on',
-            lineNumbersMinChars: 3,
-            padding: { top: 8, bottom: 8 },
-          }}
+          onReady={onReady}
         />
       </Box>
     </Stack>

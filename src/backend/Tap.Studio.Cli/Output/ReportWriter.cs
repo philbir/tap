@@ -457,7 +457,7 @@ public static class ReportWriter
 
     /// <summary>
     /// Wraps a value in a code span. Content inside one is literal, so running it through
-    /// <see cref="Text"/> would print the backslashes — a path like <c>my_api/get.req.md</c>
+    /// <see cref="Text"/> would print the backslashes — a path like <c>my_api/get.req.tap</c>
     /// would come out as <c>my\_api/…</c>. The only thing that needs handling is a backtick in
     /// the content, which is fenced by a longer run per CommonMark.
     /// </summary>

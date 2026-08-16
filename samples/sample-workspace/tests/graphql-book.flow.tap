@@ -7,7 +7,7 @@ vars:
   bookYear: 1975
 steps:
 - name: Add the book
-  request: ../collections/demo/graphql/add-book.req.md
+  request: ../collections/demo/graphql/add-book.req.tap
   extract:
   - var: bookId
     jsonpath: $.data.addBook.id
@@ -15,7 +15,7 @@ steps:
   - jsonpath: $.data.addBook.id
     type: number
 - name: Read it back
-  request: ../collections/demo/graphql/get-book.req.md
+  request: ../collections/demo/graphql/get-book.req.tap
   vars:
     bookId: '{{bookId}}'
   assertions:

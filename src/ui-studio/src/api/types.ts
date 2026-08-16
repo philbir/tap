@@ -3,10 +3,15 @@
 export type WorkspaceFileKind =
   | 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'flow' | 'test'
   | 'folder' | 'settings' | 'git-diff'
+  /** A portable .http file. Holds several requests, which arrive as its tree children. */
+  | 'httpfile'
 
 export interface WorkspaceInfo {
   name: string
   root: string
+  /** `aspire` means an AppHost pinned the workspace: the switcher is locked and the header
+   *  says so, because the folder is part of the solution rather than a user preference. */
+  mode: 'normal' | 'aspire'
   defaultEnv: string | null
   providers: string[]
   errors: WorkspaceErrorDto[]
@@ -53,6 +58,9 @@ export interface WorkspaceErrorDto {
   message: string
   path: string | null
   line: number | null
+  /** `error` blocks; `warning` is advisory (e.g. a deprecated file extension) and must
+   *  not be presented as a broken workspace. */
+  severity: 'error' | 'warning'
 }
 
 export interface TreeNode {
@@ -61,6 +69,25 @@ export interface TreeNode {
   name: string
   id: string | null
   children: TreeNode[]
+}
+
+/** One request inside a `.http` file, as the server's parser sees it. */
+export interface HttpRequestSummary {
+  /** Fragment path (`orders.http#get-order`) — the identity that addresses this request
+   *  everywhere else, and what an execute call sends back as its `path`. */
+  path: string
+  name: string
+  method: string
+  url: string
+  /** 1-based line of the request line, for scrolling the editor to it. */
+  line: number
+}
+
+/** Result of parsing unsaved `.http` text. A file that fails to parse still lists whatever
+ *  requests survived — errors isolate per request, so one bad block doesn't hide the rest. */
+export interface HttpFileParseResult {
+  requests: HttpRequestSummary[]
+  errors: WorkspaceErrorDto[]
 }
 
 export interface VarSpec {
@@ -194,7 +221,7 @@ export const OP_TAKES_NO_VALUE: ReadonlySet<AssertOp> = new Set<AssertOp>(['exis
 /** JSON types accepted by the `type` matcher. */
 export const ASSERT_JSON_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'null'] as const
 
-// --- Testing: flows (*.flow.md) and test sets (*.test.md) ---------------------------
+// --- Testing: flows (*.flow.tap) and test sets (*.test.tap) ---------------------------
 
 /** What part of a response an extraction reads. Same vocabulary as {@link AssertSource},
  *  plus `regex` — which assertions only expose as shorthand but extraction needs as a
@@ -857,10 +884,12 @@ export type AuthExecuteStatus = 'completed' | 'pending' | 'failed'
 
 // --- Variables view ----------------------------------------------------------------
 
-export type VariableScope = 'provider' | 'workspace' | 'collection' | 'stage' | 'env' | 'request'
+/** `portable` is a `.http` file's own `@name = value` lines — the weakest scope, since it is
+ *  what the file resolves to when opened outside Tap. */
+export type VariableScope = 'provider' | 'portable' | 'workspace' | 'collection' | 'stage' | 'env' | 'request'
 
 /** Listing row for a collection. `exists:false` means the on-disk directory is present
- *  but has no `_collection.md` yet — saving a CollectionSpec creates the file. */
+ *  but has no `_collection.tap` yet — saving a CollectionSpec creates the file. */
 export interface CollectionSummary {
   slug: string
   name: string

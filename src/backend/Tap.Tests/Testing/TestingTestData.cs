@@ -8,8 +8,8 @@ namespace Tap.Tests.Testing;
 /// <summary>Builders shared by the flow / test-set parser, emitter, and runner tests.</summary>
 internal static class TestingTestData
 {
-    public const string FlowPath = "tests/checkout.flow.md";
-    public const string TestSetPath = "tests/orders.test.md";
+    public const string FlowPath = "tests/checkout.flow.tap";
+    public const string TestSetPath = "tests/orders.test.tap";
 
     public static string FlowSource(string frontmatterFragment, string body = "")
         => "---\nkind: flow\nname: Checkout\n"

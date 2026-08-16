@@ -168,7 +168,7 @@ public sealed class AuthTokenStore
 
     /// <summary>Backslash-escape the separators inside a segment so the composed key is
     /// injective. Both <c>#</c> and <c>@</c> are legal in a file name, so without this a
-    /// profile at <c>a@b.auth.md</c> and a profile at <c>a</c> under env <c>b.auth.md</c>
+    /// profile at <c>a@b.auth.tap</c> and a profile at <c>a</c> under env <c>b.auth.tap</c>
     /// would key identically — and <see cref="RemoveAll"/>'s prefix scan would delete across
     /// profiles.</summary>
     private static string Escape(string segment)

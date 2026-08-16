@@ -2,7 +2,7 @@
 kind: workspace
 id: 0192-3a4c-bb71-7c1d-9e8f0a1b2c3d
 name: studio-demo
-defaultEnv: environments/local.env.md
+defaultEnv: environments/local.env.tap
 defaultVariableProvider: file
 variableProviders:
 - name: env

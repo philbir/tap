@@ -632,7 +632,7 @@ public sealed class AuthRunner
     /// <c>&amp; | ^ &lt; &gt;</c> as metacharacters wherever they are unquoted, so an
     /// argument like <c>tenant&amp;whoami</c> (no whitespace, therefore never quoted) arrived
     /// at cmd.exe as two commands. Every one of those arguments comes from a workspace
-    /// <c>.auth.md</c> profile or a variable provider. Locating the shim ourselves and
+    /// <c>.auth.tap</c> profile or a variable provider. Locating the shim ourselves and
     /// starting it with <c>UseShellExecute=false</c> leaves exactly one parser in the path.
     ///
     /// Falls back to the bare name so a miss behaves as before — the OS still does its own

@@ -1,11 +1,9 @@
 import { useComputedColorScheme } from '@mantine/core'
-import { loader } from '@monaco-editor/react'
 import * as monaco from 'monaco-editor'
 
-// Point @monaco-editor/react at our locally-bundled `monaco-editor` package instead of
-// fetching it from a CDN at runtime. Vite handles the worker chunks; offline reloads
-// keep working. `loader.config` is idempotent.
-loader.config({ monaco })
+// There is no loader shim here any more: `@monaco-editor/react` is gone (see MonacoEditor.tsx
+// for why), and with it the CDN fetch it needed pointing away from. `monaco-editor` is imported
+// directly and bundled by Vite, workers included, so offline reloads keep working.
 
 /**
  * Custom Monaco themes that follow Mantine's palette so the editor blends with the rest
@@ -95,4 +93,54 @@ export function ensureThemes(m: typeof monaco): void {
 export function useMonacoTheme(): 'tap-light' | 'tap-dark' {
   const scheme = useComputedColorScheme('light')
   return scheme === 'dark' ? 'tap-dark' : 'tap-light'
+}
+
+
+/**
+ * Registers a minimal `http` language with Monaco.
+ *
+ * Monaco ships no http grammar, and we deliberately do not depend on one being contributed by
+ * an extension. This tokenizer covers what a .http file actually contains — request lines,
+ * headers, `{{tokens}}`, comments, and the `@name` / `# @tap-*` directives, which get their own
+ * scope so Tap's additions read as meaningful rather than as more comment noise.
+ */
+let httpLanguageRegistered = false
+
+export function ensureHttpLanguage(m: typeof monaco): void {
+  if (httpLanguageRegistered) return
+  httpLanguageRegistered = true
+
+  m.languages.register({ id: 'http', extensions: ['.http'] })
+
+  m.languages.setMonarchTokensProvider('http', {
+    defaultToken: '',
+    tokenizer: {
+      root: [
+        // Request separator, with its optional title.
+        [/^###.*$/, 'keyword'],
+        // Directives first: they are comments, but Tap's are load-bearing.
+        // NOTE: '@@' is Monarch's escape for a literal '@'. A bare '@tap-' is parsed as a
+        // reference to an attribute named 'tap' on this language definition, which throws at
+        // registration time and takes the whole editor down with it.
+        [/^\s*(#|\/\/)\s*@@tap-[a-z-]+/, 'type.identifier'],
+        [/^\s*(#|\/\/)\s*@@[a-z-]+/, 'attribute.name'],
+        [/^\s*(#|\/\/).*$/, 'comment'],
+        // File variables: @name = value.
+        [/^\s*@@[\w.-]+(?=\s*=)/, 'variable.name'],
+        // Request line.
+        [/^\s*(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|TRACE|CONNECT)\b/, 'keyword'],
+        // Header name.
+        [/^[A-Za-z][A-Za-z0-9-]*(?=\s*:)/, 'attribute.name'],
+        // Interpolation tokens, anywhere.
+        [/\{\{[^}]*\}\}/, 'string.escape'],
+        // Body include.
+        [/^\s*<\s+\S+.*$/, 'string'],
+      ],
+    },
+  })
+
+  m.languages.setLanguageConfiguration('http', {
+    comments: { lineComment: '#' },
+    brackets: [['{', '}'], ['[', ']']],
+  })
 }

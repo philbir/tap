@@ -19,20 +19,20 @@ public sealed class McpToolsTests : IDisposable
     public McpToolsTests()
     {
         _root = Directory.CreateTempSubdirectory("tap-mcp-tests-").FullName;
-        Write("tap.md", """
+        Write("workspace.tap", """
             ---
             kind: workspace
             name: MCP Test WS
             ---
             """);
-        Write("collections/demo/_collection.md", """
+        Write("collections/demo/_collection.tap", """
             ---
             kind: collection
             name: Demo
             baseUrl: http://127.0.0.1:9
             ---
             """);
-        Write("collections/demo/get.req.md", """
+        Write("collections/demo/get.req.tap", """
             ---
             kind: request
             name: Get thing
@@ -108,7 +108,7 @@ public sealed class McpToolsTests : IDisposable
     [Fact]
     public async Task An_agent_disabled_collection_refuses_describe_send_and_call()
     {
-        Write("collections/locked/_collection.md", """
+        Write("collections/locked/_collection.tap", """
             ---
             kind: collection
             name: Locked
@@ -116,7 +116,7 @@ public sealed class McpToolsTests : IDisposable
             agent: false
             ---
             """);
-        Write("collections/locked/secret-op.req.md", """
+        Write("collections/locked/secret-op.req.tap", """
             ---
             kind: request
             name: Secret op
@@ -149,7 +149,7 @@ public sealed class McpToolsTests : IDisposable
     [Fact]
     public void The_tools_see_edits_made_after_the_server_started()
     {
-        Write("collections/demo/post.req.md", """
+        Write("collections/demo/post.req.tap", """
             ---
             kind: request
             name: Create thing

@@ -27,11 +27,12 @@ import { useSpecEditor } from './useSpecEditor'
 import { useTestRun } from './useTestRun'
 import { flatVarsToRows, rowsToFlatVars } from './varRows'
 import { VariablesPanel } from './VariablesPanel'
+import { labelForPath } from '../shell/tapFiles'
 
 interface Props { path: string }
 
 /**
- * Editor for a `*.flow.md` — an ordered sequence of requests that passes values between
+ * Editor for a `*.flow.tap` — an ordered sequence of requests that passes values between
  * steps.
  *
  * The step list is the whole point, so it's the default tab and each step is a card that
@@ -422,5 +423,5 @@ function rowsToVars(rows: KvRow[]): Record<string, string> | null {
 }
 
 function basename(path: string): string {
-  return path.split('/').pop()?.replace(/\.flow\.md$/i, '') ?? path
+  return labelForPath(path)
 }

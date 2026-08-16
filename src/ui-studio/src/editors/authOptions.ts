@@ -3,8 +3,8 @@ import type { AuthSummary, CollectionSummary } from '../api/types'
 
 /** Turn an absolute workspace path into one relative to the file that declares the ref.
  *  `auth:` / `defaultAuth:` refs are resolved relative to their own file, so a request at
- *  `collections/demo/x.req.md` pointing at `auth/y.auth.md` writes `../../auth/y.auth.md`,
- *  and one pointing at a sibling profile in its own collection writes just `y.auth.md`. */
+ *  `collections/demo/x.req.tap` pointing at `auth/y.auth.tap` writes `../../auth/y.auth.tap`,
+ *  and one pointing at a sibling profile in its own collection writes just `y.auth.tap`. */
 export function relativizeFrom(from: string, to: string): string {
   const fromParts = from.split('/').slice(0, -1)
   const toParts = to.split('/')
@@ -26,7 +26,7 @@ export function collectionSlugOf(path: string): string | null {
  * are shared workspace-wide, and which belong to some *other* collection — legal to
  * reference, but they resolve against that collection's variables, not this one's.
  *
- * Values are refs relative to `fromPath` (the request or `_collection.md` doing the
+ * Values are refs relative to `fromPath` (the request or `_collection.tap` doing the
  * referencing), matching what the emitter writes to disk.
  */
 export function authSelectGroups(opts: {

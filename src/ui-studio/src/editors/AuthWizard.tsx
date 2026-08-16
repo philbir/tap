@@ -11,6 +11,7 @@ import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { AuthSpec, WorkspaceFileKind } from '../api/types'
 import { useTapStore } from '../store'
+import { fileNameFor } from '../shell/tapFiles'
 
 /**
  * Provider-pick + required-fields wizard for creating an auth profile. Sits between
@@ -353,7 +354,7 @@ export function AuthWizard({ open, onOpenChange, initialName, targetDir = 'auth'
 
   const template = TEMPLATES.find((t) => t.key === templateKey) ?? null
   const slug = nameToSlug(name)
-  const targetPath = slug ? `${targetDir}/${slug}.auth.md` : ''
+  const targetPath = slug ? `${targetDir}/${fileNameFor('auth', slug)}` : ''
 
   function pickTemplate(key: string) {
     setTemplateKey(key)

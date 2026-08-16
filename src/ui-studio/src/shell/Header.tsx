@@ -1,10 +1,11 @@
-import { ActionIcon, Badge, Box, Button, Divider, Group, Modal, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
+import { ActionIcon, Anchor, Badge, Box, Button, Divider, Group, Modal, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconBrandGit, IconChevronDown, IconFolders, IconPencil, IconPlus, IconStack2 } from '@tabler/icons-react'
+import { IconBrandGit, IconChevronDown, IconDeviceDesktop, IconFolders, IconPencil, IconPlugConnected, IconPlus, IconStack2 } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
 import { MANIFEST_TAB_PATH, useActiveEnv, useTapStore } from '../store'
 import { DirectoryPicker } from './DirectoryPicker'
+import { fileNameFor } from './tapFiles'
 
 const ADD_WORKSPACE_SENTINEL = '__add_workspace__'
 const ADD_ENV_SENTINEL = '__add_env__'
@@ -33,17 +34,23 @@ export function Header({ rightAction }: Props) {
   const openTab = useTapStore((s) => s.openTab)
   const activeEnv = useActiveEnv()
 
+  const isPinned = info?.mode === 'aspire'
+
   const activeWs = knownWorkspaces.find((w) => w.isActive) ?? null
   const activeEnvSummary = envs.find((e) => e.path === activeEnv) ?? null
-  const hasWorkspace = activeWs?.available === true
+  const hasWorkspace = isPinned || activeWs?.available === true
 
-  const wsOptions = [
-    ...knownWorkspaces.map((w) => ({
-      value: w.path,
-      label: w.label + (w.available ? '' : ' (missing)'),
-    })),
-    { value: ADD_WORKSPACE_SENTINEL, label: '+ Add workspace…' },
-  ]
+  // Pinned mode bypasses the known-workspace list entirely, so reading the switcher's label
+  // from that list would name a workspace this process is not serving. Show what is loaded.
+  const wsOptions = isPinned
+    ? [{ value: info!.root, label: info!.name }]
+    : [
+        ...knownWorkspaces.map((w) => ({
+          value: w.path,
+          label: w.label + (w.available ? '' : ' (missing)'),
+        })),
+        { value: ADD_WORKSPACE_SENTINEL, label: '+ Add workspace…' },
+      ]
   const envOptions = [
     { value: '', label: 'No environment' },
     ...envs.map((e) => ({ value: e.path, label: e.name })),
@@ -75,7 +82,7 @@ export function Header({ rightAction }: Props) {
   async function createEnv(name: string) {
     const slug = nameToSlug(name)
     if (!slug) throw new Error('Pick a name.')
-    const path = `environments/${slug}.env.md`
+    const path = `environments/${fileNameFor('env', slug)}`
     await api.saveEnvSpec({ path, id: null, name })
     await reload()
     setActiveEnv(path)
@@ -95,10 +102,13 @@ export function Header({ rightAction }: Props) {
             aria-label="Workspace"
             placeholder="No workspace"
             data={wsOptions}
-            value={activeWs?.path ?? null}
+            value={isPinned ? (info?.root ?? null) : (activeWs?.path ?? null)}
             onChange={handleWorkspacePick}
             w={260}
             allowDeselect={false}
+            // An AppHost owns this choice. Disabling beats leaving it clickable and letting
+            // the request come back 409.
+            disabled={isPinned}
             leftSection={<IconFolders size={16} stroke={1.7} />}
             rightSectionWidth={52}
             rightSection={
@@ -121,11 +131,35 @@ export function Header({ rightAction }: Props) {
               </Group>
             }
           />
-          {info?.errors && info.errors.length > 0 && (
-            <Badge color="red" variant="light" size="sm" title={`${info.errors.length} workspace error(s)`}>
-              {info.errors.length} err
-            </Badge>
+          {isPinned && (
+            <Tooltip
+              label="Workspace pinned by the Aspire AppHost. Change it in WithWorkspaceFolder(...)."
+              withArrow
+            >
+              <Badge color="grape" variant="light" size="sm" leftSection={<IconPlugConnected size={12} />}>
+                Aspire
+              </Badge>
+            </Tooltip>
           )}
+          {(() => {
+            const problems = info?.errors ?? []
+            const errorCount = problems.filter((e) => e.severity === 'error').length
+            const warningCount = problems.length - errorCount
+            return (
+              <>
+                {errorCount > 0 && (
+                  <Badge color="red" variant="light" size="sm" title={`${errorCount} workspace error(s)`}>
+                    {errorCount} err
+                  </Badge>
+                )}
+                {warningCount > 0 && (
+                  <Badge color="yellow" variant="light" size="sm" title={`${warningCount} workspace warning(s)`}>
+                    {warningCount} warn
+                  </Badge>
+                )}
+              </>
+            )
+          })()}
           {activeWs?.git && (
             <Tooltip
               label={
@@ -183,6 +217,8 @@ export function Header({ rightAction }: Props) {
           />
         </Group>
 
+        {isPinned && <DesktopAppLink />}
+
         <Divider orientation="vertical" />
 
         {rightAction}
@@ -238,7 +274,7 @@ function AddEnvModal({ opened, onClose, onAdd }: {
           onKeyDown={(e) => { if (e.key === 'Enter') void submit() }}
           autoFocus
         />
-        {slug && <Text size="xs" c="dimmed">Created at <code>.tap/environments/{slug}.env.md</code></Text>}
+        {slug && <Text size="xs" c="dimmed">Created at <code>.tap/environments/{slug}.env.tap</code></Text>}
         {error && <Box c="red" fz="xs">{error}</Box>}
         <Group justify="flex-end" gap="xs" mt="xs">
           <Button variant="default" onClick={onClose} disabled={busy}>Cancel</Button>
@@ -259,3 +295,40 @@ function nameToSlug(name: string): string {
     .slice(0, 60)
 }
 
+/** Where the download lives. Points at the docs' install section rather than straight at the
+ *  release assets, so the reader gets the per-platform picker and the auto-update note instead
+ *  of a bare file list. */
+const STUDIO_INSTALL_URL = 'https://philbir.github.io/tap/#studio-install'
+
+/**
+ * Desktop-app pointer, shown only when an Aspire AppHost is hosting this Studio.
+ *
+ * That is the one context where the recommendation is unambiguous: a Studio started by an
+ * AppHost lives in a browser tab that dies with `aspire run`, and its workspace is a folder in
+ * the repo the developer already has checked out. The desktop app opens the same workspace
+ * without the AppHost having to be up. Outside aspire mode the user already chose how they
+ * launched Studio, and advertising at them would just be noise.
+ */
+function DesktopAppLink() {
+  return (
+    <Tooltip
+      label="Tap Studio also ships as a desktop app — same workspace, no AppHost required."
+      withArrow
+      multiline
+      w={260}
+    >
+      <Anchor
+        href={STUDIO_INSTALL_URL}
+        target="_blank"
+        rel="noreferrer noopener"
+        underline="never"
+        c="dimmed"
+      >
+        <Group gap={6} wrap="nowrap">
+          <IconDeviceDesktop size={15} stroke={1.7} />
+          <Text size="xs" visibleFrom="md">Get the desktop app</Text>
+        </Group>
+      </Anchor>
+    </Tooltip>
+  )
+}

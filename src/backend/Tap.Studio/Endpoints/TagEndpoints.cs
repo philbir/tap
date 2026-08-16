@@ -9,7 +9,7 @@ namespace Tap.Studio.Endpoints;
 /// Tags top-level view.
 ///
 /// <c>GET /api/tags/dictionary</c> — returns the union of the workspace's curated tag
-/// list (declared in <c>tap.md</c> <c>tags:</c>) and every tag currently in use on any
+/// list (declared in <c>workspace.tap</c> <c>tags:</c>) and every tag currently in use on any
 /// entity. This is the autocomplete source for every <c>TagsInput</c> across the editors
 /// and the picker source for the Tags-view filter.
 /// </summary>
@@ -22,7 +22,7 @@ public static class TagEndpoints
             var ws = svc.Current;
             var bag = new SortedSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            // 1) Curated list from tap.md
+            // 1) Curated list from workspace.tap
             if (ws.Manifest is { } manifest)
             {
                 foreach (var t in manifest.Tags)

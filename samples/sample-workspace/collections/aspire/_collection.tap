@@ -1,0 +1,9 @@
+---
+kind: collection
+name: Aspire
+baseUrl: '{{aspire:demo-api}}'
+---
+
+Resolves its base URL from Aspire service discovery. Under `Studio.AppHost` the AppHost
+injects `services__demo-api__http__0`; in CI you export the same variable yourself and this
+collection works unchanged.

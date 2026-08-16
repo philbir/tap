@@ -36,7 +36,7 @@ public sealed class CallCommand : AsyncCommand<CallCommand.Settings>
         public string Url { get; init; } = string.Empty;
 
         [CommandOption("-c|--collection <NAME|PATH>")]
-        [Description("The collection carrying the request: its name, its directory, or its _collection.md path.")]
+        [Description("The collection carrying the request: its name, its directory, or its _collection.tap path.")]
         public string? Collection { get; init; }
 
         [CommandOption("-H|--header <HEADER>")]

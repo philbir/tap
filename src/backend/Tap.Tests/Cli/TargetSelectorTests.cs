@@ -20,7 +20,7 @@ public class TargetSelectorTests
         RelativePath = path,
         Name = name,
         Tags = tags,
-        Tests = [new TestEntry { Request = WorkspaceRef.FromPath("./a.req.md") }],
+        Tests = [new TestEntry { Request = WorkspaceRef.FromPath("./a.req.tap") }],
     };
 
     private static FlowFile Flow(string path, string name, params string[] tags) => new()
@@ -42,12 +42,12 @@ public class TargetSelectorTests
     public void Selects_every_file_carrying_the_tag()
     {
         var ws = Workspace(
-            Set("tests/a.test.md", "A", "smoke"),
-            Set("tests/b.test.md", "B", "nightly"),
-            Flow("tests/c.flow.md", "C", "smoke"));
+            Set("tests/a.test.tap", "A", "smoke"),
+            Set("tests/b.test.tap", "B", "nightly"),
+            Flow("tests/c.flow.tap", "C", "smoke"));
 
         Assert.True(TargetSelector.TryByTags(ws, ["smoke"], out var targets, out var error), error);
-        Assert.Equal(["tests/a.test.md", "tests/c.flow.md"], targets.Select(t => t.Path));
+        Assert.Equal(["tests/a.test.tap", "tests/c.flow.tap"], targets.Select(t => t.Path));
     }
 
     [Fact]
@@ -56,18 +56,18 @@ public class TargetSelectorTests
         // "Run the smoke tests and the graphql tests" is what the flag reads like. It is also
         // the safer default: intersecting would silently select fewer, sometimes none.
         var ws = Workspace(
-            Set("tests/a.test.md", "A", "smoke"),
-            Set("tests/b.test.md", "B", "graphql"),
-            Set("tests/c.test.md", "C", "nightly"));
+            Set("tests/a.test.tap", "A", "smoke"),
+            Set("tests/b.test.tap", "B", "graphql"),
+            Set("tests/c.test.tap", "C", "nightly"));
 
         Assert.True(TargetSelector.TryByTags(ws, ["smoke", "graphql"], out var targets, out _));
-        Assert.Equal(["tests/a.test.md", "tests/b.test.md"], targets.Select(t => t.Path));
+        Assert.Equal(["tests/a.test.tap", "tests/b.test.tap"], targets.Select(t => t.Path));
     }
 
     [Fact]
     public void A_file_carrying_both_tags_is_selected_once()
     {
-        var ws = Workspace(Set("tests/a.test.md", "A", "smoke", "graphql"));
+        var ws = Workspace(Set("tests/a.test.tap", "A", "smoke", "graphql"));
         Assert.True(TargetSelector.TryByTags(ws, ["smoke", "graphql"], out var targets, out _));
         Assert.Single(targets);
     }
@@ -75,7 +75,7 @@ public class TargetSelectorTests
     [Fact]
     public void Tags_match_case_insensitively()
     {
-        var ws = Workspace(Set("tests/a.test.md", "A", "Smoke"));
+        var ws = Workspace(Set("tests/a.test.tap", "A", "Smoke"));
         Assert.True(TargetSelector.TryByTags(ws, ["smoke"], out var targets, out _));
         Assert.Single(targets);
     }
@@ -85,28 +85,28 @@ public class TargetSelectorTests
     {
         // A tagged request is not a runnable target for `test`; picking it up would run one
         // request and call it a test set.
-        var ws = Workspace(Set("tests/a.test.md", "A", "smoke"), Request("collections/demo/x.req.md", "smoke"));
+        var ws = Workspace(Set("tests/a.test.tap", "A", "smoke"), Request("collections/demo/x.req.tap", "smoke"));
         Assert.True(TargetSelector.TryByTags(ws, ["smoke"], out var targets, out _));
         Assert.Single(targets);
-        Assert.Equal("tests/a.test.md", targets[0].Path);
+        Assert.Equal("tests/a.test.tap", targets[0].Path);
     }
 
     [Fact]
     public void Order_is_stable_across_runs()
     {
         var ws = Workspace(
-            Set("tests/z.test.md", "Z", "smoke"),
-            Set("tests/a.test.md", "A", "smoke"),
-            Set("tests/m.test.md", "M", "smoke"));
+            Set("tests/z.test.tap", "Z", "smoke"),
+            Set("tests/a.test.tap", "A", "smoke"),
+            Set("tests/m.test.tap", "M", "smoke"));
 
         Assert.True(TargetSelector.TryByTags(ws, ["smoke"], out var targets, out _));
-        Assert.Equal(["tests/a.test.md", "tests/m.test.md", "tests/z.test.md"], targets.Select(t => t.Path));
+        Assert.Equal(["tests/a.test.tap", "tests/m.test.tap", "tests/z.test.tap"], targets.Select(t => t.Path));
     }
 
     [Fact]
     public void A_tag_that_matches_nothing_is_an_error_not_an_empty_run()
     {
-        var ws = Workspace(Set("tests/a.test.md", "A", "smoke"));
+        var ws = Workspace(Set("tests/a.test.tap", "A", "smoke"));
         Assert.False(TargetSelector.TryByTags(ws, ["nope"], out var targets, out var error));
         Assert.Empty(targets);
         Assert.Contains("No test sets or flows are tagged 'nope'", error, StringComparison.Ordinal);
@@ -115,7 +115,7 @@ public class TargetSelectorTests
     [Fact]
     public void An_unmatched_tag_lists_the_tags_that_do_exist()
     {
-        var ws = Workspace(Set("tests/a.test.md", "A", "smoke"), Flow("tests/b.flow.md", "B", "graphql"));
+        var ws = Workspace(Set("tests/a.test.tap", "A", "smoke"), Flow("tests/b.flow.tap", "B", "graphql"));
         Assert.False(TargetSelector.TryByTags(ws, ["nope"], out _, out var error));
         Assert.Contains("Tags in use: graphql, smoke", error, StringComparison.Ordinal);
     }
@@ -123,7 +123,7 @@ public class TargetSelectorTests
     [Fact]
     public void A_workspace_with_no_tags_says_so()
     {
-        var ws = Workspace(Set("tests/a.test.md", "A"));
+        var ws = Workspace(Set("tests/a.test.tap", "A"));
         Assert.False(TargetSelector.TryByTags(ws, ["smoke"], out _, out var error));
         Assert.Contains("carries any tag", error, StringComparison.Ordinal);
     }
@@ -131,7 +131,7 @@ public class TargetSelectorTests
     [Fact]
     public void An_empty_tag_list_is_a_usage_error()
     {
-        var ws = Workspace(Set("tests/a.test.md", "A", "smoke"));
+        var ws = Workspace(Set("tests/a.test.tap", "A", "smoke"));
         Assert.False(TargetSelector.TryByTags(ws, ["  "], out _, out var error));
         Assert.Contains("--tag needs a tag name", error, StringComparison.Ordinal);
     }

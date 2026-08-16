@@ -14,13 +14,13 @@ public class TestSetParserTests
             onFailure: stop
             tests:
             - name: Rejects an unknown SKU
-              request: ../collections/demo/create-order.req.md
+              request: ../collections/demo/create-order.req.tap
               vars:
                 item: nope
               assertions:
               - status: 404
             - name: Full checkout
-              flow: ./checkout.flow.md
+              flow: ./checkout.flow.tap
               skip: true
             """);
 
@@ -30,27 +30,27 @@ public class TestSetParserTests
 
         var first = set.Tests[0];
         Assert.Equal("request", first.TargetKind);
-        Assert.Equal("../collections/demo/create-order.req.md", first.Request!.SourceText);
+        Assert.Equal("../collections/demo/create-order.req.tap", first.Request!.SourceText);
         Assert.Null(first.Flow);
         Assert.Equal("nope", first.Vars["item"]);
         Assert.Equal("404", Assert.Single(first.Assertions).Expected);
 
         var second = set.Tests[1];
         Assert.Equal("flow", second.TargetKind);
-        Assert.Equal("./checkout.flow.md", second.Flow!.SourceText);
+        Assert.Equal("./checkout.flow.tap", second.Flow!.SourceText);
         Assert.True(second.Skip);
     }
 
     [Fact]
     public void OnFailure_defaults_to_continue()
     {
-        Assert.Equal(TestFailureMode.Continue, ParseTestSet("tests:\n- request: ./a.req.md").OnFailure);
+        Assert.Equal(TestFailureMode.Continue, ParseTestSet("tests:\n- request: ./a.req.tap").OnFailure);
     }
 
     [Fact]
     public void OnFailure_rejects_anything_else()
     {
-        var error = TestSetParseError("onFailure: halt\ntests:\n- request: ./a.req.md");
+        var error = TestSetParseError("onFailure: halt\ntests:\n- request: ./a.req.tap");
         Assert.Equal(WorkspaceErrorCode.E_TEST_INVALID, error.Code);
         Assert.Contains("Expected 'continue' or 'stop'", error.Message, StringComparison.Ordinal);
     }
@@ -76,14 +76,14 @@ public class TestSetParserTests
         var neither = TestSetParseError("tests:\n- name: Nothing");
         Assert.Contains("names neither", neither.Message, StringComparison.Ordinal);
 
-        var both = TestSetParseError("tests:\n- request: ./a.req.md\n  flow: ./b.flow.md");
+        var both = TestSetParseError("tests:\n- request: ./a.req.tap\n  flow: ./b.flow.tap");
         Assert.Contains("names both", both.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Unknown_test_keys_are_rejected_by_name()
     {
-        var error = TestSetParseError("tests:\n- request: ./a.req.md\n  extract:\n  - var: x\n    jsonpath: $.a");
+        var error = TestSetParseError("tests:\n- request: ./a.req.tap\n  extract:\n  - var: x\n    jsonpath: $.a");
         Assert.Equal(WorkspaceErrorCode.E_TEST_INVALID, error.Code);
         Assert.Contains("unknown key 'extract'", error.Message, StringComparison.Ordinal);
     }
@@ -91,7 +91,7 @@ public class TestSetParserTests
     [Fact]
     public void A_bad_assertion_inside_a_test_names_the_test()
     {
-        var error = TestSetParseError("tests:\n- request: ./a.req.md\n- request: ./b.req.md\n  assertions:\n  - jsonpath: $.a\n    type: widget");
+        var error = TestSetParseError("tests:\n- request: ./a.req.tap\n- request: ./b.req.tap\n  assertions:\n  - jsonpath: $.a\n    type: widget");
         Assert.Equal(WorkspaceErrorCode.E_ASSERT_INVALID, error.Code);
         Assert.Contains("Test #2", error.Message, StringComparison.Ordinal);
     }

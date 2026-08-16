@@ -12,7 +12,7 @@ import { useTapStore } from '../store'
 import { useVariableView } from '../workspace/useVariables'
 import { ProviderTypeIcon } from './providerMeta'
 
-const SCOPE_ORDER: VariableScope[] = ['provider', 'workspace', 'collection', 'stage', 'env', 'request']
+const SCOPE_ORDER: VariableScope[] = ['provider', 'portable', 'workspace', 'collection', 'stage', 'env', 'request']
 
 // The first cascade stage is the configured-provider layer (system.json, azkv, file,
 // env, …). Providers can be declared at system OR workspace scope, so the tier is
@@ -20,6 +20,7 @@ const SCOPE_ORDER: VariableScope[] = ['provider', 'workspace', 'collection', 'st
 // badge — a flat "SYSTEM" pile hid which vault a value came from.
 const SCOPE_LABEL: Record<VariableScope, string> = {
   provider: 'PROVIDERS',
+  portable: 'FILE',
   workspace: 'WORKSPACE',
   collection: 'COLLECTION',
   stage: 'STAGE',
@@ -29,6 +30,7 @@ const SCOPE_LABEL: Record<VariableScope, string> = {
 
 const SCOPE_COLOR: Record<VariableScope, string> = {
   provider: 'blue',
+  portable: 'gray',
   workspace: 'tap',
   collection: 'indigo',
   stage: 'cyan',

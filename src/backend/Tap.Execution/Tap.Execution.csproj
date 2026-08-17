@@ -6,6 +6,7 @@
     <AssemblyName>Tap.Execution</AssemblyName>
     <IsPackable>true</IsPackable>
     <PackageId>Tap.Execution</PackageId>
+    <TapProductIcon>Studio</TapProductIcon>
     <Title>Tap.Execution</Title>
     <Description>Executes Tap workspace requests, flows, and test sets: HTTP transport, assertion evaluation, value extraction, and the sequential run engine. The engine behind both Tap Studio and the `tap-studio` CLI, so a verdict from CI and a verdict from the UI are the same computation.</Description>
     <PackageTags>tap;http-client;testing;api-testing;assertions</PackageTags>

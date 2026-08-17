@@ -265,6 +265,222 @@ public sealed record CollectionStageSpecDto
     public IReadOnlyList<string>? Secrets { get; init; }
 }
 
+// ---------------------------------------------------------------------------------------------
+// OpenAPI import.
+//
+// Two phases. `POST /api/openapi/documents[/fetch]` parses once and stages the result, returning a
+// DocumentId; every later call references that id. This guarantees the operation list the user
+// picked from and the document that gets imported are the same one — a URL re-fetched a minute
+// later need not return the same bytes — and keeps a document that may reach 16 MB out of the
+// model binder on every call.
+//
+// The raw spec arrives as a `string`, not a JsonElement like Postman's: OpenAPI documents are
+// commonly YAML, which JsonElement cannot carry at all.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>Body for <c>POST /api/openapi/documents</c> — the document as text, JSON or YAML.</summary>
+public sealed record OpenApiUploadRequestDto
+{
+    public required string Text { get; init; }
+    public string? FileName { get; init; }
+}
+
+/// <summary>Body for <c>POST /api/openapi/documents/fetch</c>.</summary>
+public sealed record OpenApiFetchRequestDto
+{
+    public required string Url { get; init; }
+}
+
+/// <summary>A staged document: everything the wizard needs to render its picker, having written
+/// nothing to disk.</summary>
+public sealed record OpenApiDocumentDto(
+    string DocumentId,
+    string Title,
+    string? ApiVersion,
+    string SpecVersion,
+    string? Description,
+    string SuggestedSlug,
+    IReadOnlyList<OpenApiServerDto> Servers,
+    IReadOnlyList<OpenApiSecuritySchemeDto> SecuritySchemes,
+    IReadOnlyList<OpenApiOperationDto> Operations,
+    IReadOnlyList<OpenApiDiagnosticDto> Diagnostics);
+
+public sealed record OpenApiServerDto(string Url, string? Description);
+
+/// <summary><see cref="TapAuthType"/> is null when Tap has no equivalent — the wizard shows the
+/// scheme greyed out with <see cref="Warning"/> as the reason rather than hiding it.</summary>
+public sealed record OpenApiSecuritySchemeDto(
+    string Key,
+    string Type,
+    string? TapAuthType,
+    string? Description,
+    IReadOnlyList<string> Scopes,
+    string? Warning);
+
+public sealed record OpenApiOperationDto(
+    string OpKey,
+    string? OperationId,
+    string Method,
+    string Path,
+    string? Summary,
+    IReadOnlyList<string> Tags,
+    bool Deprecated,
+    bool HasRequestBody,
+    int PathParamCount,
+    int QueryParamCount);
+
+public sealed record OpenApiDiagnosticDto(string Severity, string Message, string? Pointer);
+
+/// <summary>Body for <c>POST /api/collections/import/openapi</c>.</summary>
+public sealed record OpenApiImportRequestDto
+{
+    public required string DocumentId { get; init; }
+    public string? Slug { get; init; }
+
+    /// <summary>
+    /// <c>req</c> (one <c>.req.tap</c> per operation) or <c>http</c> (one <c>.http</c> file per
+    /// tag). Null means <c>req</c>.
+    ///
+    /// <para>Deliberately nullable with no initializer: a property initializer does not survive
+    /// source-generated deserialization when the client omits the field, so the default has to
+    /// live in the code that reads it, not in the DTO.</para>
+    /// </summary>
+    public string? Layout { get; init; }
+
+    /// <summary>Null or empty imports every operation.</summary>
+    public IReadOnlyList<string>? OperationKeys { get; init; }
+
+    public string? BaseUrl { get; init; }
+    public string? SecuritySchemeKey { get; init; }
+    public string? LinkAuthPath { get; init; }
+    public bool IncludeOptionalQueryParams { get; init; }
+
+    /// <summary>
+    /// Values to seed generated variables with, keyed by opKey then variable name. This is where
+    /// an accepted AI suggestion lands; the import is identical without it.
+    /// </summary>
+    public IReadOnlyDictionary<string, Dictionary<string, string>>? VariableDefaults { get; init; }
+
+    /// <summary>
+    /// What to do when the target collection already exists: <c>create</c> (the default — fail if
+    /// it does), <c>merge</c> (write these files, leave everything else alone), or <c>replace</c>
+    /// (delete the directory first).
+    ///
+    /// <para>Null means <c>create</c>. As with <c>Layout</c>, the default lives here and not in a
+    /// property initializer, which source-generated deserialization does not honour.</para>
+    /// </summary>
+    public string? Mode { get; init; }
+
+    /// <summary>Legacy alias for <c>mode: "replace"</c>.</summary>
+    public bool Overwrite { get; init; }
+}
+
+public sealed record OpenApiImportResponseDto(
+    string Slug,
+    string CollectionPath,
+    string? AuthPath,
+    int RequestCount,
+    int FileCount,
+    IReadOnlyList<string> Warnings);
+
+/// <summary>
+/// <c>GET /api/collections/{slug}/openapi</c> — the recorded link between a collection and the
+/// document it came from. 404 when the collection was not imported (or the lock was deleted).
+/// </summary>
+public sealed record OpenApiLinkDto(
+    string Slug,
+    string SourceKind,
+    string? Url,
+    string? FileName,
+    DateTimeOffset FetchedAt,
+    string SpecVersion,
+    string? ApiVersion,
+    string DocumentHash,
+    string Layout,
+    int TrackedOperations);
+
+/// <summary>Body for <c>POST /api/ai/openapi/suggest</c>.</summary>
+public sealed record OpenApiSuggestRequestDto
+{
+    public required string DocumentId { get; init; }
+    /// <summary>Null or empty asks about every operation in the document.</summary>
+    public IReadOnlyList<string>? OperationKeys { get; init; }
+    public string? Model { get; init; }
+}
+
+/// <summary>Proposed values for one operation's variables, keyed by variable name.</summary>
+public sealed record OpenApiSuggestionDto(
+    string OpKey,
+    IReadOnlyDictionary<string, string> Values,
+    string? Note);
+
+public sealed record OpenApiSuggestResponseDto(
+    IReadOnlyList<OpenApiSuggestionDto> Suggestions,
+    string Provider,
+    string? Model,
+    /// <summary>How many operations were considered. Batching means a big spec may be partial.</summary>
+    int Considered,
+    IReadOnlyList<string> Warnings);
+
+/// <summary>Body for the two re-sync calls — the document to diff against.</summary>
+public sealed record OpenApiResyncRequestDto
+{
+    public required string DocumentId { get; init; }
+}
+
+/// <summary>
+/// One operation's verdict. <c>kind</c> is <c>added</c> | <c>changed</c> | <c>conflict</c> |
+/// <c>unchanged</c> | <c>orphaned</c> | <c>removed</c>, and <c>defaultAction</c> is what the UI
+/// pre-selects — never destructive.
+/// </summary>
+public sealed record OpenApiChangeDto(
+    string Kind,
+    string OpKey,
+    string Method,
+    string Path,
+    string? Summary,
+    string? LocalPath,
+    string? Fragment,
+    bool LocallyEdited,
+    string DefaultAction);
+
+public sealed record OpenApiResyncPreviewDto(
+    string Slug,
+    string Layout,
+    string? SourceUrl,
+    DateTimeOffset PreviouslyFetchedAt,
+    string? PreviousApiVersion,
+    string? NewApiVersion,
+    bool DocumentUnchanged,
+    int Added,
+    int Changed,
+    int Conflicts,
+    int Removed,
+    IReadOnlyList<OpenApiChangeDto> Changes);
+
+/// <summary>One user decision. <c>action</c> is <c>skip</c> | <c>add</c> | <c>update</c> |
+/// <c>deprecate</c> | <c>untrack</c>. Operations not listed are skipped.</summary>
+public sealed record OpenApiDecisionDto
+{
+    public required string OpKey { get; init; }
+    public required string Action { get; init; }
+}
+
+public sealed record OpenApiResyncApplyRequestDto
+{
+    public required string DocumentId { get; init; }
+    public required IReadOnlyList<OpenApiDecisionDto> Decisions { get; init; }
+}
+
+public sealed record OpenApiResyncResultDto(
+    int Added,
+    int Updated,
+    int Deprecated,
+    int Untracked,
+    int Skipped,
+    IReadOnlyList<string> WrittenPaths,
+    IReadOnlyList<string> Warnings);
+
 /// <summary>Body for <c>POST /api/collections/import/postman</c>. <see cref="Collection"/>
 /// is the raw Postman v2.1 collection JSON (parsed as a free-form object so we don't have
 /// to register the whole Postman schema in the source-generated context).
@@ -1199,6 +1415,32 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(CollectionSpecDto))]
 [JsonSerializable(typeof(PostmanImportRequestDto))]
 [JsonSerializable(typeof(PostmanImportResponseDto))]
+[JsonSerializable(typeof(OpenApiUploadRequestDto))]
+[JsonSerializable(typeof(OpenApiFetchRequestDto))]
+[JsonSerializable(typeof(OpenApiDocumentDto))]
+[JsonSerializable(typeof(OpenApiServerDto))]
+[JsonSerializable(typeof(OpenApiSecuritySchemeDto))]
+[JsonSerializable(typeof(OpenApiOperationDto))]
+[JsonSerializable(typeof(OpenApiDiagnosticDto))]
+[JsonSerializable(typeof(OpenApiImportRequestDto))]
+[JsonSerializable(typeof(OpenApiImportResponseDto))]
+[JsonSerializable(typeof(OpenApiLinkDto))]
+[JsonSerializable(typeof(OpenApiSuggestRequestDto))]
+[JsonSerializable(typeof(OpenApiSuggestionDto))]
+[JsonSerializable(typeof(OpenApiSuggestResponseDto))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiSuggestionDto>))]
+[JsonSerializable(typeof(OpenApiResyncRequestDto))]
+[JsonSerializable(typeof(OpenApiChangeDto))]
+[JsonSerializable(typeof(OpenApiResyncPreviewDto))]
+[JsonSerializable(typeof(OpenApiDecisionDto))]
+[JsonSerializable(typeof(OpenApiResyncApplyRequestDto))]
+[JsonSerializable(typeof(OpenApiResyncResultDto))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiChangeDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiDecisionDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiServerDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiSecuritySchemeDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiOperationDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiDiagnosticDto>))]
 [JsonSerializable(typeof(TaggedItemDto))]
 [JsonSerializable(typeof(IReadOnlyList<TaggedItemDto>))]
 [JsonSerializable(typeof(WorkspaceSpecDto))]

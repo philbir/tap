@@ -1,7 +1,10 @@
+import { channels, marks } from "../components/icons";
 import { FeatureGrid, FlowDiagram, SectionHeading } from "../components/ui";
 import type { Feature } from "../data/features";
+import { shipGroups } from "../data/shipped";
+import { useCases, type UseCaseProduct } from "../data/usecases";
 import { href } from "../router";
-import { repoUrl, version } from "../site";
+import { pages, repoUrl, version } from "../site";
 
 const principles: Feature[] = [
   {
@@ -53,12 +56,14 @@ const included: [string, string][] = [
 export const HomePage = () => (
   <>
     <Hero />
+    <UseCases />
     <Promise />
     <Highlights />
     <ProductSplit />
     <Paywall />
     <Pricing />
     <Included />
+    <Ships />
     <Principles />
     <Together />
     <FinalCta />
@@ -72,19 +77,19 @@ const Hero = () => (
         <span className="spark" />
         Free forever · built by developers, for developers
       </div>
-      <h1>The whole HTTP toolchain. On your machine. Free forever.</h1>
+      <h1>Tap Platform. Your local-first HTTP workbench.</h1>
       <p className="lead">
-        Tap is two local-first tools. <strong>Tunnel + Inspector</strong> gives a local service a
-        real public URL and captures everything that hits it. <strong>Tap Studio</strong> is the
-        workbench where you craft those requests, run real authentication flows, and turn them into
-        tests that run in CI. Both are complete — the serious features are the free features.
+        <strong>Tap Platform</strong> brings two focused products into one developer story.
+        <strong> Tap Studio</strong> crafts authenticated HTTP requests, and
+        <strong> Tap Tunnels</strong> brings traffic to local services with inspection built in.
+        Use either product alone or use both to close the loop from request to arrival.
       </p>
       <div className="hero-actions">
-        <a className="button primary" href={href("inspector")}>
-          Tunnel + Inspector
-        </a>
         <a className="button primary" href={href("studio")}>
-          Tap Studio
+          Explore Tap Studio
+        </a>
+        <a className="button primary" href={href("tunnels")}>
+          Explore Tap Tunnels
         </a>
         <a className="button ghost" href={repoUrl}>
           View code
@@ -102,13 +107,169 @@ const Hero = () => (
         <span>Desktop app</span>
       </div>
     </div>
-    <picture className="hero-visual" aria-label="Tap tunnel illustration">
-      <source srcSet="./tap-hero-dark.png" media="(prefers-color-scheme: dark)" />
+    <picture className="hero-visual" aria-label="Tap Platform illustration">
       <img
-        src="./tap-hero.png"
-        alt="A tap extracting traffic from a tunnel into an inspector panel"
+        src="./tap-platform-hero.png"
+        alt="Tap Platform distributing HTTP flow between a request craft studio and an inspected tunnel"
       />
     </picture>
+  </section>
+);
+
+/** The badge each use case wears. Icons and names come from the pages themselves. */
+const productBadge: Record<UseCaseProduct, { label: string; icon: string }> = {
+  studio: { label: "Tap Studio", icon: pages.studio.icon ?? "" },
+  tunnels: { label: "Tap Tunnels", icon: pages.tunnels.icon ?? "" },
+  both: { label: "Studio + Tunnels", icon: pages.home.icon ?? "" },
+};
+
+const UseCases = () => (
+  <section className="section" id="use-cases">
+    <SectionHeading kicker="Use cases" title="Start from the job, not from the product.">
+      Two products cover two directions of travel, and most days only one of them is the answer to
+      the thing in front of you. Every card below names the job, the product that does it, and the
+      pieces involved — follow the badge to the docs for it.
+    </SectionHeading>
+    <div className="usecase-grid">
+      {useCases.map((useCase) => {
+        const badge = productBadge[useCase.product];
+        return (
+          <article className="usecase-card" key={useCase.title}>
+            <a className={`product-badge ${useCase.product}`} href={useCase.section}>
+              <img src={badge.icon} alt="" />
+              {badge.label}
+            </a>
+            <h3>{useCase.title}</h3>
+            <p>{useCase.text}</p>
+            <div className="product-tags">
+              {useCase.chips.map((chip) => (
+                <span key={chip}>{chip}</span>
+              ))}
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  </section>
+);
+
+const Ships = () => (
+  <section className="section" id="ships">
+    <SectionHeading kicker="What ships" title="Everything the platform puts on your machine.">
+      One release tag, four channels: a desktop app, two command-line tools, the NuGet packages they
+      are built from, and a container image per product. Everything below is published by the same
+      pipeline from the same commit, so a version means the same thing whichever channel you took it
+      from.
+    </SectionHeading>
+    <div className="ship-groups">
+      {shipGroups.map((group) => {
+        const ChannelMark = channels[group.channel];
+        const SourceMark = group.source ? channels[group.source.channel] : null;
+        return (
+          <article className="ship-group" key={group.id} id={group.id}>
+            <header className="ship-group-head">
+              <span className="ship-group-icon" aria-hidden="true">
+                <ChannelMark />
+              </span>
+              <div className="ship-group-copy">
+                <h3>{group.title}</h3>
+                <p>{group.blurb}</p>
+              </div>
+              {group.source && SourceMark ? (
+                <a className="ship-source" href={group.source.href}>
+                  <SourceMark />
+                  {group.source.label}
+                </a>
+              ) : null}
+            </header>
+
+            <ul className="ship-list">
+              {group.items.map((item) => {
+                const ItemMark = item.mark ? marks[item.mark].Mark : null;
+                const chips = [...(item.platforms ?? []), ...(item.badges ?? [])];
+                return (
+                <li className="ship-item" key={item.name}>
+                  <div className="ship-item-copy">
+                    <div className="ship-item-head">
+                      {ItemMark ? (
+                        <span className="ship-mark" aria-hidden="true">
+                          <ItemMark />
+                        </span>
+                      ) : null}
+                      <strong>{item.name}</strong>
+                      {item.product ? <span className="ship-product">{item.product}</span> : null}
+                      {item.formats?.map((format) => (
+                        <code className="ship-format" key={format}>
+                          {format}
+                        </code>
+                      ))}
+                    </div>
+                    <p>{item.note}</p>
+                    {item.cmd ? <code className="ship-cmd">{item.cmd}</code> : null}
+                  </div>
+                  <div className="ship-item-side">
+                    {chips.length > 0 ? (
+                      <div className="plat-row">
+                        {chips.map((id) => {
+                          const { label, Mark } = marks[id];
+                          return (
+                            <span className="plat-chip" key={id}>
+                              <Mark />
+                              {label}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    {item.link ? (
+                      <a className="text-link" href={item.link.href}>
+                        {item.link.label}
+                      </a>
+                    ) : null}
+                  </div>
+                </li>
+                );
+              })}
+            </ul>
+
+            {group.cmds ? (
+              <div className="ship-cmds">
+                {group.cmds.map((cmd) => (
+                  <code className="ship-cmd" key={cmd}>
+                    {cmd}
+                  </code>
+                ))}
+              </div>
+            ) : null}
+
+            {group.note || group.install ? (
+              <footer className="ship-group-foot">
+                {group.note ? (
+                  <p>
+                    {group.noteMark
+                      ? (() => {
+                          const { Mark } = marks[group.noteMark];
+                          return (
+                            <span className="ship-note-mark" aria-hidden="true">
+                              <Mark />
+                            </span>
+                          );
+                        })()
+                      : null}
+                    {group.note}
+                  </p>
+                ) : null}
+                {group.install ? (
+                  <a className="text-link" href={group.install.href}>
+                    {group.install.label}
+                  </a>
+                ) : null}
+              </footer>
+            ) : null}
+          </article>
+        );
+      })}
+    </div>
   </section>
 );
 
@@ -194,41 +355,22 @@ const Highlights = () => (
 
 const ProductSplit = () => (
   <section className="section" id="products">
-    <SectionHeading kicker="The big picture" title="Local HTTP development has two halves.">
+    <SectionHeading kicker="The product family" title="One HTTP workbench. Two focused products.">
       Sometimes the internet needs to reach your laptop and you need to see exactly what arrived.
       Other times you are the client, and you need to compose a request, authenticate properly, send
-      it, and keep it somewhere your team can find next month. Tap is one product for each half —
-      use either alone, or both together.
+      it, and keep it somewhere your team can find next month. Tap Platform gives each job a clear
+      home—Studio for outbound work and Tunnels for inbound traffic.
     </SectionHeading>
     <div className="product-split">
       <article className="product-card">
         <span className="product-index">01</span>
-        <h3>Tunnel + Inspector</h3>
-        <p>
-          A public URL for localhost through Cloudflare Tunnel or Tailscale, with every request,
-          response, SSE event, and WebSocket frame captured on the way through. Runs as the{" "}
-          <code>tap</code> CLI or as .NET Aspire resources.
-        </p>
-        <div className="product-tags">
-          <span>CLI</span>
-          <span>Aspire</span>
-          <span>Cloudflare</span>
-          <span>Tailscale</span>
-          <span>Replay</span>
-          <span>QR</span>
-        </div>
-        <a className="button primary" href={href("inspector")}>
-          Open the Inspector docs
-        </a>
-      </article>
-      <article className="product-card">
-        <span className="product-index">02</span>
+        <img className="product-card-icon" src="./tap-studio-icon.svg" alt="" />
         <h3>Tap Studio</h3>
         <p>
-          An HTTP workbench: full request composition, a catalogue of real authentication flows,
-          multi-step flows and test sets that also run headlessly in CI, an AI assistant running on
-          your own machine, and a workspace that lives in your git repo as Markdown. Ships as a
-          desktop app.
+          The request and auth credential crafter: full request composition, real authentication
+          flows, multi-step flows and test sets that also run headlessly in CI, an AI assistant
+          running on your own machine, and a workspace that lives in your git repo as Markdown.
+          Ships as a desktop app.
         </p>
         <div className="product-tags">
           <span>Desktop</span>
@@ -245,6 +387,27 @@ const ProductSplit = () => (
         </div>
         <a className="button primary" href={href("studio")}>
           Open the Studio docs
+        </a>
+      </article>
+      <article className="product-card">
+        <span className="product-index">02</span>
+        <img className="product-card-icon" src="./tap-tunnels-icon.svg" alt="" />
+        <h3>Tap Tunnels</h3>
+        <p>
+          Tunnels with inspection built in: give localhost a URL through Cloudflare or Tailscale
+          and see every request, response, SSE event, and WebSocket frame on the way through. Runs
+          as the <code>tap</code> CLI or as .NET Aspire resources.
+        </p>
+        <div className="product-tags">
+          <span>CLI</span>
+          <span>Aspire</span>
+          <span>Cloudflare</span>
+          <span>Tailscale</span>
+          <span>Replay</span>
+          <span>QR</span>
+        </div>
+        <a className="button primary" href={href("tunnels")}>
+          Open the Tunnels docs
         </a>
       </article>
     </div>
@@ -317,7 +480,7 @@ const Pricing = () => (
           licence.
         </p>
         <ul className="plan-list">
-          <li>Tunnel + Inspector, complete</li>
+          <li>Tap Tunnels, complete—with inspection built in</li>
           <li>Tap Studio, complete</li>
           <li>Unlimited developers — there are no seats to count</li>
           <li>Enterprise identity and secret managers included</li>
@@ -382,14 +545,14 @@ const Principles = () => (
 
 const Together = () => (
   <section className="flow-band" id="together">
-    <SectionHeading kicker="Used together" title="Craft the call in Studio. Watch it land in the Inspector.">
+    <SectionHeading kicker="Used together" title="Craft in Studio. Send through Tunnels. Inspect what arrived.">
       They are separate products with separate installs, and each is useful on its own. Together they
-      close the loop: Studio sends a request through a tunnel your Inspector is watching, so you can
+      close the loop: Studio sends a request through Tap Tunnels' Inspector, so you can
       compare what you meant to send with what actually arrived.
     </SectionHeading>
     <FlowDiagram
-      label="Studio to Inspector round trip"
-      steps={["Studio composes", "Auth resolved", "Tunnel", "Inspector captures", "Your service"]}
+      label="Tap Platform request round trip"
+      steps={["Studio crafts", "Auth resolved", "Tunnels routes", "Inspector captures", "Your service"]}
     />
     <div className="mode-grid section-gap">
       <article className="mode-card">

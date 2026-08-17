@@ -1,0 +1,16 @@
+<Project>
+  <!-- NuGet displays PackageIcon on the package page and in supporting clients.
+       Product projects select Studio or Tunnels; future packable projects fall
+       back to the Platform mark so a published package never ships unbranded. -->
+  <PropertyGroup Condition="'$(IsPackable)' == 'true'">
+    <PackageIcon>icon.png</PackageIcon>
+    <TapProductIcon Condition="'$(TapProductIcon)' == ''">Platform</TapProductIcon>
+    <TapPackageIconSource Condition="'$(TapProductIcon)' == 'Platform'">$(MSBuildThisFileDirectory)assets/tap-platform-icon-128.png</TapPackageIconSource>
+    <TapPackageIconSource Condition="'$(TapProductIcon)' == 'Studio'">$(MSBuildThisFileDirectory)assets/tap-studio-icon-128.png</TapPackageIconSource>
+    <TapPackageIconSource Condition="'$(TapProductIcon)' == 'Tunnels'">$(MSBuildThisFileDirectory)assets/tap-tunnels-icon-128.png</TapPackageIconSource>
+  </PropertyGroup>
+
+  <ItemGroup Condition="'$(IsPackable)' == 'true'">
+    <None Include="$(TapPackageIconSource)" Pack="true" PackagePath="icon.png" Visible="false" />
+  </ItemGroup>
+</Project>

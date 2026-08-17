@@ -71,7 +71,7 @@ function PageTab({ label, active, onClick }: { label: string; active: boolean; o
 function IntroSection() {
   return (
     <div style={{ maxWidth: 880, margin: '0 auto', padding: '28px 24px 64px' }}>
-      <h1 style={{ marginTop: 0, fontSize: 22 }}>Cloudflare Tunnels with tap</h1>
+      <h1 style={{ marginTop: 0, fontSize: 22 }}>Cloudflare with Tap Tunnels</h1>
       <p style={{ color: 'var(--text-muted)', lineHeight: 1.55 }}>
         tap can route traffic from a public Cloudflare hostname through the inspector to your local
         upstream. Cloudflare runs <code>cloudflared</code> as the connector — tap installs and

@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Tap.Studio.Contracts;
+using Tap.Studio.Importing;
 using Tap.Studio.Specs;
 using Tap.Workspace.Model;
 using Tap.Workspace.Parsing;
@@ -39,19 +40,6 @@ namespace Tap.Studio.Postman;
 public static class PostmanImporter
 {
     private const string CollectionsRoot = "collections";
-
-    public sealed record ImportFile(string RelativePath, string Content);
-
-    public sealed record ImportPlan(
-        string Slug,
-        string CollectionPath,
-        string? AuthPath,
-        IReadOnlyList<ImportFile> Files,
-        IReadOnlyList<string> Warnings)
-    {
-        public int RequestCount => Files.Count(f => f.RelativePath.EndsWith(KindResolver.SuffixFor(WorkspaceKind.Request), StringComparison.OrdinalIgnoreCase));
-        public int FolderCount { get; init; }
-    }
 
     /// <summary>Plans the import. Pass <paramref name="requestedSlug"/> to override the
     /// slug derived from <c>info.name</c>. Throws <see cref="PostmanImportException"/>
@@ -566,42 +554,9 @@ public static class PostmanImporter
     }
 
     private static string UniqueSlug(string name, HashSet<string> siblings)
-    {
-        var baseSlug = Slugify(name);
-        if (baseSlug.Length == 0) baseSlug = "item";
-        var slug = baseSlug;
-        var i = 2;
-        while (!siblings.Add(slug))
-        {
-            slug = $"{baseSlug}-{i++}";
-        }
-        return slug;
-    }
+        => ImportSlug.UniqueSlug(name, siblings);
 
-    private static string Slugify(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return string.Empty;
-        var sb = new StringBuilder(name.Length);
-        bool lastDash = false;
-        foreach (var ch in name.Trim().ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(ch))
-            {
-                sb.Append(ch);
-                lastDash = false;
-            }
-            else if (ch is '_' or '-')
-            {
-                if (!lastDash) { sb.Append('-'); lastDash = true; }
-            }
-            else if (char.IsWhiteSpace(ch) || ch is '/' or '\\' or '.' or ':')
-            {
-                if (!lastDash) { sb.Append('-'); lastDash = true; }
-            }
-        }
-        var s = sb.ToString().Trim('-');
-        return s.Length > 60 ? s[..60].TrimEnd('-') : s;
-    }
+    private static string Slugify(string name) => ImportSlug.Slugify(name);
 }
 
 public sealed class PostmanImportException : Exception

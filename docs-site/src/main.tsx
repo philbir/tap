@@ -2,7 +2,7 @@ import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { Shell } from "./components/Shell";
 import { HomePage } from "./pages/home";
-import { InspectorPage } from "./pages/inspector";
+import { TunnelsPage } from "./pages/tunnels";
 import { StudioPage } from "./pages/studio";
 import { useRoute } from "./router";
 
@@ -11,8 +11,8 @@ const App = () => {
 
   return (
     <Shell page={route.page}>
-      {route.page === "inspector" ? (
-        <InspectorPage />
+      {route.page === "tunnels" ? (
+        <TunnelsPage />
       ) : route.page === "studio" ? (
         <StudioPage />
       ) : (

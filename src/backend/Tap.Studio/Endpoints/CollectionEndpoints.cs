@@ -1,4 +1,5 @@
 using Tap.Studio.Contracts;
+using Tap.Studio.Importing;
 using Tap.Studio.Postman;
 using Tap.Studio.Specs;
 using Tap.Workspace;
@@ -136,7 +137,7 @@ public static class CollectionEndpoints
         // slug error unless Overwrite=true — silent clobbering would surprise users.
         g.MapPost("/import/postman", (PostmanImportRequestDto body, WorkspaceService svc) =>
         {
-            PostmanImporter.ImportPlan plan;
+            ImportPlan plan;
             try
             {
                 plan = PostmanImporter.Plan(body.Collection, body.Slug);
@@ -146,48 +147,12 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto(ex.Code, ex.Message, null, null));
             }
 
-            if (!IsValidSlug(plan.Slug))
-                return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
-                    $"Derived slug '{plan.Slug}' is not valid. Pass an explicit slug.", null, null));
-
-            if (!WorkspacePaths.TryResolve(svc.RootDirectory, $"{CollectionsRoot}/{plan.Slug}",
-                    out var collectionDirAbs, out var dirErr))
-                return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
-
             // Reject overwrite by default — Postman re-imports otherwise turn into silent
             // merges where renamed-in-Postman requests become orphans on disk.
-            if (Directory.Exists(collectionDirAbs) && !body.Overwrite
-                && Directory.EnumerateFileSystemEntries(collectionDirAbs).Any())
-            {
-                return Results.BadRequest(new WorkspaceErrorDto(
-                    "collection-exists",
-                    $"Collection '{plan.Slug}' already exists. Pass overwrite=true to replace it.",
-                    $"{CollectionsRoot}/{plan.Slug}",
-                    null));
-            }
-
-            // Wipe the existing directory on overwrite — leftovers from a previous import
-            // would otherwise show up as stale requests in the explorer.
-            if (body.Overwrite && Directory.Exists(collectionDirAbs))
-            {
-                Directory.Delete(collectionDirAbs, recursive: true);
-            }
-
-            foreach (var file in plan.Files)
-            {
-                try
-                {
-                    svc.Save(file.RelativePath, file.Content);
-                }
-                catch (WorkspaceParseException ex)
-                {
-                    return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line));
-                }
-                catch (InvalidOperationException ex)
-                {
-                    return Results.BadRequest(new WorkspaceErrorDto("import-failed", ex.Message, file.RelativePath, null));
-                }
-            }
+            var write = ImportWriter.Write(svc, plan, body.Overwrite
+                ? ImportWriter.ExistingCollection.Replace
+                : ImportWriter.ExistingCollection.Reject);
+            if (!write.Ok) return Results.BadRequest(write.Error);
 
             return Results.Ok(new PostmanImportResponseDto(
                 Slug: plan.Slug,

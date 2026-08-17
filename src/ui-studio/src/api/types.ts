@@ -950,6 +950,171 @@ export interface PostmanImportResponse {
   warnings: string[]
 }
 
+// ---------------------------------------------------------------------------------------------
+// OpenAPI import.
+//
+// Two phases: stage the document (`/api/openapi/documents`), which parses and returns the
+// operation list without writing anything, then import a selection by `documentId`. The client
+// never parses the spec — it may be YAML, and $ref/allOf/Swagger-2.0 normalization must not exist
+// in two places that can disagree.
+// ---------------------------------------------------------------------------------------------
+
+/** A staged OpenAPI document: everything the wizard needs to render its picker. */
+export interface OpenApiDocument {
+  documentId: string
+  title: string
+  apiVersion: string | null
+  /** `2.0` | `3.0` | `3.1` */
+  specVersion: string
+  description: string | null
+  suggestedSlug: string
+  servers: OpenApiServer[]
+  securitySchemes: OpenApiSecurityScheme[]
+  operations: OpenApiOperation[]
+  diagnostics: OpenApiDiagnostic[]
+}
+
+export interface OpenApiServer {
+  url: string
+  description: string | null
+}
+
+/** `tapAuthType` is null when Tap has no equivalent — show the scheme disabled with `warning`
+ *  as the reason rather than hiding it. */
+export interface OpenApiSecurityScheme {
+  key: string
+  type: string
+  tapAuthType: string | null
+  description: string | null
+  scopes: string[]
+  warning: string | null
+}
+
+export interface OpenApiOperation {
+  opKey: string
+  operationId: string | null
+  method: string
+  path: string
+  summary: string | null
+  tags: string[]
+  deprecated: boolean
+  hasRequestBody: boolean
+  pathParamCount: number
+  queryParamCount: number
+}
+
+export interface OpenApiDiagnostic {
+  /** `error` | `warning` */
+  severity: string
+  message: string
+  pointer: string | null
+}
+
+/** `req` writes one `.req.tap` per operation; `http` writes one `.http` file per tag. */
+export type OpenApiLayout = 'req' | 'http'
+
+/** `create` fails if the collection exists; `merge` adds to it; `replace` deletes it first. */
+export type OpenApiImportMode = 'create' | 'merge' | 'replace'
+
+export interface OpenApiImportRequest {
+  documentId: string
+  slug: string | null
+  layout: OpenApiLayout
+  /** Null or empty imports every operation. */
+  operationKeys: string[] | null
+  baseUrl: string | null
+  securitySchemeKey: string | null
+  linkAuthPath: string | null
+  includeOptionalQueryParams: boolean
+  /** Seed values for generated variables, keyed by opKey then variable name. Where an accepted
+   *  AI suggestion lands; the import is identical without it. */
+  variableDefaults?: Record<string, Record<string, string>> | null
+  mode: OpenApiImportMode
+}
+
+/** The recorded link between a collection and the document it was generated from. */
+export interface OpenApiLink {
+  slug: string
+  /** `url` | `file` | `aspire` */
+  sourceKind: string
+  url: string | null
+  fileName: string | null
+  fetchedAt: string
+  specVersion: string
+  apiVersion: string | null
+  documentHash: string
+  layout: OpenApiLayout
+  trackedOperations: number
+}
+
+export interface OpenApiImportResponse {
+  slug: string
+  collectionPath: string
+  authPath: string | null
+  requestCount: number
+  fileCount: number
+  warnings: string[]
+}
+
+/** Proposed values for one operation's variables, keyed by variable name. */
+export interface OpenApiSuggestion {
+  opKey: string
+  values: Record<string, string>
+  note: string | null
+}
+
+export interface OpenApiSuggestResponse {
+  suggestions: OpenApiSuggestion[]
+  provider: string
+  model: string | null
+  considered: number
+  warnings: string[]
+}
+
+/** One operation's verdict in a re-sync preview. */
+export interface OpenApiChange {
+  /** `added` | `changed` | `conflict` | `unchanged` | `orphaned` | `removed` */
+  kind: string
+  opKey: string
+  method: string
+  path: string
+  summary: string | null
+  localPath: string | null
+  fragment: string | null
+  /** The file no longer matches what we generated — i.e. it was edited by hand. */
+  locallyEdited: boolean
+  /** What the UI pre-selects. Never destructive. */
+  defaultAction: OpenApiResyncAction
+}
+
+/** `skip` keeps the local file; `deprecate` tags it rather than deleting it. */
+export type OpenApiResyncAction = 'skip' | 'add' | 'update' | 'deprecate' | 'untrack'
+
+export interface OpenApiResyncPreview {
+  slug: string
+  layout: OpenApiLayout
+  sourceUrl: string | null
+  previouslyFetchedAt: string
+  previousApiVersion: string | null
+  newApiVersion: string | null
+  documentUnchanged: boolean
+  added: number
+  changed: number
+  conflicts: number
+  removed: number
+  changes: OpenApiChange[]
+}
+
+export interface OpenApiResyncResult {
+  added: number
+  updated: number
+  deprecated: number
+  untracked: number
+  skipped: number
+  writtenPaths: string[]
+  warnings: string[]
+}
+
 /** One (tag, entity) row from `GET /api/tags`. */
 export interface TaggedItem {
   tag: string

@@ -13,7 +13,7 @@ import {
   type DocSection,
 } from "../components/ui";
 import { commands } from "../data/commands";
-import { inspectorFeatures } from "../data/features";
+import { tunnelFeatures } from "../data/features";
 import { href } from "../router";
 
 const docs: DocSection[] = [
@@ -425,7 +425,7 @@ const docs: DocSection[] = [
         </Callout>
         <p className="doc-note">
           <a className="text-link" href="https://github.com/philbir/tap/blob/main/docs/inspector.md">
-            Full Inspector reference
+            Full Tap Tunnels reference
           </a>
         </p>
       </>
@@ -433,24 +433,24 @@ const docs: DocSection[] = [
   },
 ];
 
-export const InspectorPage = () => (
+export const TunnelsPage = () => (
   <>
     <section className="product-hero">
       <div className="product-hero-copy">
         <span className="kicker product-eyebrow">
-          <span className="product-index large">01</span> Product
+          <span className="product-index large">02</span> Product
         </span>
-        <h1>Tunnel + Inspector</h1>
+        <h1>Tap Tunnels</h1>
         <p className="lead">
-          Give a local service a real public URL for mobile hooks, webhooks, auth redirects, partner
-          integrations, and temporary demos — then read back exactly what happened, down to the
-          individual WebSocket frame.
+          Tunnels with inspection built in. Give a local service a real URL for mobile hooks,
+          webhooks, auth redirects, partner integrations, and temporary demos—then see exactly what
+          arrived, down to the individual WebSocket frame.
         </p>
         <div className="hero-actions">
-          <a className="button primary" href={href("inspector", "quickstart")}>
+          <a className="button primary" href={href("tunnels", "quickstart")}>
             Quick start
           </a>
-          <a className="button ghost" href={href("inspector", "cli")}>
+          <a className="button ghost" href={href("tunnels", "cli")}>
             CLI reference
           </a>
         </div>
@@ -468,8 +468,8 @@ export const InspectorPage = () => (
       </div>
       <picture className="product-hero-visual">
         <img
-          src="./screenshots/tap-inspector.png"
-          alt="The Tap inspector showing captured requests, headers, and a response body"
+          src="./tap-tunnels-hero.png"
+          alt="A luminous HTTP flow passing through a tunnel with inspection built into its wall"
         />
       </picture>
     </section>
@@ -482,7 +482,7 @@ export const InspectorPage = () => (
         you want stable hostnames — or route through your tailnet with Tailscale instead. No plan,
         no seat, no request cap on any of it.
       </SectionHeading>
-      <FeatureGrid features={inspectorFeatures} />
+      <FeatureGrid features={tunnelFeatures} />
     </section>
 
     <FlowSection />

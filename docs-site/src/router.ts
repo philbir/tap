@@ -11,12 +11,13 @@ const isPageId = (value: string): value is PageId => value in pages;
 
 const parsePath = (path: string): Route | null => {
   const [head, ...rest] = path.replace(/^\/+/, "").split("/");
-  if (!isPageId(head)) return null;
+  const page = head === "inspector" ? "tunnels" : head;
+  if (!isPageId(page)) return null;
   const section = rest.join("/");
-  return { page: head, section: section === "" ? null : section };
+  return { page, section: section === "" ? null : section };
 };
 
-/** `#/inspector/cli` -> { page: "inspector", section: "cli" } */
+/** `#/tunnels/cli` -> { page: "tunnels", section: "cli" }. Old inspector routes alias here. */
 export const parseHash = (hash: string): Route => {
   const raw = hash.replace(/^#/, "").replace(/^\/+/, "");
   if (raw === "") return { page: "home", section: null };

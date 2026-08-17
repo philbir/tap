@@ -33,6 +33,8 @@
   <ItemGroup>
     <PackageReference Include="LibGit2Sharp" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
+    <PackageReference Include="Microsoft.OpenApi" />
+    <PackageReference Include="Microsoft.OpenApi.YamlReader" />
   </ItemGroup>
 
   <!-- Build the Studio React UI and sync it into wwwroot so the shipped binary

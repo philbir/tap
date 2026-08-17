@@ -622,6 +622,7 @@ const docs: DocSection[] = [
         <ModeGrid
           gap
           items={[
+            ["From source, or from the image", "AddTapStudio compiles Studio from a ProjectReference — the route to take when you want the assistant to spawn your coding CLI, an interactive sign-in to open your browser, or op and az to be on PATH. AddTapStudioContainer runs ghcr.io/philbir/tap-studio instead: same handle, same calls, nothing to build, and Aspire pulls the image for you."],
             ["Pinned workspace", "Studio opens the folder the AppHost names, every time. Without the pin it would open whichever workspace that developer last used on that machine."],
             ["Service discovery", "WithApi injects the standard services__* variables, so a collection's baseUrl can be {{aspire:orders-api}} and follow whatever port was allocated."],
             ["Health and wiring", "Waits for each API, health-checks Studio at /health, and shows up in the dashboard as Tap Studio."],
@@ -629,6 +630,7 @@ const docs: DocSection[] = [
           ]}
         />
         <div className="code-grid section-gap">
+          <CodeBlock title="No build: run the image" code={commands.studioAspireContainer} />
           <CodeBlock
             title="A collection that follows the allocated port"
             code={commands.studioAspireCollection}
@@ -664,6 +666,7 @@ const docs: DocSection[] = [
             ["Windows", "An .msi and an NSIS setup .exe."],
             ["Linux", "A .deb package."],
             ["Auto-update", "Each release publishes a signed manifest the updater client polls, so the app keeps itself current."],
+            ["Container", "ghcr.io/philbir/tap-studio carries the same UI, API, and engine for a headless host or an Aspire AppHost. Mount the workspace at /workspace; port 8080."],
           ]}
         />
         <div className="code-grid">
@@ -697,13 +700,13 @@ export const StudioPage = () => (
     <section className="product-hero">
       <div className="product-hero-copy">
         <span className="kicker product-eyebrow">
-          <span className="product-index large">02</span> Product
+          <span className="product-index large">01</span> Product
         </span>
         <h1>Tap Studio</h1>
         <p className="lead">
-          The HTTP workbench: compose requests, authenticate against real identity providers,
-          execute, document, and prove it keeps working — with the whole thing living in your
-          repository as reviewable Markdown.
+          The HTTP request and auth credential crafter. Shape requests, authenticate against real
+          identity providers, execute, document, and prove they keep working—with the whole
+          workspace living in your repository as reviewable Markdown.
         </p>
         <div className="hero-actions">
           <a className="button primary" href={`${repoUrl}/releases/latest`}>
@@ -729,8 +732,8 @@ export const StudioPage = () => (
       </div>
       <picture className="product-hero-visual">
         <img
-          src="./screenshots/studio-request.png"
-          alt="Tap Studio composing a POST request and showing the response"
+          src="./tap-studio-workbench-hero.png"
+          alt="A precision craft workbench shaping request and credential flows into one HTTP request"
         />
       </picture>
     </section>

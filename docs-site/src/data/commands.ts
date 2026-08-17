@@ -358,6 +358,11 @@ var studio = builder.AddTapStudio<Projects.Tap_Studio>()
 // Seeding an OAuth client? Studio's redirect URI is only known once its port
 // is allocated, so it is a ReferenceExpression rather than a string.
 identity.WithEnvironment("STUDIO_CALLBACK_URL", studio.CallbackUrl);`,
+  studioAspireContainer: `// Same handle, no build: runs ghcr.io/philbir/tap-studio instead of
+// compiling Tap.Studio, so the AppHost needs no ProjectReference and no yarn.
+var studio = builder.AddTapStudioContainer()
+    .WithWorkspaceFolder("tap")   // bind-mounted into the container at /workspace
+    .WithApi(orders);`,
   studioAspireCollection: `---
 kind: collection
 name: Orders

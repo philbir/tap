@@ -5,7 +5,7 @@ import {
 import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
 import {
-  IconAlertCircle, IconBrandGit, IconChecklist, IconCopy, IconEdit, IconFilePlus, IconFolderPlus,
+  IconAlertCircle, IconApi, IconBrandGit, IconRefresh, IconChecklist, IconCopy, IconEdit, IconFilePlus, IconFolderPlus,
   IconFolderShare, IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
@@ -23,6 +23,8 @@ import { PierreFileTree } from './PierreFileTree'
 import { TagsView } from './TagsView'
 import { TestingView } from './TestingView'
 import { makeTapTreeIcons, TAP_ICONS, TAP_TREE_UNSAFE_CSS } from './treeIcons'
+import { ImportOpenApiDialog } from '../editors/ImportOpenApiDialog'
+import { ResyncOpenApiDialog } from '../editors/ResyncOpenApiDialog'
 import { fileNameFor, labelForPath, stripTapSuffix } from './tapFiles'
 
 type Filter = 'requests' | 'auth' | 'testing' | 'tags' | 'fs' | 'git'
@@ -124,6 +126,12 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
 
   // New-folder dialog state. The parent directory is set by the row the user
   // right-clicked; the dialog only asks for the leaf name.
+  const [openApiImport, setOpenApiImport] = useState<{ open: boolean; slug: string | null }>({
+    open: false, slug: null,
+  })
+  const [openApiResync, setOpenApiResync] = useState<{ open: boolean; slug: string }>({
+    open: false, slug: '',
+  })
   const [newFolderState, setNewFolderState] = useState<{ open: boolean; parentDir: string }>({
     open: false, parentDir: '',
   })
@@ -455,6 +463,23 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         parent={newFolderState.parentDir}
       />
 
+      {openApiResync.open && (
+        <ResyncOpenApiDialog
+          open={openApiResync.open}
+          onOpenChange={(open) => setOpenApiResync((s) => ({ ...s, open }))}
+          slug={openApiResync.slug}
+        />
+      )}
+
+      {openApiImport.open && (
+        <ImportOpenApiDialog
+          open={openApiImport.open}
+          onOpenChange={(open) => setOpenApiImport((s) => ({ ...s, open }))}
+          initialSlug={openApiImport.slug}
+          onImported={() => setOpenApiImport({ open: false, slug: null })}
+        />
+      )}
+
       <FloatingCtxMenu
         ctx={ctxMenu}
         onClose={() => setCtxMenu(null)}
@@ -464,6 +489,8 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         onDeleteFile={(file) => { setCtxMenu(null); confirmDeleteFile(file) }}
         onDuplicateFile={(file) => { setCtxMenu(null); setDuplicateState({ open: true, source: { realPath: file.realPath, name: file.name } }) }}
         onEditCollection={(dir) => { setCtxMenu(null); editCollection(dir) }}
+        onImportOpenApi={(dir) => { setCtxMenu(null); setOpenApiImport({ open: true, slug: dir.slug ?? null }) }}
+        onResyncOpenApi={(dir) => { setCtxMenu(null); setOpenApiResync({ open: true, slug: dir.slug ?? '' }) }}
         onEditHttpFile={(dir) => { setCtxMenu(null); editHttpFile(dir) }}
       />
 
@@ -484,6 +511,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
  *  fully visible menu. Item set depends on whether the row is a directory or a file. */
 function FloatingCtxMenu({
   ctx, onClose, onNewRequest, onNewFolder, onDeleteDir, onDeleteFile, onDuplicateFile, onEditCollection,
+  onImportOpenApi, onResyncOpenApi,
   onEditHttpFile,
 }: {
   ctx: { x: number; y: number; row: RowContext; canCreateRequest: boolean } | null
@@ -494,6 +522,8 @@ function FloatingCtxMenu({
   onDeleteFile: (file: FileContext) => void
   onDuplicateFile: (file: FileContext) => void
   onEditCollection: (dir: DirContext) => void
+  onImportOpenApi: (dir: DirContext) => void
+  onResyncOpenApi: (dir: DirContext) => void
   onEditHttpFile: (dir: DirContext) => void
 }) {
   const menuRef = useRef<HTMLDivElement>(null)
@@ -563,6 +593,26 @@ function FloatingCtxMenu({
               <Group gap={8} wrap="nowrap"><IconEdit size={14} />Edit collection…</Group>
             </UnstyledButton>
           )
+        )}
+        {isDir && (ctx.row as DirContext).kind === 'collection' && (
+          <>
+            <UnstyledButton
+              px={10} py={6}
+              className="tap-tree-row"
+              style={{ fontSize: 13, borderRadius: 4 }}
+              onClick={() => onImportOpenApi(ctx.row as DirContext)}
+            >
+              <Group gap={8} wrap="nowrap"><IconApi size={14} />Import from OpenAPI…</Group>
+            </UnstyledButton>
+            <UnstyledButton
+              px={10} py={6}
+              className="tap-tree-row"
+              style={{ fontSize: 13, borderRadius: 4 }}
+              onClick={() => onResyncOpenApi(ctx.row as DirContext)}
+            >
+              <Group gap={8} wrap="nowrap"><IconRefresh size={14} />Re-sync from OpenAPI…</Group>
+            </UnstyledButton>
+          </>
         )}
         {/* A .http row groups requests but is one file. Editing it means opening the file —
             its requests, its raw source — not adding siblings inside a directory, so it gets

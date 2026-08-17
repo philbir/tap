@@ -124,6 +124,81 @@ public static class AiEndpoints
             }
         });
 
+        // Proposes values for the variables an OpenAPI import will generate. Strictly optional:
+        // the import works identically without ever calling this, which is the default state
+        // since AI is unconfigured until the user sets up a CLI.
+        g.MapPost("/openapi/suggest", async (
+            OpenApiSuggestRequestDto body,
+            AiProviderFactory factory,
+            OpenApi.OpenApiDocumentCache cache,
+            WorkspaceService svc,
+            SystemSettingsStore settings,
+            CancellationToken ct) =>
+        {
+            var provider = factory.Get();
+            if (!provider.Configured)
+                return Results.Json(new { message = $"AI ({provider.Name}) is not configured. {provider.SetupHint}" }, statusCode: 503);
+
+            if (cache.Get(body.DocumentId) is not { } staged)
+            {
+                return Results.BadRequest(new WorkspaceErrorDto(
+                    "document-expired", "That OpenAPI document is no longer staged. Fetch it again.", null, null));
+            }
+
+            var all = OpenApi.OpenApiOperationMapper.Map(staged.Document);
+            var selected = body.OperationKeys is { Count: > 0 } keys
+                ? all.Where(o => keys.Contains(o.OpKey, StringComparer.Ordinal)).ToArray()
+                : all.ToArray();
+
+            // Only operations that actually declare variables are worth asking about.
+            selected = selected.Where(o => o.VariableParameters.Any()).ToArray();
+            if (selected.Length == 0)
+            {
+                return Results.Ok(new OpenApiSuggestResponseDto(
+                    [], provider.Name, provider.Model, 0, ["None of the selected operations take path or query parameters."]));
+            }
+
+            // The same variable catalog the request assistant gets — names, scopes and secret
+            // flags, never values.
+            var variables = GatherVariables(settings, svc.Current, OwningCollection(svc.Current, null), null)
+                .Select(v => new AiOpenApiAssistant.VariableInfo(v.Name, v.Scope, v.Secret, v.Description, v.Example))
+                .ToArray();
+
+            var title = staged.Document.Info?.Title ?? "API";
+            var suggestions = new List<OpenApiSuggestionDto>();
+            var warnings = new List<string>();
+            var considered = 0;
+
+            // Batched because the providers are subprocesses with a fixed timeout — one call
+            // carrying 200 operations returns nothing at all when it runs out.
+            foreach (var batch in selected.Chunk(AiOpenApiAssistant.BatchSize))
+            {
+                if (ct.IsCancellationRequested) break;
+
+                var ctx = new AiOpenApiAssistant.Context(title, batch, variables);
+                try
+                {
+                    var result = await provider.ChatAsync(new AiChatInput(
+                        AiOpenApiAssistant.BuildSystemPrompt(ctx),
+                        [new AiChatMessage("user", "Propose values for these operations.")],
+                        body.Model), ct).ConfigureAwait(false);
+
+                    foreach (var m in AiOpenApiAssistant.TryParseMappings(result.Text, batch))
+                        suggestions.Add(new OpenApiSuggestionDto(m.OpKey, m.Values, m.Note));
+
+                    considered += batch.Length;
+                }
+                catch (Exception e) when (e is not OperationCanceledException)
+                {
+                    // A failed batch must not lose the batches that already succeeded.
+                    warnings.Add($"Could not get suggestions for {batch.Length} operation(s): {e.Message}");
+                }
+            }
+
+            return Results.Ok(new OpenApiSuggestResponseDto(
+                suggestions, provider.Name, provider.Model, considered, warnings));
+        });
+
         g.MapPost("/assist", async (
             AiAssistRequestDto body, AiProviderFactory factory, WorkspaceService svc, SystemSettingsStore settings, CancellationToken ct) =>
         {

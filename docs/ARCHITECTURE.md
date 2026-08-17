@@ -1,10 +1,10 @@
 # Tap Architecture
 
-> Scope: this document covers **Tap Tunnel + Inspector** — the tunnel providers, the capture
-> proxy, and the Inspector UI. Tap Studio, the request workbench, is a separate product with
+> Scope: this document covers **Tap Tunnels**—the tunnel providers, the capture proxy, and its
+> built-in Inspector UI. Tap Studio, the request and auth credential crafter, is a separate product with
 > its own stack; see [studio.md](studio.md) and [workspace-format.md](workspace-format.md).
 
-The Inspector half has two user-facing entry points and one shared runtime:
+Tap Tunnels has two user-facing entry points and one shared runtime:
 
 ```mermaid
 flowchart LR
@@ -179,6 +179,12 @@ The CLI reads command flags first, then environment variables (`TAP_UPSTREAM`, `
 | `WithSystemDaemon()` / `WithEphemeralDaemon(authKey)` | Toggle Tailscale daemon mode: reuse the host's tailscaled, or spawn a userspace one per session. |
 | `WithFunnelPort(port)` | Pick the Tailscale Funnel public port (443 default, 8443, 10000). |
 | `AddCloudflaredTunnel()` / `AddTailscaleFunnel()` | Low-level escape hatches: register the tunnel resource directly without binding it to a tap. |
+| `AddTapStudio<TStudio>()` | Register Tap Studio as an Aspire project, pinned to a workspace folder in the repo. Needs a `ProjectReference` to `Tap.Studio` and yarn on PATH. |
+| `AddTapStudioContainer(...)` | Same Studio, hosted as a Docker container (`ghcr.io/philbir/tap-studio`): no project reference, nothing to build. The workspace becomes a bind mount at `/workspace`, state a named volume at `/state`. |
+
+`WithApi(api)` injects the standard service-discovery variables and records the API for first-run scaffolding. It also takes `openApi:`, defaulting to `/openapi/v1.json` — the path ASP.NET Core serves out of the box — so on first run the Studio fetches that document and generates a request per operation instead of a placeholder. That fetch runs in a hosted service *after* the app is listening, never on the boot path, and falls back to the starter request if the API doesn't answer.
+
+Both Studio shapes return the same `TapStudioHandle`, so `WithApi`, `WithWorkspaceFolder`, and `CallbackUrl` read identically either way — that is why the handle wraps `IResource` rather than a builder of one concrete resource type.
 
 The provider-agnostic shape lives in `Tap.Hosting/Tunnels/`: `TapTunnelResource` (abstract base), `TapTunnelAnnotation` (sibling of `CloudflareTunnelAnnotation`), and `TapTunnelIngress`. `CloudflaredTunnelResource` and `TailscaleFunnelResource` both inherit `TapTunnelResource`, so `TapHandle.AttachedTunnel` is typed as the base and `WithTap<T>` runtime-dispatches via `is` checks.
 

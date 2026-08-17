@@ -32,6 +32,14 @@ import type {
   KnownWorkspace,
   OidcDiscovery,
   PostmanImportResponse,
+  OpenApiDocument,
+  OpenApiImportRequest,
+  OpenApiImportResponse,
+  OpenApiLink,
+  OpenApiSuggestResponse,
+  OpenApiResyncAction,
+  OpenApiResyncPreview,
+  OpenApiResyncResult,
   RenderedRequest,
   RequestDetail,
   RequestSpec,
@@ -261,6 +269,51 @@ export const api = {
    *  <c>overwrite</c> wipes an existing collection directory before re-importing. */
   importPostmanCollection: (collection: unknown, slug: string | null, overwrite: boolean) =>
     post<PostmanImportResponse>('/api/collections/import/postman', { collection, slug, overwrite }),
+
+  // OpenAPI import.
+  //
+  // Staging is a separate call from importing on purpose: the operation list the user picks from
+  // and the document that gets written are then provably the same one, and a URL is fetched once.
+  // The spec is sent as raw text — it may be YAML, and all parsing is server-side.
+
+  /** Parse + stage an uploaded document. Writes nothing; returns the operation list. */
+  stageOpenApiDocument: (text: string, fileName: string | null) =>
+    post<OpenApiDocument>('/api/openapi/documents', { text, fileName }),
+
+  /** Fetch a document by URL, then stage it. The server owns the redirect/SSRF guard. */
+  fetchOpenApiDocument: (url: string) =>
+    post<OpenApiDocument>('/api/openapi/documents/fetch', { url }),
+
+  /** Write the selected operations into a collection. */
+  importOpenApiCollection: (request: OpenApiImportRequest) =>
+    post<OpenApiImportResponse>('/api/collections/import/openapi', request),
+
+  /** Ask the configured AI CLI to propose values for the variables an import will generate.
+   *  503 when AI isn't set up — the import works fine without ever calling this. */
+  suggestOpenApiValues: (documentId: string, operationKeys: string[] | null, model?: string | null) =>
+    post<OpenApiSuggestResponse>('/api/ai/openapi/suggest', { documentId, operationKeys, model }),
+
+  /** Diff a tracked collection against a freshly staged document. Writes nothing. */
+  previewOpenApiResync: (slug: string, documentId: string) =>
+    post<OpenApiResyncPreview>(
+      `/api/collections/${encodeURIComponent(slug)}/openapi/resync/preview`, { documentId }),
+
+  /** Apply the chosen action per operation. Anything omitted is skipped. */
+  applyOpenApiResync: (
+    slug: string, documentId: string, decisions: { opKey: string; action: OpenApiResyncAction }[],
+  ) =>
+    post<OpenApiResyncResult>(
+      `/api/collections/${encodeURIComponent(slug)}/openapi/resync`, { documentId, decisions }),
+
+  /** The document a collection was imported from, or null when it wasn't (or the lock is gone). */
+  openApiLink: async (slug: string): Promise<OpenApiLink | null> => {
+    try {
+      return await get<OpenApiLink>(`/api/collections/${encodeURIComponent(slug)}/openapi`)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null
+      throw e
+    }
+  },
 
   // Tags
   tags: () => get<TaggedItem[]>('/api/tags'),

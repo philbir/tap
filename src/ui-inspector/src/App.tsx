@@ -173,9 +173,9 @@ export function App() {
           gap: '16px',
         }}
       >
-        <div className="app-brand" aria-label="Tap">
-          <img src="/tap-mark.svg" width="28" height="28" alt="" />
-          <span>Tap</span>
+        <div className="app-brand" aria-label="Tap Tunnels">
+          <img src="/tap-tunnels-icon.svg" width="28" height="28" alt="" />
+          <span>Tap Tunnels</span>
         </div>
 
         <nav style={{ display: 'flex', gap: 4 }}>

@@ -1,12 +1,16 @@
 # Tap Studio
 
-> The HTTP workbench: compose requests, authenticate against real identity providers, execute
-> them, and keep the whole thing in your repo as reviewable Markdown.
+![Tap Studio icon](../assets/tap-studio-icon.svg)
 
-Tap Studio is the second half of Tap. Where the [Inspector](inspector.md) watches traffic that
-someone *else* sends to your machine, Studio is where **you** author and send the traffic —
-a request composer with first-class authentication, an AI assistant, and a workspace that is
-plain text in your git repo.
+> The HTTP request and auth credential crafter: compose, authenticate, execute, and keep the whole
+> thing in your repo as reviewable Markdown.
+
+Tap Studio is the outbound half of Tap Platform. Where [Tap Tunnels](inspector.md) routes traffic
+to your machine and its built-in Inspector shows what arrived, Studio is where **you** craft and
+send the traffic—a request composer with first-class authentication, an AI assistant, and a
+workspace that is plain text in your git repo.
+
+![Tap Studio request and credential craft workbench](../assets/tap-studio-workbench-hero.png)
 
 - On-disk format: [workspace-format.md](workspace-format.md)
 - Backend: `src/backend/Tap.Studio` (ASP.NET Core, REST + SSE)
@@ -32,6 +36,7 @@ plain text in your git repo.
 - [AI assistant](#ai-assistant)
 - [Git](#git)
 - [Importing from Postman](#importing-from-postman)
+- [Importing from OpenAPI](#importing-from-openapi)
 - [Desktop app](#desktop-app)
 - [Configuration](#configuration)
 
@@ -145,8 +150,41 @@ Two references in the **AppHost** project:
 <ProjectReference Include="path/to/Tap.Hosting.csproj" IsAspireProjectResource="false" />
 ```
 
-Building `Tap.Studio` builds its React UI, so this route needs **yarn on PATH**. The packaged
-`Tap.Aspire.Hosting.Studio` NuGet removes both the project reference and the yarn requirement.
+Building `Tap.Studio` builds its React UI, so this route needs **yarn on PATH**.
+
+### Or run the image instead
+
+`AddTapStudioContainer` runs the published `ghcr.io/philbir/tap-studio` image in place of a
+compiled project — no `ProjectReference`, no yarn, nothing to build, and Aspire pulls the image
+as part of starting the AppHost:
+
+```csharp
+var studio = builder.AddTapStudioContainer()
+    .WithWorkspaceFolder("tap")   // bind-mounted into the container at /workspace
+    .WithApi(orders);
+```
+
+It returns the same `TapStudioHandle`, so `WithApi`, `WithWorkspaceFolder`, `CallbackUrl`, and
+the rest behave identically. Three things differ:
+
+- **The workspace is a bind mount.** `WithWorkspaceFolder` points the mount at that folder and
+  creates it if it does not exist — Docker would otherwise create it owned by root, and the
+  workspace Studio scaffolds into it would not be writable from your editor.
+- **State lives in a named volume** (`<name>-state`, mounted at `/state`), so the OAuth token
+  cache and `system.json` survive a restart. Pass `persistState: false` to make it ephemeral.
+- **A container is not your machine.** The AI assistant cannot spawn the coding CLI you have
+  installed, an interactive OAuth flow cannot open your browser, and provider back ends that
+  shell out to a local binary (1Password's `op`, the Azure CLI) are not present. Use the project
+  route when you want those; use the image for a workspace that authenticates headlessly.
+
+The endpoint is published on loopback only and the Host allowlist is pinned to match; pass
+`exposeOnAllInterfaces: true` to widen it deliberately. The default pull policy is `Missing`, so
+a locally-built tag of the same name is used as-is:
+
+```bash
+docker build -t ghcr.io/philbir/tap-studio:local -f src/backend/Tap.Studio/Dockerfile .
+StudioContainer=true StudioImageTag=local aspire run   # samples/Studio.AppHost
+```
 
 ### Seeding an OAuth client
 
@@ -721,6 +759,71 @@ Because requests are Markdown, a change to a request is a change to a couple of 
 `POST /api/collections/import/postman` (Create → Collection → *Import from Postman* in the UI)
 converts a Postman collection export into a Tap collection: one `_collection.tap` plus a
 `*.req.tap` per request, with folders preserved as grouping directories.
+
+---
+
+## Importing from OpenAPI
+
+Create → Collection → *From OpenAPI*, or right-click a collection → *Import from OpenAPI…*.
+Upload a document or fetch a URL; pick the operations; choose a layout. JSON or YAML,
+OpenAPI 3.0/3.1, and Swagger 2.0 (converted on read).
+
+Two layouts, chosen per import:
+
+| Layout | Result |
+|---|---|
+| **One `.req.tap` per operation** | Structured editing, assertions, per-request docs. Grouped into folders by first tag. |
+| **One `.http` file per tag** | Portable — opens and sends in Visual Studio, VS Code REST Client, JetBrains, httpyac, Kulala. |
+
+What else comes across: `servers[0]` becomes the collection's `baseUrl` and the rest become
+stages; `securitySchemes` becomes an auth profile whose credentials are `{{variables}}` you
+fill in once (**nothing secret is ever taken from a document**); a `requestBody` schema becomes
+an example body, following `$ref` and preferring the spec's own `example`. Path and query
+parameters become declared `vars`, so a request documents its own inputs.
+
+Parsing is always server-side: the browser has no YAML parser, and `$ref` / `allOf` /
+Swagger-2.0 normalization must not exist in two places that can disagree. The document is
+staged first (`POST /api/openapi/documents` or `.../documents/fetch`) and the import references
+it by id, so the operation list you picked from and the document that gets written are provably
+the same one.
+
+### Re-syncing when the API changes
+
+Each import records `collections/<slug>/_openapi.lock.json` — the document it came from, plus
+two hashes per operation. One says whether *upstream* changed; the other, compared against the
+file on disk, says whether *you* changed it. Only when both moved is there a conflict.
+
+Right-click the collection → *Re-sync from OpenAPI…*. It re-fetches the recorded URL, diffs,
+and shows one row per operation with a **non-destructive default**:
+
+| Verdict | Default |
+|---|---|
+| New upstream | Create it |
+| Changed, file untouched | Update |
+| Changed **and** edited locally | **Keep mine** |
+| Gone upstream | Tag `deprecated` — never deleted |
+| File missing (renamed or moved away) | Leave alone |
+
+Updating never regenerates a file from scratch. It reads what is on disk, projects it to its
+spec, and overwrites only the fields the importer owns — URL, generated headers, example body.
+**Assertions, variables, auth, transport and the file's `id` are preserved structurally**: no
+code path here assigns them. Headers merge by name and are never removed, so one you added
+survives. A `.http` file is edited one `###` section at a time, and untouched sections come back
+byte-for-byte.
+
+Tracking survives a rename: `.req.tap` output is anchored by the request's `id:`, not its path,
+because moving a file rewrites no refs.
+
+The lock is machine-owned and invisible to the loader (which globs only `*.tap`, `*.md` and
+`*.http`). Deleting it loses re-sync and nothing else.
+
+### Suggested values (optional, needs an AI CLI)
+
+*Suggest values with AI* on the Options step proposes a value for each generated variable —
+reusing a workspace variable when one already means the same thing (`userName` → `{{user.name}}`),
+otherwise realistic sample data. It uses the same local CLI as the request assistant, sees
+variable **names, scopes and secret flags but never values**, and proposes only: you apply.
+The import is identical without it, which is the default state.
 
 ---
 

@@ -89,6 +89,7 @@
   --gutter: clamp(20px, 4vw, 64px);
   --band: clamp(64px, 8vw, 100px);
   --rail-width: 244px;
+  --rail-left: clamp(12px, 2.4vw, 34px);
   --header-h: 68px;
 
   font-family: var(--font-sans);
@@ -344,7 +345,7 @@ h3 {
   background: var(--nav-veil);
   backdrop-filter: var(--glass-blur-nav);
   -webkit-backdrop-filter: var(--glass-blur-nav);
-  padding: 0 var(--gutter);
+  padding: 0 var(--gutter) 0 var(--rail-left);
 }
 
 .brand {
@@ -352,31 +353,56 @@ h3 {
   flex: 0 0 auto;
   align-items: center;
   gap: 9px;
-  border: 1px solid transparent;
-  border-radius: 12px;
+  border: 2px solid rgba(79, 95, 176, 0.42);
+  border-radius: 14px;
+  background: var(--glass-surface-2);
   color: var(--ink-1);
   font-size: 18px;
   font-weight: 700;
-  padding: 7px 12px 7px 8px;
+  padding: 7px 14px 7px 8px;
+  box-shadow: var(--shadow-md);
   transition:
     background 0.15s ease,
     border-color 0.15s ease;
 }
 
 .brand:hover {
-  background: var(--card-surface);
-  border-color: var(--glass-border);
+  background: var(--bg-surface);
+  border-color: var(--accent);
   color: var(--ink-1);
 }
 
 .brand.current {
-  border-color: rgba(79, 95, 176, 0.3);
-  background: var(--accent-soft);
+  border-color: var(--accent);
+  background: linear-gradient(135deg, var(--accent-soft), var(--glass-surface-2));
+  box-shadow: 0 0 0 3px rgba(79, 95, 176, 0.14), var(--shadow-md);
 }
 
 .brand img {
-  height: 26px;
-  width: 26px;
+  height: 34px;
+  width: 34px;
+  border-radius: 9px;
+}
+
+.brand-copy {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.brand-copy strong {
+  color: var(--ink-1);
+  font-size: 15px;
+  line-height: 1.25;
+  white-space: nowrap;
+}
+
+.brand-copy > span {
+  color: var(--ink-3);
+  font-size: 11.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  white-space: nowrap;
 }
 
 .brand-version {
@@ -394,6 +420,8 @@ h3 {
   align-items: center;
   gap: 8px;
   min-width: 0;
+  border-left: 1px solid var(--line-1);
+  padding-left: clamp(12px, 1.8vw, 24px);
 }
 
 .product-pill {
@@ -461,8 +489,16 @@ h3 {
 }
 
 .header-cta {
+  gap: 8px;
   padding: 9px 18px;
   font-size: 14px;
+}
+
+.github-octocat {
+  width: 19px;
+  height: 19px;
+  flex: 0 0 auto;
+  fill: currentColor;
 }
 
 .rail-toggle {
@@ -500,7 +536,7 @@ h3 {
   overflow-y: auto;
   overscroll-behavior: contain;
   border-right: 1px solid var(--line-hairline);
-  padding: 26px 18px 26px clamp(12px, 2.4vw, 34px);
+  padding: 26px 18px 26px var(--rail-left);
 }
 
 .rail-label {
@@ -760,6 +796,13 @@ h3 {
   font-size: clamp(22px, 2.4vw, 28px);
   line-height: 1.15;
   letter-spacing: var(--tracking-display);
+}
+
+.product-card-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 14px;
+  box-shadow: var(--shadow-md);
 }
 
 .product-card p {
@@ -1642,6 +1685,357 @@ h3 {
   line-height: 1.5;
 }
 
+/* --- use cases ------------------------------------------------------------- */
+
+.usecase-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+}
+
+.usecase-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  background: var(--card-surface);
+  padding: clamp(20px, 2.4vw, 26px);
+  box-shadow: var(--shadow-card);
+  transition:
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.usecase-card:hover {
+  border-color: var(--accent);
+  box-shadow: 0 8px 24px rgba(18, 24, 43, 0.1);
+}
+
+.usecase-card h3 {
+  margin-bottom: 0;
+  font-size: 17px;
+  line-height: 1.3;
+  letter-spacing: var(--tracking-display);
+}
+
+.usecase-card p {
+  margin-bottom: 0;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* Chips sit on the baseline of the card so a short blurb doesn't float them. */
+.usecase-card .product-tags {
+  margin-top: auto;
+  padding-top: 6px;
+}
+
+/* The badge carries the job-to-product mapping and is the link into that
+   product's docs — one element rather than a label plus a separate link. */
+.product-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  padding: 5px 13px 5px 6px;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.product-badge img {
+  width: 18px;
+  height: 18px;
+}
+
+.product-badge.both {
+  border-color: transparent;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.product-badge:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* --- what ships ------------------------------------------------------------ */
+
+.ship-groups {
+  display: grid;
+  gap: 20px;
+}
+
+.ship-group {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  background: var(--card-surface);
+  padding: clamp(22px, 2.6vw, 30px);
+  box-shadow: var(--shadow-card);
+  scroll-margin-top: 88px;
+}
+
+.ship-group-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: start;
+}
+
+.ship-group-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.ship-group-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.ship-group-copy h3 {
+  margin-bottom: 6px;
+  font-size: 20px;
+  letter-spacing: var(--tracking-display);
+}
+
+.ship-group-copy p {
+  margin-bottom: 0;
+  max-width: 78ch;
+  color: var(--ink-2);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.ship-source {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1.5px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--ink-1);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 9px 14px;
+  white-space: nowrap;
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+
+.ship-source:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ship-source svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.channel-octocat {
+  fill: currentColor;
+}
+
+.ship-list {
+  display: grid;
+  margin: 18px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ship-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 24px;
+  align-items: start;
+  border-top: 1px solid var(--line-hairline);
+  padding: 16px 0;
+}
+
+.ship-item:last-child {
+  padding-bottom: 0;
+}
+
+.ship-item-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+
+/* A row that already names its platform wears the mark instead of a chip. */
+.ship-mark {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--ink-2);
+}
+
+.ship-mark svg,
+.ship-mark .raster-mark {
+  width: 16px;
+  height: 16px;
+}
+
+.ship-item-head strong {
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.ship-product {
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  padding: 3px 9px;
+}
+
+.ship-format {
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  padding: 3px 8px;
+}
+
+.ship-item-copy p {
+  margin-bottom: 0;
+  max-width: 84ch;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* A command is one line and must not widen the card: it scrolls inside itself. */
+.ship-cmd {
+  display: block;
+  overflow-x: auto;
+  border: 1px solid var(--line-hairline);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  color: var(--ink-1);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  padding: 9px 12px;
+  white-space: pre;
+}
+
+.ship-item-copy .ship-cmd {
+  margin-top: 12px;
+}
+
+.ship-item-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.plat-row {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.plat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--bg-subtle);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: var(--tracking-micro);
+  text-transform: uppercase;
+  padding: 5px 11px 5px 9px;
+  white-space: nowrap;
+}
+
+.plat-chip svg,
+.plat-chip .raster-mark {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+/* A published logo that is multi-tone rather than a single path — it keeps its own
+   colours, so it never takes the currentColor treatment the drawn marks get. */
+.raster-mark {
+  display: block;
+  object-fit: contain;
+}
+
+.ship-note-mark {
+  display: inline-flex;
+  vertical-align: -3px;
+  margin-right: 7px;
+}
+
+.ship-note-mark .raster-mark,
+.ship-note-mark svg {
+  width: 15px;
+  height: 15px;
+}
+
+.ship-cmds {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+.ship-group-foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-top: 1px solid var(--line-hairline);
+  margin-top: 18px;
+  padding-top: 16px;
+}
+
+.ship-group-foot p {
+  margin: 0;
+  max-width: 84ch;
+  color: var(--ink-3);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
 /* --- dark ------------------------------------------------------------------ */
 
 @media (prefers-color-scheme: dark) {
@@ -1696,7 +2090,8 @@ h3 {
   }
 
   .button.ghost,
-  .nav-cta {
+  .nav-cta,
+  .ship-source {
     background: var(--glass-surface-2);
     color: var(--ink-1);
   }
@@ -1739,7 +2134,8 @@ h3 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .highlight-grid {
+  .highlight-grid,
+  .usecase-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -1796,7 +2192,8 @@ h3 {
 /* The taglines are the first thing to go: the two product names still read as a
    switcher on their own, and the header has to stay one row. */
 @media (max-width: 1240px) {
-  .product-pill-text span {
+  .product-pill-text span,
+  .brand-copy > span {
     display: none;
   }
 }
@@ -1805,10 +2202,6 @@ h3 {
   .site-header {
     gap: 10px;
     padding-inline: clamp(14px, 4vw, 32px);
-  }
-
-  .brand span:not(.brand-version) {
-    display: none;
   }
 
   .brand-version {
@@ -1828,8 +2221,7 @@ h3 {
   }
 }
 
-/* Icon-only would put two copies of the tap mark side by side — the brand and
-   the Inspector share it — so the names shorten instead of disappearing. */
+/* Keep the three distinct product marks visible; names shorten before icons disappear. */
 @media (max-width: 620px) {
   .site-header {
     gap: 8px;
@@ -1838,6 +2230,10 @@ h3 {
 
   .product-pill-long {
     display: none;
+  }
+
+  .brand-copy strong {
+    font-size: 12.5px;
   }
 
   .product-pill-short {
@@ -1885,6 +2281,7 @@ h3 {
   .plan-grid,
   .promise-panel,
   .highlight-grid,
+  .usecase-grid,
   .docs-wrap {
     grid-template-columns: minmax(0, 1fr);
   }
@@ -1914,6 +2311,28 @@ h3 {
   .diagram-row,
   .diagram-row:first-child {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  /* The source button drops under the group's title rather than squeezing it. */
+  .ship-group-head {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .ship-source {
+    grid-column: 1 / -1;
+    justify-self: start;
+  }
+
+  .ship-item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .ship-item-side {
+    align-items: flex-start;
+  }
+
+  .plat-row {
+    justify-content: flex-start;
   }
 
   .final-cta-panel {

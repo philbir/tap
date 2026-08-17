@@ -11,8 +11,9 @@
     <ToolCommandName>tap</ToolCommandName>
     <IsPackable>true</IsPackable>
     <PackageId>Tap</PackageId>
-    <Title>Tap</Title>
-    <Description>tap — ngrok-style HTTP inspector with optional Cloudflare tunnels. Install as a global .NET tool: `dotnet tool install -g Tap`. Run `tap --help` to get started.</Description>
+    <TapProductIcon>Tunnels</TapProductIcon>
+    <Title>Tap Tunnels CLI</Title>
+    <Description>Tap Tunnels — local HTTP tunnels with inspection built in. Install as a global .NET tool: `dotnet tool install -g Tap`. Run `tap --help` to get started.</Description>
     <PackageTags>tap;http;inspector;proxy;cloudflare;cloudflared;tunnel;ngrok;dotnet-tool</PackageTags>
 
     <!-- The bundled wwwroot includes a .gitkeep; without this NuGet's default-excludes

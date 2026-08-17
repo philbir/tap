@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { href, useActiveSection } from "../router";
 import { pages, productOrder, repoUrl, version, type PageId } from "../site";
+import { GitHubMark } from "./icons";
 
 export const Shell = ({ page, children }: { page: PageId; children: React.ReactNode }) => {
   const meta = pages[page];
@@ -25,8 +26,11 @@ export const Shell = ({ page, children }: { page: PageId; children: React.ReactN
           href={href("home")}
           aria-current={page === "home" ? "page" : undefined}
         >
-          <img src="./tap-mark.svg" alt="" />
-          <span>Tap</span>
+          <img src={pages.home.icon} alt="" />
+          <span className="brand-copy">
+            <strong>Tap Platform</strong>
+            <span>Studio + Tunnels</span>
+          </span>
           <span className="brand-version">{version}</span>
         </a>
 
@@ -53,6 +57,7 @@ export const Shell = ({ page, children }: { page: PageId; children: React.ReactN
 
         <div className="header-actions">
           <a className="button ghost header-cta" href={repoUrl}>
+            <GitHubMark />
             GitHub
           </a>
           <button
@@ -102,9 +107,9 @@ export const Shell = ({ page, children }: { page: PageId; children: React.ReactN
 
 const SiteFooter = () => (
   <footer className="site-footer">
-    <span>Tap</span>
+    <span>Tap Platform</span>
     <span className="mono">
-      {version} · local-first HTTP tunnels, inspection, and a request workbench
+      {version} · the local-first HTTP workbench · Studio + Tunnels
     </span>
     <a href={repoUrl}>GitHub</a>
   </footer>

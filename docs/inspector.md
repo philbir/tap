@@ -1,10 +1,15 @@
-# Tap Tunnel + Inspector
+# Tap Tunnels
 
-> Give a local service a real public URL, then see exactly what hit it.
+![Tap Tunnels icon](../assets/tap-tunnels-icon.svg)
 
-This is the reference for the tunnelling and inspection half of Tap: the `tap` CLI, the Aspire
-integration (`Tap.Hosting`), the capture server (`Tap.Server`), and the Cloudflare / Tailscale
-providers in front of them. For the request workbench, see [studio.md](studio.md).
+> Tunnels with inspection built in. Give a local service a real URL, then see exactly what hit it.
+
+Tap Tunnels is the inbound half of Tap Platform. It combines the `tap` CLI, Aspire integration
+(`Tap.Hosting`), Cloudflare / Tailscale providers, capture server (`Tap.Server`), and Inspector UI
+as one product. **Tunnels** is the product; **Inspector** is the built-in view that shows what
+crossed the tunnel. For the outbound request and credential crafter, see [Tap Studio](studio.md).
+
+![Tap Tunnels with inspection built in](../assets/tap-tunnels-hero.png)
 
 - Deep technical background: [ARCHITECTURE.md](ARCHITECTURE.md)
 - Getting started, install, and the short version: [README](../README.md)
@@ -252,6 +257,21 @@ api.WithTap(tap);
 ```
 
 UI on <http://localhost:5198>, proxy on <http://localhost:5199>.
+
+**The same inspector, without the project reference**
+
+```csharp
+var tap = builder.AddTapContainer();   // ghcr.io/philbir/tap
+api.WithTap(tap);
+```
+
+`AddTapContainer` registers the published image as a container resource, so Aspire pulls it as
+part of starting the AppHost and the consumer csproj needs neither `Tap.Server` nor the
+generated `Projects.Tap_Server` type. Everything downstream — `WithTap`, the tunnel builders,
+the dashboard URLs — behaves identically; the upstream URL handed to the container is rewritten
+to `host.docker.internal` for you. The pull policy defaults to `Missing`, so a locally-built
+tag of the same name is used as-is. Tap Studio has the same pair: `AddTapStudio` for a project,
+`AddTapStudioContainer` for `ghcr.io/philbir/tap-studio` ([studio.md](studio.md#or-run-the-image-instead)).
 
 **Quick public tunnel**
 

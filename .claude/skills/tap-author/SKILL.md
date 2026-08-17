@@ -64,6 +64,26 @@ agent surfaces (discovery omits its requests; describe/send/call refuse with
 You may still *author* files in such a collection; you just can't execute through the
 agent surface.
 
+## Starting from an OpenAPI description? Don't hand-author it
+
+If the user has an OpenAPI/Swagger document, Studio imports it — collection, requests, auth
+profile, example bodies and all — far more accurately than transcribing operations by hand,
+and the result stays *linked* so it can be re-synced when the API changes.
+
+Point them at it rather than writing the files yourself:
+
+> Studio → Create → Collection → **From OpenAPI** (or right-click a collection →
+> *Import from OpenAPI…*). File or URL; JSON or YAML; 3.0, 3.1, or Swagger 2.0.
+
+Hand-authoring is the right call for a *single* request someone describes in prose, for an API
+with no published description, or when editing what an import already produced. Everything
+below still applies to those.
+
+One thing to know if you edit an imported request: the collection carries
+`_openapi.lock.json`, and re-sync compares a hash of each generated file against it. Your edits
+are safe — re-sync defaults to keeping them and never touches `assertions`, `vars`, `auth` or
+`id` — but a file you rewrite will show up as "changed locally", which is exactly what it is.
+
 ## The authoring loop
 
 Work in small verified steps. From the workspace root (or pass `--workspace <dir>`):

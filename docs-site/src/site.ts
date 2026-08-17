@@ -1,7 +1,7 @@
 export const version = import.meta.env.VITE_TAP_VERSION ?? "v0.1.0";
 export const repoUrl = import.meta.env.VITE_TAP_REPO_URL ?? "https://github.com/philbir/tap";
 
-export type PageId = "home" | "inspector" | "studio";
+export type PageId = "home" | "tunnels" | "studio";
 
 export type NavItem = {
   /** Section id on the page. Empty means the top of the page. */
@@ -27,37 +27,40 @@ export type PageMeta = {
 };
 
 /** The two product pages, in the order the header switcher lists them. */
-export const productOrder: PageId[] = ["inspector", "studio"];
+export const productOrder: PageId[] = ["studio", "tunnels"];
 
 export const pages: Record<PageId, PageMeta> = {
   home: {
     id: "home",
-    name: "Overview",
-    shortName: "Overview",
-    tagline: "The whole story",
-    title: "Tap — free, local-first HTTP tunnels, inspection, and a request workbench",
-    navLabel: "On this page",
+    name: "Tap Platform",
+    shortName: "Platform",
+    tagline: "Studio + Tunnels",
+    icon: "./tap-platform-icon.svg",
+    title: "Tap Platform — the local-first HTTP workbench",
+    navLabel: "Platform guide",
     nav: [
       { id: "", label: "Overview" },
+      { id: "use-cases", label: "Use cases" },
       { id: "promise", label: "The promise" },
       { id: "highlights", label: "What that buys you" },
-      { id: "products", label: "Two products" },
+      { id: "products", label: "Studio + Tunnels" },
       { id: "paywall", label: "The subscription you skip" },
       { id: "pricing", label: "One plan" },
       { id: "included", label: "What's included" },
+      { id: "ships", label: "What ships" },
       { id: "principles", label: "Shared foundations" },
       { id: "together", label: "Used together" },
       { id: "start", label: "Get started" },
     ],
   },
-  inspector: {
-    id: "inspector",
-    name: "Tunnel + Inspector",
-    shortName: "Inspector",
-    tagline: "Traffic arriving at your machine",
-    icon: "./tap-mark.svg",
-    title: "Tap Tunnel + Inspector — public URLs for localhost, with every request captured",
-    navLabel: "Inspector docs",
+  tunnels: {
+    id: "tunnels",
+    name: "Tap Tunnels",
+    shortName: "Tunnels",
+    tagline: "Tunnels with inspection",
+    icon: "./tap-tunnels-icon.svg",
+    title: "Tap Tunnels — public URLs for localhost with inspection built in",
+    navLabel: "Tunnels docs",
     nav: [
       { id: "", label: "Overview" },
       { id: "inspector-features", label: "What it does" },
@@ -78,9 +81,9 @@ export const pages: Record<PageId, PageMeta> = {
     id: "studio",
     name: "Tap Studio",
     shortName: "Studio",
-    tagline: "Crafting, sending, and testing",
+    tagline: "Requests + auth credentials",
     icon: "./tap-studio-icon.svg",
-    title: "Tap Studio — an HTTP workbench with real auth, tests in CI, and a git-native workspace",
+    title: "Tap Studio — the HTTP request and auth credential crafter",
     navLabel: "Studio docs",
     nav: [
       { id: "", label: "Overview" },
@@ -100,7 +103,7 @@ export const pages: Record<PageId, PageMeta> = {
   },
 };
 
-export const pageOrder: PageId[] = ["home", "inspector", "studio"];
+export const pageOrder: PageId[] = ["home", "studio", "tunnels"];
 
 /**
  * Anchors from the previous one-page site. Everything used to live under a bare
@@ -111,19 +114,20 @@ export const legacyAnchors: Record<string, string> = {
   top: "/home",
   products: "/home/products",
   principles: "/home/principles",
-  inspector: "/inspector",
-  "inspector-features": "/inspector/inspector-features",
-  "use-cases": "/inspector/use-cases",
-  quickstart: "/inspector/quickstart",
-  "entry-points": "/inspector/entry-points",
-  cli: "/inspector/cli",
-  cloudflare: "/inspector/cloudflare",
-  tailscale: "/inspector/tailscale",
-  auth: "/inspector/auth",
-  modes: "/inspector/modes",
-  architecture: "/inspector/architecture",
-  config: "/inspector/config",
-  "inspector-docs": "/inspector",
+  inspector: "/tunnels",
+  tunnels: "/tunnels",
+  "inspector-features": "/tunnels/inspector-features",
+  "use-cases": "/tunnels/use-cases",
+  quickstart: "/tunnels/quickstart",
+  "entry-points": "/tunnels/entry-points",
+  cli: "/tunnels/cli",
+  cloudflare: "/tunnels/cloudflare",
+  tailscale: "/tunnels/tailscale",
+  auth: "/tunnels/auth",
+  modes: "/tunnels/modes",
+  architecture: "/tunnels/architecture",
+  config: "/tunnels/config",
+  "inspector-docs": "/tunnels",
   studio: "/studio",
   "studio-features": "/studio/studio-features",
   "studio-compose": "/studio/studio-compose",

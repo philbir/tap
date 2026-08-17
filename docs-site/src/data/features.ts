@@ -4,7 +4,7 @@ export type Feature = {
   glyph: string;
 };
 
-export const inspectorFeatures: Feature[] = [
+export const tunnelFeatures: Feature[] = [
   {
     title: "Tunnel without ceremony",
     text: "Use free TryCloudflare URLs, dashboard connector tokens, API-managed Cloudflare DNS, or Tailscale Serve/Funnel when your tailnet is the right boundary.",
@@ -43,6 +43,11 @@ export const inspectorFeatures: Feature[] = [
 ];
 
 export const studioFeatures: Feature[] = [
+  {
+    title: "Start from your OpenAPI description",
+    text: "Import a spec by file or URL and pick which operations become requests — as one .req.tap each or one portable .http file per tag. Servers become the baseUrl and stages, security schemes become an auth profile wired to variables, and schemas become example bodies. The import stays linked, so re-sync shows what changed upstream without touching the assertions you added.",
+    glyph: "O",
+  },
   {
     title: "Full request composition",
     text: "Method, URL, query params, headers, and bodies as None / Form / Multipart / Raw / Binary / GraphQL — with JSON and XML formatting, multi-file uploads, and a GraphQL editor backed by the live schema.",

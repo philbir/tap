@@ -102,7 +102,7 @@ test that didn't really run.
 ## Related packages
 
 - **`Tap.Execution`** — the engine, if you want to embed it.
-- **`Tap`** — the separate tunnel/inspector CLI. Different product, different command; both
+- **`Tap`** — the separate Tap Tunnels CLI, with inspection built in. Different product and command; both
   can be installed side by side.
 
 Full documentation: [docs/studio.md](https://github.com/philbir/tap/blob/main/docs/studio.md).

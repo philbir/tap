@@ -1,14 +1,15 @@
 <div align="center">
   <p>
-    <img src="assets/tap-logo.svg" alt="Tap" width="150">
+    <img src="assets/tap-platform-icon.svg" alt="Tap Platform" width="76">
   </p>
 
+  <h1>Tap Platform</h1>
+
   <picture>
-    <source srcset="assets/tap-hero-dark.png" media="(prefers-color-scheme: dark)">
-    <img src="assets/tap-hero.png" alt="Tap tunnel and HTTP inspector illustration" width="620">
+    <img src="assets/tap-platform-hero.png" alt="Tap Platform distributing HTTP flow between Studio and Tunnels" width="720">
   </picture>
 
-  <p><strong>Two local-first tools for HTTP: one to watch traffic arrive, one to send it.</strong></p>
+  <p><strong>The local-first HTTP workbench: craft requests in Studio, route and inspect traffic with Tunnels.</strong></p>
 
   <p>
     <a href="https://philbir.github.io/tap/"><strong>Landing page and docs</strong></a>
@@ -26,7 +27,7 @@
 
 ---
 
-## The big picture
+## The Tap story
 
 Local HTTP development has two halves. Sometimes the internet needs to reach your laptop —
 a webhook, an OAuth callback, a mobile build, a partner poking at your machine for ten minutes
@@ -34,12 +35,12 @@ a webhook, an OAuth callback, a mobile build, a partner poking at your machine f
 compose a request, authenticate properly, send it, and keep it somewhere your team can find it
 next month.
 
-Tap is two products, one for each half:
+**Tap Platform** is the umbrella HTTP workbench. It brings two focused products into one story:
 
 | | | |
 |---|---|---|
-| 🔌 | **[Tap Tunnel + Inspector](#-tap-tunnel--inspector)** | Give localhost a real public URL through Cloudflare Tunnel or Tailscale, and capture every request, response, SSE event, and WebSocket frame that flows through it. Runs as the `tap` CLI or as .NET Aspire resources. |
-| 🧪 | **[Tap Studio](#-tap-studio)** | An HTTP workbench: compose requests, run real authentication flows, execute, chain them into flows and test sets that also run in CI, and keep the whole workspace in your git repo as Markdown. Ships as a desktop app, with an AI assistant built in. |
+| <img src="assets/tap-studio-icon.svg" alt="" width="42"> | **[Tap Studio](#tap-studio)** | The HTTP request and auth credential crafter. Compose requests, run real authentication flows, execute, chain them into flows and CI tests, and keep the workspace in git-native Markdown. |
+| <img src="assets/tap-tunnels-icon.svg" alt="" width="42"> | **[Tap Tunnels](#tap-tunnels)** | Tunnels with inspection built in. Give localhost a URL through Cloudflare or Tailscale and inspect every request, response, SSE event, and WebSocket frame that flows through it. |
 
 They share a philosophy more than they share code:
 
@@ -54,22 +55,28 @@ They share a philosophy more than they share code:
   public exposure is something you opt into with your eyes open.
 
 ```text
-inbound    Internet ─▶ Cloudflare Tunnel / Tailscale ─▶ Tap capture proxy ─▶ your service
+inbound    Internet ─▶ Tap Tunnels (Cloudflare / Tailscale) ─▶ your service
                                                               │
                                                               ▼
-                                                        Inspector UI
+                                                   built-in Inspector
                                                         requests · SSE · WS · replay
 
 outbound   request.req.tap + auth profile + environment ─▶ Tap Studio ─▶ any API
            └──────── Markdown, in your repo ─────────┘     executor
 ```
 
-Use either on its own. Used together, Studio composes the call and the Inspector shows you what
-your service actually received.
+Use either product on its own. Used together, Studio crafts the authenticated call and Tap
+Tunnels' built-in Inspector shows you what your service actually received.
 
 ---
 
-## 🔌 Tap Tunnel + Inspector
+## Tap Tunnels
+
+<img src="assets/tap-tunnels-icon.svg" alt="Tap Tunnels" width="64">
+
+> **Tunnels with inspection built in.**
+
+<img src="assets/tap-tunnels-hero.png" alt="Tap Tunnels carrying and inspecting HTTP traffic" width="680">
 
 For the moment when localhost needs to behave like a real internet endpoint, but you still want
 full visibility into every request. Mobile app hooks, webhook deliveries, third-party OAuth
@@ -168,7 +175,7 @@ or `.WithTailscaleFunnel(...)` to put a tunnel in front — the
 
 | Package | Purpose |
 |---|---|
-| `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `WithTunnel`, `WithQuickTunnel`, `WithTailscaleServe` (tailnet-only, default), `WithTailscaleFunnel` (public, opt-in), `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon` / `WithEphemeralDaemon` / `WithFunnelPort`. |
+| `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `WithTunnel`, `WithQuickTunnel`, `WithTailscaleServe` (tailnet-only, default), `WithTailscaleFunnel` (public, opt-in), `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon` / `WithEphemeralDaemon` / `WithFunnelPort` — plus `AddTapStudio` / `AddTapStudioContainer` for Studio. |
 | `Tap.Server` | ASP.NET Core capture server: YARP reverse proxy, capture middleware, WebSocket-terminating proxy, SSE event parser, REST API, `/api/stream` push channel, and the bundled React Inspector UI. |
 | `Tap.Cli` | Local command host that reuses the same server code. |
 
@@ -178,11 +185,15 @@ environment variables.
 
 ---
 
-## 🧪 Tap Studio
+## Tap Studio
 
-The other direction: **you** are the client. Studio is a full HTTP request workbench —
-compose, authenticate, execute, document — with a workspace that lives in your repository as
-plain Markdown.
+<img src="assets/tap-studio-icon.svg" alt="Tap Studio" width="64">
+
+<img src="assets/tap-studio-workbench-hero.png" alt="Tap Studio crafting requests and auth credentials" width="680">
+
+The other direction: **you** are the client. Studio is the HTTP request and auth credential
+crafter—compose, authenticate, execute, and document—with a workspace that lives in your
+repository as plain Markdown.
 
 Already using Aspire? `builder.AddTapStudio<Projects.Tap_Studio>().WithApi(orders)` runs Studio
 as a companion resource of your AppHost, pinned to a workspace folder in the repo and pointed at
@@ -323,6 +334,19 @@ Studio ships as a native desktop app (Tauri 2 wrapping the self-contained `Tap.S
 sidecar). Grab the `.dmg`, `.msi`/`.exe`, or `.deb` from
 [Releases](https://github.com/philbir/tap/releases); it self-updates from there.
 
+There is also a container — `ghcr.io/philbir/tap-studio`, the same UI, API, and engine on port
+8080 with the workspace bind-mounted at `/workspace`. In an Aspire AppHost,
+`AddTapStudioContainer()` runs it for you; by hand it is:
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 -v "$PWD:/workspace" ghcr.io/philbir/tap-studio:latest
+```
+
+Bind the published port to loopback like that unless you mean otherwise: Studio reads and writes
+the workspace and holds cached tokens, and a plain `-p 8080:8080` offers all of it to the
+network. What the container cannot do is reach your machine — no coding CLI for the assistant to
+spawn, no browser to open for an interactive sign-in, no `op` or `az` on PATH.
+
 From source, the whole dev loop is one command:
 
 ```bash
@@ -389,6 +413,8 @@ samples/                      Sample AppHosts, the demo API, and a sample worksp
 ```
 
 ## Documentation
+
+- [Product story and naming](docs/product-story.md)
 
 | Document | Contents |
 |---|---|

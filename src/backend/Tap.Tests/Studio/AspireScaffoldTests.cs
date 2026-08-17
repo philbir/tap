@@ -111,7 +111,7 @@ public class AspireScaffoldTests : IDisposable
     {
         File.WriteAllText(Path_("tap.md"), "---\nkind: workspace\nname: legacy\n---\n");
 
-        var result = AspireWorkspaceScaffold.Run(_root, []);
+        var result = AspireWorkspaceScaffold.Run(_root, Array.Empty<string>());
 
         Assert.True(result.IsNoOp);
         Assert.False(File.Exists(Path_("workspace.tap")));
@@ -120,7 +120,7 @@ public class AspireScaffoldTests : IDisposable
     [Fact]
     public void No_apis_still_produces_a_usable_workspace()
     {
-        var result = AspireWorkspaceScaffold.Run(_root, []);
+        var result = AspireWorkspaceScaffold.Run(_root, Array.Empty<string>());
 
         Assert.Equal(["workspace.tap"], result.Created);
         Assert.Empty(new WorkspaceLoader().Load(_root).Errors);

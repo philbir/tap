@@ -164,37 +164,14 @@ public static partial class AiRequestAssistant
         return sb.ToString();
     }
 
-    /// <summary>Marks the workspace-derived section of the prompt. <see cref="Clean"/> strips it
-    /// out of every interpolated value, so nothing read off disk can forge the closing marker
-    /// and continue as if it were our own instructions.</summary>
-    private const string FenceToken = "UNTRUSTED-WORKSPACE-DATA";
+    /// <summary>Shared with every other assistant so the hardening cannot drift. See
+    /// <see cref="AiPromptSafety"/> for what these do and why.</summary>
+    private const string FenceToken = AiPromptSafety.FenceToken;
 
-    /// <summary>Flattens one workspace-derived string into something safe to interpolate: no
-    /// control characters (a newline plus a `##` heading is all it takes to look like a new
-    /// section), no backticks (which would break out of a fenced block), no fence marker, and
-    /// a hard length cap so a single description can't crowd out the real instructions.</summary>
-    private static string Clean(string? value, int max = 200)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-
-        var sb = new StringBuilder(Math.Min(value.Length, max));
-        foreach (var ch in value)
-        {
-            if (sb.Length >= max) break;
-            if (char.IsControl(ch))
-            {
-                if (sb.Length > 0 && sb[^1] != ' ') sb.Append(' ');
-                continue;
-            }
-            sb.Append(ch == '`' ? '\'' : ch);
-        }
-
-        var cleaned = sb.ToString().Replace(FenceToken, "", StringComparison.OrdinalIgnoreCase).Trim();
-        return value.Length > max ? cleaned + "…" : cleaned;
-    }
+    private static string Clean(string? value, int max = 200) => AiPromptSafety.Clean(value, max);
 
     private static string CleanJoin(string separator, IReadOnlyList<string> values)
-        => string.Join(separator, values.Take(40).Select(v => Clean(v, 120)));
+        => AiPromptSafety.CleanJoin(separator, values);
 
     [GeneratedRegex("```tap-request\\s*\\n(.*?)```", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
     private static partial Regex TapRequestBlock();

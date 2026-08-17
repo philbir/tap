@@ -93,7 +93,9 @@ The workspace root is simply the folder you open in Studio or pass to the CLI
 older `.tap/` sub-folder layout keeps loading — while skipping package/VCS caches
 (`node_modules`, `.git`, `bin`, `obj`, …) and capping single files at 8 MiB. Tap also keeps
 a housekeeping `.tap/` directory under the root for the file provider's variable store
-(§12.1); that directory is data, not workspace files.
+(§12.1); that directory is data, not workspace files. A collection imported from an OpenAPI
+description also carries `_openapi.lock.json`, which records the source document and the hashes
+re-sync compares against — likewise data, and likewise never loaded as a workspace file.
 
 The four top-level directories (`auth/`, `environments/`, `tests/`, `collections/`) are
 structural: `auth/`, `environments/`, and `tests/` hold flat lists of typed files;

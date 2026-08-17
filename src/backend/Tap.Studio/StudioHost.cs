@@ -98,6 +98,19 @@ public static class StudioHost
             .WithTools<Mcp.TapStudioTools>();
         builder.Services.AddHttpContextAccessor();
 
+        // OpenAPI spec fetching. AllowAutoRedirect must stay off: HttpExecutionHelpers re-validates
+        // every hop, and that per-hop check *is* the SSRF guard for a user-supplied spec URL. Let
+        // the handler follow redirects itself and the guard never runs.
+        builder.Services.AddHttpClient("openapi")
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        builder.Services.AddSingleton<OpenApi.OpenApiDocumentCache>();
+        // Turns each Aspire-referenced API's OpenAPI document into real requests on first run.
+        // A hosted service rather than part of the boot scaffold: that path is synchronous and
+        // already the slowest thing in a cold start, and this one makes network calls.
+        builder.Services.AddHostedService<AspireOpenApiScaffold>();
+        builder.Services.AddSingleton<OpenApi.OpenApiSpecSource>(sp =>
+            new OpenApi.OpenApiSpecSource(sp.GetRequiredService<IHttpClientFactory>().CreateClient("openapi")));
+
         builder.Services.AddHttpClient("auth");
         builder.Services.AddSingleton<OidcDiscoveryClient>(sp =>
             new OidcDiscoveryClient(sp.GetRequiredService<IHttpClientFactory>().CreateClient("auth")));
@@ -148,7 +161,7 @@ public static class StudioHost
             {
                 var scaffold = AspireWorkspaceScaffold.Run(
                     options.WorkspaceRoot,
-                    AspireWorkspaceScaffold.ReadApiNames(app.Configuration));
+                    AspireWorkspaceScaffold.ReadApis(app.Configuration));
 
                 if (!scaffold.IsNoOp)
                 {
@@ -229,6 +242,7 @@ public static class StudioHost
         RequestEndpoints.Map(app);
         CatalogEndpoints.Map(app);
         CollectionEndpoints.Map(app);
+        OpenApiEndpoints.Map(app);
         TagEndpoints.Map(app);
         StreamEndpoints.Map(app);
         HttpFileEndpoints.Map(app);

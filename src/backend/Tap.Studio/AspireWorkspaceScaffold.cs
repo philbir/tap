@@ -24,21 +24,62 @@ namespace Tap.Studio;
 /// </summary>
 public static class AspireWorkspaceScaffold
 {
-    /// <summary>Names of the APIs the AppHost passed, from <c>Studio__Aspire__Apis</c>.</summary>
-    public static IReadOnlyList<string> ReadApiNames(IConfiguration config)
+    /// <summary>One API the AppHost pointed the Studio at.</summary>
+    /// <param name="OpenApiRoute">Path to its OpenAPI document, or null if it publishes none.</param>
+    public sealed record AspireApi(string Name, string? OpenApiRoute);
+
+    /// <summary>
+    /// The APIs the AppHost passed, from <c>Studio__Aspire__Apis</c>.
+    ///
+    /// <para>Accepts both shapes: the current array of objects, and the bare
+    /// <c>["orders-api"]</c> array older AppHosts emit. An AppHost and a Studio can be different
+    /// versions mid-upgrade, and failing to scaffold is a worse outcome than ignoring a route.</para>
+    /// </summary>
+    public static IReadOnlyList<AspireApi> ReadApis(IConfiguration config)
     {
         var raw = config["Studio:Aspire:Apis"];
         if (string.IsNullOrWhiteSpace(raw)) return [];
 
         try
         {
-            return JsonSerializer.Deserialize<string[]>(raw) ?? [];
+            using var doc = JsonDocument.Parse(raw);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return [];
+
+            var apis = new List<AspireApi>();
+            foreach (var element in doc.RootElement.EnumerateArray())
+            {
+                switch (element.ValueKind)
+                {
+                    case JsonValueKind.String when element.GetString() is { Length: > 0 } legacy:
+                        apis.Add(new AspireApi(legacy, null));
+                        break;
+                    case JsonValueKind.Object:
+                        var name = Property(element, "name");
+                        if (name is { Length: > 0 }) apis.Add(new AspireApi(name, Property(element, "openApiRoute")));
+                        break;
+                }
+            }
+            return apis;
         }
         catch (JsonException)
         {
             return [];
         }
     }
+
+    private static string? Property(JsonElement element, string name)
+    {
+        foreach (var p in element.EnumerateObject())
+        {
+            if (string.Equals(p.Name, name, StringComparison.OrdinalIgnoreCase))
+                return p.Value.ValueKind == JsonValueKind.String ? p.Value.GetString() : null;
+        }
+        return null;
+    }
+
+    /// <summary>Names only. Kept for callers that don't care about the OpenAPI route.</summary>
+    public static IReadOnlyList<string> ReadApiNames(IConfiguration config)
+        => ReadApis(config).Select(a => a.Name).ToArray();
 
     /// <summary>What a scaffold run created, for logging. Empty means the run was a no-op.</summary>
     public sealed record Result(IReadOnlyList<string> Created)
@@ -50,6 +91,17 @@ public static class AspireWorkspaceScaffold
     /// Creates whatever is missing under <paramref name="root"/>. Safe to call on every start.
     /// </summary>
     public static Result Run(string root, IReadOnlyList<string> apiNames)
+        => Run(root, apiNames.Select(n => new AspireApi(n, null)).ToArray());
+
+    /// <summary>
+    /// Creates whatever is missing under <paramref name="root"/>. Safe to call on every start.
+    ///
+    /// <para>An API with an OpenAPI route gets its collection but <i>no</i> starter request: the
+    /// post-startup scaffold fetches the document and writes real requests instead, falling back
+    /// to the starter only if that fails. Writing both would leave a stray placeholder next to the
+    /// generated requests forever.</para>
+    /// </summary>
+    public static Result Run(string root, IReadOnlyList<AspireApi> apis)
     {
         var created = new List<string>();
         Directory.CreateDirectory(root);
@@ -67,7 +119,7 @@ public static class AspireWorkspaceScaffold
                 created);
         }
 
-        foreach (var api in apiNames)
+        foreach (var (api, openApiRoute) in apis)
         {
             var slug = Slug(api);
             if (slug.Length == 0) continue;
@@ -92,6 +144,8 @@ public static class AspireWorkspaceScaffold
                     }),
                     created);
             }
+
+            if (openApiRoute is { Length: > 0 }) continue;
 
             var starter = Path.Combine(directory, "smoke.http");
             if (!File.Exists(starter)) Write(directory, "smoke.http", StarterRequest(api), created);
@@ -133,6 +187,25 @@ public static class AspireWorkspaceScaffold
         Accept: application/json
 
         """.Replace("%API%", api, StringComparison.Ordinal);
+
+    /// <summary>Writes the placeholder for one API if it isn't already there. Used by the
+    /// post-startup OpenAPI scaffold when a fetch fails, so the collection is never left empty.</summary>
+    public static bool WriteStarterRequest(string root, string slug, string apiName)
+    {
+        var directory = Path.Combine(root, "collections", slug);
+        var starter = Path.Combine(directory, "smoke.http");
+        if (File.Exists(starter)) return false;
+
+        // A collection that already holds requests doesn't need a placeholder alongside them.
+        if (Directory.Exists(directory)
+            && Directory.EnumerateFiles(directory, "*" + KindResolver.HttpExtension).Any())
+        {
+            return false;
+        }
+
+        Write(directory, "smoke.http", StarterRequest(apiName), []);
+        return true;
+    }
 
     private static void Write(string directory, string fileName, string content, List<string> created)
     {

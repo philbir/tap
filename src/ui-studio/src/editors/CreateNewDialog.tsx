@@ -4,7 +4,7 @@ import {
 } from '@mantine/core'
 import {
   IconAlertCircle, IconArrowsSplit2, IconChecklist, IconFileCode, IconFolders, IconLock, IconPlus,
-  IconSend, IconUpload, IconWorld,
+  IconApi, IconSend, IconUpload, IconWorld,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -12,6 +12,7 @@ import { api, ApiError } from '../api/client'
 import type { CollectionSummary, WorkspaceFileKind } from '../api/types'
 import { useTapStore } from '../store'
 import { AuthWizard } from './AuthWizard'
+import { ImportOpenApiDialog } from './ImportOpenApiDialog'
 import { COLLECTION_FILE, fileNameFor, httpFileNameFor } from '../shell/tapFiles'
 
 interface Props {
@@ -44,7 +45,7 @@ const KIND_OPTIONS: KindOption[] = [
 ]
 
 /** Collection sub-mode: from-scratch vs. import a Postman v2.1 export. */
-type CollectionMode = 'blank' | 'postman'
+type CollectionMode = 'blank' | 'postman' | 'openapi'
 
 /** Sentinel for "not owned by a collection" in the auth scope picker — Mantine's Select
  *  treats '' as "nothing selected", so it can't carry a real choice. */
@@ -89,6 +90,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
   // Collection-specific state: pick blank vs Postman import, then carry the parsed
   // Postman file + an overwrite toggle. Reset when the kind switches away.
   const [collectionMode, setCollectionMode] = useState<CollectionMode>('blank')
+  const [openApiOpen, setOpenApiOpen] = useState(false)
   const [postman, setPostman] = useState<PostmanPreview | null>(null)
   const [postmanParseError, setPostmanParseError] = useState<string | null>(null)
   const [overwriteExisting, setOverwriteExisting] = useState(false)
@@ -356,9 +358,29 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
               onChange={(v) => { setCollectionMode(v as CollectionMode); setError(null) }}
               data={[
                 { value: 'blank', label: 'Blank' },
-                { value: 'postman', label: 'Import from Postman' },
+                { value: 'postman', label: 'From Postman' },
+                { value: 'openapi', label: 'From OpenAPI' },
               ]}
             />
+            {/* OpenAPI gets its own wizard: picking operations, a layout, and an auth scheme
+                needs more room than this dialog has. Same hand-off shape as the auth wizard. */}
+            {collectionMode === 'openapi' && (
+              <Stack gap="xs">
+                <Text size="xs" c="dimmed">
+                  Import an OpenAPI description — upload a file or fetch a URL, then choose which
+                  operations become requests.
+                </Text>
+                <Group justify="flex-end">
+                  <Button
+                    size="xs"
+                    leftSection={<IconApi size={14} />}
+                    onClick={() => { setOpenApiOpen(true); onOpenChange(false) }}
+                  >
+                    Open the import wizard
+                  </Button>
+                </Group>
+              </Stack>
+            )}
             {collectionMode === 'postman' && (
               <Stack gap="xs">
                 <Group gap="xs" wrap="nowrap" align="center">
@@ -470,6 +492,13 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
         initialName={authWizardName}
         targetDir={authWizardDir}
         onCreated={(p, k) => { onCreated(p, k); reset() }}
+      />
+    )}
+    {openApiOpen && (
+      <ImportOpenApiDialog
+        open={openApiOpen}
+        onOpenChange={setOpenApiOpen}
+        onImported={(path) => { onCreated(path, 'collection'); reset() }}
       />
     )}
     </>

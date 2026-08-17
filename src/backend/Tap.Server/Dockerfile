@@ -34,6 +34,13 @@ RUN dotnet publish src/Tap.Server/Tap.Server.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app ./
+LABEL org.opencontainers.image.title="Tap Tunnels" \
+      org.opencontainers.image.description="Local HTTP tunnels with inspection built in" \
+      org.opencontainers.image.url="https://philbir.github.io/tap/#/tunnels" \
+      org.opencontainers.image.source="https://github.com/philbir/tap" \
+      org.opencontainers.image.licenses="MIT" \
+      io.tap.product="Tap Tunnels" \
+      io.tap.product.icon="/app/wwwroot/tap-tunnels-icon.svg"
 # Default ports — overridable via Inspector__ProxyPort / Inspector__UiPort.
 ENV ASPNETCORE_URLS=http://0.0.0.0:5299;http://0.0.0.0:5298 \
     Inspector__ProxyHost=0.0.0.0 \

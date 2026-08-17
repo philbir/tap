@@ -24,6 +24,13 @@
          extractor. Chosen over the alternatives because it binds to JsonNode directly and
          keeps the repo free of a reflection-based serializer. -->
     <PackageVersion Include="JsonPath.Net" Version="3.0.2" />
+    <!-- OpenAPI import. The core package reads JSON via System.Text.Json; the YamlReader add-on
+         is what makes `.yaml` specs work (registered with settings.AddYamlReader(), after which
+         Parse auto-detects JSON-then-YAML). Split deliberately by the library so JSON-only
+         consumers avoid the YamlDotNet hop — we take both because specs arrive in either form. -->
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(AspNetCoreVersion)" />
+    <PackageVersion Include="Microsoft.OpenApi" Version="3.10.0" />
+    <PackageVersion Include="Microsoft.OpenApi.YamlReader" Version="3.10.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(AspNetCoreVersion)" />
     <!-- Official MCP C# SDK — backs `tap-studio mcp` (stdio server over the agent surface).
          Microsoft.Extensions.Hosting is its host loop; the CLI only pulls it for that command. -->

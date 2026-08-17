@@ -55,7 +55,18 @@ var demoApiKey = DemoSecret("DEMO_API_KEY", "studio-demo-api-key-not-for-product
 //
 // Note the workspace folder here is NOT empty: it points at the committed sample-workspace,
 // which exercises aspire mode against an existing workspace rather than a scaffolded one.
-var studio = builder.AddTapStudio<Projects.Tap_Studio>("studio-api")
+// The same call comes in two shapes. AddTapStudio compiles the Studio from source — the
+// default here, because this repo is where that source lives. AddTapStudioContainer runs the
+// published image instead, which is what a consumer with neither a ProjectReference nor yarn
+// on PATH would use. Try it with:
+//   StudioContainer=true aspire run
+// and point it at a locally-built image with StudioImageTag=local after
+//   docker build -t ghcr.io/philbir/tap-studio:local -f src/backend/Tap.Studio/Dockerfile .
+var useContainer = bool.TryParse(builder.Configuration["StudioContainer"], out var c) && c;
+
+var studio = (useContainer
+        ? builder.AddTapStudioContainer("studio-api", tag: builder.Configuration["StudioImageTag"] ?? "latest")
+        : builder.AddTapStudio<Projects.Tap_Studio>("studio-api"))
     .WithWorkspaceFolder(workspaceRoot)
     .WithApi(demoApi)
     .WithEnvironment("DEMO_API_URL", demoApi.GetEndpoint("http").Property(EndpointProperty.HostAndPort))

@@ -178,8 +178,13 @@ the rest behave identically. Three things differ:
   route when you want those; use the image for a workspace that authenticates headlessly.
 
 The endpoint is published on loopback only and the Host allowlist is pinned to match; pass
-`exposeOnAllInterfaces: true` to widen it deliberately. The default pull policy is `Missing`, so
-a locally-built tag of the same name is used as-is:
+`exposeOnAllInterfaces: true` to widen it deliberately.
+
+The image tag defaults to **the hosting library's own version**, not `latest` — the two are
+published from the same git tag, so they always pair. `latest` is only ever tagged for stable
+releases, so defaulting to it would leave `AddTapStudioContainer()` unable to pull on a preview.
+Pass `tag:` to pin something else. The default pull policy is `Missing`, so a locally-built tag
+of the same name is used as-is:
 
 ```bash
 docker build -t ghcr.io/philbir/tap-studio:local -f src/backend/Tap.Studio/Dockerfile .

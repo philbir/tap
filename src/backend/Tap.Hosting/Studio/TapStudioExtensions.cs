@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.Json;
 using Aspire.Hosting.ApplicationModel;
 
@@ -277,6 +278,36 @@ public static class TapStudioExtensions
     /// <c>docker-publish</c> workflow from <c>src/backend/Tap.Studio/Dockerfile</c>.</summary>
     public const string DefaultImage = "ghcr.io/philbir/tap-studio";
 
+    /// <summary>
+    /// The image tag that pairs with this build of the hosting library.
+    ///
+    /// <para><b>Not <c>latest</c>.</b> The publish workflow only tags <c>latest</c> for stable
+    /// releases — any tag without a pre-release suffix — so on a preview <c>latest</c> either
+    /// does not exist or points at an older stable image. Defaulting to it would leave
+    /// <c>AddTapStudioContainer()</c> failing to pull for exactly the people trying a preview.
+    /// The NuGet package and the image are published from the same git tag, so the library's own
+    /// version always names an image that exists.</para>
+    /// </summary>
+    public static string DefaultImageTag { get; } = ResolveDefaultImageTag();
+
+    private static string ResolveDefaultImageTag()
+    {
+        var informational = typeof(TapStudioExtensions).Assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+
+        if (string.IsNullOrWhiteSpace(informational)) return "latest";
+
+        // Strip SourceLink's "+<sha>" build metadata — the registry tag is the version alone.
+        var plus = informational.IndexOf('+');
+        var version = plus >= 0 ? informational[..plus] : informational;
+
+        // A local build ("0.1.0-local", the Directory.Build.props fallback) names no published
+        // image, so there is nothing better to try than latest.
+        return version.EndsWith("-local", StringComparison.Ordinal) || version.Length == 0
+            ? "latest"
+            : version;
+    }
+
     /// <summary>Where the image expects the workspace to be mounted. Matches the image's own
     /// <c>Studio__WorkspaceRoot</c> default.</summary>
     internal const string ContainerWorkspacePath = "/workspace";
@@ -319,7 +350,7 @@ public static class TapStudioExtensions
         this IDistributedApplicationBuilder builder,
         string name = "tap-studio",
         string image = DefaultImage,
-        string tag = "latest",
+        string? tag = null,
         int? port = null,
         ImagePullPolicy imagePullPolicy = ImagePullPolicy.Missing,
         bool persistState = true,
@@ -329,7 +360,7 @@ public static class TapStudioExtensions
 
         // Missing rather than Always for the same reason AddTapContainer defaults to it: a
         // locally-built tag (tap-studio:local) then Just Works without an unintended registry pull.
-        var container = builder.AddContainer(name, image, tag)
+        var container = builder.AddContainer(name, image, tag ?? DefaultImageTag)
             .WithImagePullPolicy(imagePullPolicy)
             .WithHttpEndpoint(port: port, targetPort: ContainerPort, name: "http")
             .WithAnnotation(annotation)

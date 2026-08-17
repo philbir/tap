@@ -72,3 +72,6 @@ artifacts/
 # so don't commit them.
 *.ts.net.crt
 *.ts.net.key
+
+# dex task store — local planning state for coding agents, not a repo artifact.
+.dex/

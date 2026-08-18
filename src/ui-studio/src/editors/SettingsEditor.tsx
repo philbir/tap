@@ -416,7 +416,12 @@ function ProviderCard({
             type={provider.type}
             settings={provider.settings}
           />
-          {provider.name.trim() && <BrowseProviderControl providerName={provider.name.trim()} />}
+          {provider.name.trim() && (
+            <BrowseProviderControl
+              providerName={provider.name.trim()}
+              writable={descriptor?.mode === 'readwrite'}
+            />
+          )}
           <Tooltip label="Remove provider" withArrow>
             <ActionIcon
               variant="subtle"

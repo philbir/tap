@@ -268,7 +268,9 @@ vars:
 
 `secret: true` is the only secret marker — the value still renders into the request like any
 other variable, but the Studio masks it everywhere it's displayed and the renderer redacts it
-from anything echoed to agents (§13).
+from anything echoed to agents (§13). Marking a variable secret in the Studio also moves its
+value into a provider and leaves a reference behind, so the flag and the file agree about what
+is in the repository — see §12.6.
 
 ### 5.2 Body
 
@@ -1028,7 +1030,7 @@ provider shadows a same-named system one. Each provider reports per-value sensit
 | Type | Source | Mode | Settings |
 |---|---|---|---|
 | `env` | Process environment variables, gated by the **host allowlists** (below) | read | none — the gate deliberately lives on the host, not in files |
-| `file` | A YAML store per provider at `<workspace>/.tap/.vars/<name>.yml`; `secret: true` values are encrypted at rest (AES-256-GCM, key derived from a passphrase) | read/write | `encryptionKey` — better supplied via the `TAP_FILE_PROVIDER_KEY` env var (or `TAP_FILE_PROVIDER_KEY_<NAME>`) than committed next to the ciphertext |
+| `file` | A YAML store per provider at `<workspace>/.tap/.vars/<name>.yml`; `secret: true` values are encrypted at rest (AES-256-GCM, key derived from the machine's encryption key — §12.4) | read/write | none |
 | `azkv` | Azure Key Vault via `DefaultAzureCredential` (picks up `az login`, managed identity, …). Every value is secret. | read | `vaultName` (required), `tenantId`, `prefix` |
 | `1p` | 1Password via the `op` CLI (desktop-app / biometric auth on the host) | read | `mode`: `environment` (default; a 1Password Environment's variables), `item` (`vault` + `item` — one item's fields), or `vault` (`vault` — one variable per item) |
 | `aspire` | A resource's allocated URL, read from the standard `services__<resource>__<scheme>__<index>` environment variables | read | none — always registered (§12.2) |
@@ -1103,6 +1105,52 @@ redact the field you most need to read in a failing report. A missing resource f
 ### 12.4 Adding a custom provider
 
 Tap will support out-of-tree providers via a plugin model (post-v0). For v0 the built-in set is the supported surface.
+
+### 12.5 The encryption key
+
+Anything Tap encrypts at rest is keyed to **one passphrase per machine**, resolved in this
+order:
+
+| Source | Notes |
+|---|---|
+| `TAP_ENCRYPTION_KEY` (process env) | Wins outright. How CI supplies the key. |
+| `<system-dir>/encryption.key` | `$TAP_SYSTEM_DIR`, else `~/.tap`. One line, written owner-only. |
+
+There is deliberately no third source. In particular the key is **not** a provider setting and
+cannot be declared in `workspace.tap` — a passphrase stored beside the ciphertext it unlocks
+travels with it into Git, and is not encryption. The PBKDF2 salt is still per provider
+(`tap-file-provider:<name>`), so one machine key yields a distinct derived key per store.
+
+The key is needed only for `secret: true` values. A machine with no key reads and writes plain
+values normally; a secret read fails with `E_PROVIDER_DECRYPT_FAILED` and a secret write with
+`E_PROVIDER_CONFIG_INVALID`, both naming the two sources above.
+
+```shell
+tap-studio key status      # is there a key, and where did it come from
+tap-studio key init        # generate <system-dir>/encryption.key (refuses to overwrite)
+```
+
+Studio offers the same generation step inline wherever a missing key blocks a secret. Back the
+file up: it is the only thing that can decrypt what it encrypted, and no endpoint or command
+will print it back to you.
+
+### 12.6 Marking a variable secret
+
+`secret: true` on a cascade variable used to say "mask this" while the value sat in the file in
+clear text — the mark and the file disagreed. Marking a variable secret in Studio now moves the
+value: it is written to a writable provider, and the file keeps a reference in its place.
+
+```yaml
+vars:
+  stripe.key:
+    default: '{{file:stripe.key}}'   # the value lives in the `file` provider
+    secret: true
+```
+
+Nothing downstream changes — resolving that token is ordinary variable resolution (§3.2), so
+the request renders the same value it always did, from somewhere that isn't the repository.
+Hand-authored files can of course write the reference directly; the flag and the reference are
+independent, and `secret: true` on a literal still only masks.
 
 ---
 

@@ -15,8 +15,11 @@ namespace Tap.Workspace.Variables;
 /// pick a <c>type</c> and the mode follows.</para>
 ///
 /// <para><see cref="Settings"/> is an opaque key/value bag interpreted by the factory.
-/// Different provider types expect different keys: env reads nothing; file reads
-/// <c>encryptionKey</c>; azkv reads <c>vaultName</c>, <c>tenantId</c>, <c>prefix</c>.</para>
+/// Different provider types expect different keys: env and file read nothing; azkv reads
+/// <c>vaultName</c>, <c>tenantId</c>, <c>prefix</c>. The file provider deliberately has no
+/// settings — its encryption passphrase is a property of the machine
+/// (<see cref="Security.IEncryptionKeySource"/>), never of a config file that could travel
+/// alongside the ciphertext.</para>
 /// </summary>
 public sealed record VariableProviderConfig
 {

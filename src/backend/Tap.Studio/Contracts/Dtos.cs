@@ -1132,6 +1132,22 @@ public sealed record ProviderVariableDto(string Name, bool IsSecret, string? Val
 /// per-key endpoint, never in bulk listings.</summary>
 public sealed record ProviderVariableValueDto(string Name, string Value, bool IsSecret);
 
+/// <summary>Body of a provider-variable write. <see cref="Value"/> null means "keep the stored
+/// value" — the provider editor never receives secret clear-text, so a row whose value the user
+/// didn't touch has nothing to send back, and sending an empty string instead would silently
+/// erase it.</summary>
+public sealed record ProviderVariableWriteDto(string? Value, bool IsSecret, string? Env = null);
+
+/// <summary>State of this machine's encryption key: whether one exists, where it came from,
+/// and the path a generated one would take. Drives the provider editor's "no key yet" prompt —
+/// the passphrase itself is never part of this.</summary>
+public sealed record EncryptionKeyStatusDto(
+    bool Configured,
+    /// <summary><c>env</c>, <c>file</c>, or <c>none</c>.</summary>
+    string Origin,
+    string EnvVarName,
+    string KeyFilePath);
+
 /// <summary>One Azure subscription visible to the CLI credential (vault picker dialog).</summary>
 public sealed record AzureSubscriptionDto(
     string SubscriptionId,
@@ -1504,6 +1520,8 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(ProviderVariableDto))]
 [JsonSerializable(typeof(IReadOnlyList<ProviderVariableDto>))]
 [JsonSerializable(typeof(ProviderVariableValueDto))]
+[JsonSerializable(typeof(ProviderVariableWriteDto))]
+[JsonSerializable(typeof(EncryptionKeyStatusDto))]
 [JsonSerializable(typeof(AzureSubscriptionDto))]
 [JsonSerializable(typeof(AzureSubscriptionDto[]))]
 [JsonSerializable(typeof(AzureKeyVaultDto))]

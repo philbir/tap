@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Tap.Studio.Contracts;
 using Tap.Studio.Variables;
+using Tap.Workspace.Model;
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 using Tap.Workspace.Variables.Providers;
 using Tap.Execution.Variables;
@@ -20,6 +22,13 @@ namespace Tap.Studio.Endpoints;
 ///     state). Masked values are restored from the stored config with the same name.</item>
 ///   <item><c>GET /{name}/variables</c> — browse listing (values masked for secrets);
 ///     <c>GET /{name}/variables/{key}</c> reveals one value on explicit request.</item>
+///   <item><c>PUT /{name}/variables/{key}</c> / <c>DELETE</c> — the manage half, for
+///     ReadWrite providers. A PUT with a null value keeps whatever is stored and changes only
+///     the secret flag, so flipping a plain value to encrypted never round-trips its clear
+///     text through the browser.</item>
+///   <item><c>GET /api/encryption-key</c> / <c>POST /api/encryption-key/generate</c> — whether
+///     this machine can encrypt at all, and a way to make it so. Status and generation only;
+///     no endpoint returns or accepts a passphrase.</item>
 /// </list>
 /// </summary>
 public static class ProviderEndpoints
@@ -82,6 +91,7 @@ public static class ProviderEndpoints
             WorkspaceService svc,
             SystemSettingsStore store,
             IEnumerable<IVariableProviderFactory> factories,
+            IEncryptionKeySource keySource,
             CancellationToken ct) =>
         {
             var factory = factories.FirstOrDefault(f => string.Equals(f.Type, body.Type, StringComparison.OrdinalIgnoreCase));
@@ -110,7 +120,7 @@ public static class ProviderEndpoints
             var sw = Stopwatch.StartNew();
             try
             {
-                var provider = factory.Create(config, new ProviderFactoryContext(svc.RootDirectory));
+                var provider = factory.Create(config, new ProviderFactoryContext(svc.RootDirectory) { KeySource = keySource });
                 var list = await provider.ListAsync(cts.Token).ConfigureAwait(false);
                 sw.Stop();
 
@@ -122,7 +132,7 @@ public static class ProviderEndpoints
                 {
                     return Results.Ok(new TestProviderResultDto(
                         false,
-                        $"Connected, but {undecrypted} secret value(s) could not be decrypted — check the encryption passphrase.",
+                        $"Connected, but {undecrypted} secret value(s) could not be decrypted — this machine's encryption key does not match the one they were written with.",
                         sw.Elapsed.TotalMilliseconds,
                         list.Count));
                 }
@@ -200,6 +210,138 @@ public static class ProviderEndpoints
                 return Results.BadRequest(new TestProviderResultDto(false, ex.Message, 0, null));
             }
         });
+
+        // Upsert. PUT rather than POST because the key is in the URL and the write is
+        // idempotent — the provider editor replays a row's save without accumulating entries.
+        app.MapPut("/api/variable-providers/{name}/variables/{key}", async (
+            string name,
+            string key,
+            ProviderVariableWriteDto body,
+            WorkspaceService svc,
+            CancellationToken ct) =>
+        {
+            var (provider, failure) = ResolveWritable(svc, name, body.Env);
+            if (failure is not null) return failure;
+
+            try
+            {
+                // A null value means "flag change only": re-read what's stored and write it
+                // back under the new secret flag. That is how a plain value becomes encrypted
+                // without the clear text ever making the round trip through the browser.
+                var value = body.Value;
+                if (value is null)
+                {
+                    var existing = await provider!.GetAsync(key, ct).ConfigureAwait(false);
+                    if (existing is null)
+                    {
+                        return Results.BadRequest(new TestProviderResultDto(
+                            false, $"'{key}' is not present in provider '{name}', so there is no value to keep.", 0, null));
+                    }
+                    value = existing.Value;
+                }
+
+                await provider!.SetAsync(key, value, body.IsSecret, ct).ConfigureAwait(false);
+                return Results.NoContent();
+            }
+            catch (WorkspaceParseException ex)
+            {
+                return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line));
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new TestProviderResultDto(false, ex.Message, 0, null));
+            }
+        });
+
+        app.MapDelete("/api/variable-providers/{name}/variables/{key}", async (
+            string name,
+            string key,
+            string? env,
+            WorkspaceService svc,
+            CancellationToken ct) =>
+        {
+            var (provider, failure) = ResolveWritable(svc, name, env);
+            if (failure is not null) return failure;
+
+            try
+            {
+                await provider!.DeleteAsync(key, ct).ConfigureAwait(false);
+                // Deleting an absent name still lands on 204: the caller wanted it gone.
+                return Results.NoContent();
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new TestProviderResultDto(false, ex.Message, 0, null));
+            }
+        });
+
+        // --- Encryption key -------------------------------------------------------------
+        //
+        // Status and generation only. There is deliberately no endpoint that returns the
+        // passphrase, and none that accepts one: a key typed into a browser is a key in a
+        // request log.
+
+        app.MapGet("/api/encryption-key", (IEncryptionKeySource keySource) =>
+            Results.Ok(KeyStatus(keySource)));
+
+        app.MapPost("/api/encryption-key/generate", (IEncryptionKeySource keySource) =>
+        {
+            if (keySource is not MachineEncryptionKeySource machine)
+            {
+                return Results.BadRequest(new TestProviderResultDto(
+                    false, "This host supplies its encryption key itself; Tap cannot generate one for it.", 0, null));
+            }
+            if (keySource.Origin is EncryptionKeyOrigin.Environment)
+            {
+                return Results.BadRequest(new TestProviderResultDto(
+                    false,
+                    $"{MachineEncryptionKeySource.EnvVar} is set, and it wins over the key file — generating one now would "
+                    + "write a key nothing reads. Unset the variable first if you want a generated key.",
+                    0, null));
+            }
+
+            try
+            {
+                machine.GenerateKeyFile();
+                return Results.Ok(KeyStatus(keySource));
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new TestProviderResultDto(false, ex.Message, 0, null));
+            }
+        });
+    }
+
+    private static EncryptionKeyStatusDto KeyStatus(IEncryptionKeySource keySource) => new(
+        Configured: keySource.GetPassphrase() is not null,
+        Origin: keySource.Origin switch
+        {
+            EncryptionKeyOrigin.Environment => "env",
+            EncryptionKeyOrigin.KeyFile => "file",
+            _ => "none",
+        },
+        EnvVarName: MachineEncryptionKeySource.EnvVar,
+        KeyFilePath: keySource is MachineEncryptionKeySource m ? m.KeyFilePath : string.Empty);
+
+    /// <summary>Resolves a provider for a write, or the response explaining why not. Read-only
+    /// providers are rejected here rather than deeper down so the message names the provider
+    /// instead of surfacing a raw <see cref="NotSupportedException"/>.</summary>
+    private static (IVariableProvider? Provider, IResult? Failure) ResolveWritable(
+        WorkspaceService svc, string name, string? env)
+    {
+        var provider = svc.CreateRegistry(env).Get(name);
+        if (provider is null)
+        {
+            return (null, Results.NotFound(new TestProviderResultDto(
+                false, $"Provider '{name}' is not registered.", 0, null)));
+        }
+        if (provider.Mode != ProviderMode.ReadWrite)
+        {
+            return (null, Results.BadRequest(new WorkspaceErrorDto(
+                WorkspaceErrorCode.E_PROVIDER_NOT_WRITABLE,
+                $"Variable provider '{provider.Name}' is read-only.", null, null)));
+        }
+        return (provider, null);
     }
 
     private static ProviderTypeDescriptorDto ToDto(ProviderTypeDescriptor d) => new(

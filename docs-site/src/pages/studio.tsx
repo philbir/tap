@@ -475,15 +475,14 @@ const docs: DocSection[] = [
             <>
               A YAML store at `.vars/&lt;provider&gt;.yml` inside the workspace, written by Studio
               rather than by hand. Values marked secret are encrypted at rest with AES-256-GCM under
-              a key derived from a passphrase (PBKDF2-HMAC-SHA256, 200k iterations), so the file
-              itself is safe to commit. Plain values work without a passphrase; storing a secret
-              requires one. Keep the passphrase on a system-scope provider so it stays in
-              `~/.tap/system.json` instead of the repo.
+              a key derived from this machine's encryption key (PBKDF2-HMAC-SHA256, 200k iterations),
+              so the file itself is safe to commit. Plain values work without a key; storing a secret
+              needs one — set <code>TAP_ENCRYPTION_KEY</code>, or run <code>tap-studio key init</code>
+              to generate <code>~/.tap/encryption.key</code>. The key is never a provider setting:
+              a passphrase stored beside the ciphertext it unlocks travels with it into Git.
             </>
           }
-          settings={[
-            ["encryptionKey", "Passphrase the AES key is derived from. Required before any secret value can be stored."],
-          ]}
+          settings={[]}
         >
           <CodeBlock title=".vars/local.yml" code={commands.studioFileStore} />
         </ProviderDetail>

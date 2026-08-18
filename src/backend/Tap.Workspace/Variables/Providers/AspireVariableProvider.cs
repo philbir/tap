@@ -63,6 +63,9 @@ public sealed partial class AspireVariableProvider(VariableProviderConfig config
             "The aspire provider is read-only — endpoints are allocated by the AppHost. "
             + "Set services__<resource>__<scheme>__0 in the environment to override one.");
 
+    public ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
+        => throw new NotSupportedException("The aspire provider is read-only — there is nothing here to delete.");
+
     /// <summary>
     /// Picks the best URL for a resource: preferred scheme first, then lowest index. Returns null
     /// when the resource has no endpoint in the environment, which the registry turns into

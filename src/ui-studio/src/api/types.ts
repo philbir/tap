@@ -3,6 +3,9 @@
 export type WorkspaceFileKind =
   | 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'flow' | 'test'
   | 'folder' | 'settings' | 'git-diff'
+  /** A variable provider's contents, opened as its own tab. Not a workspace file — the
+   *  provider may live in system settings — so its tab path is a `__provider__:<name>` token. */
+  | 'provider'
   /** A portable .http file. Holds several requests, which arrive as its tree children. */
   | 'httpfile'
 
@@ -755,6 +758,23 @@ export interface ProviderVariableValue {
   name: string
   value: string
   isSecret: boolean
+}
+
+/** Body of a provider-variable write. `value: null` means "keep what's stored and change only
+ *  the secret flag" — the editor never holds a secret's clear text, so it has nothing to send
+ *  back for an untouched row, and an empty string would erase it. */
+export interface ProviderVariableWrite {
+  value: string | null
+  isSecret: boolean
+  env?: string | null
+}
+
+/** This machine's encryption key: whether one exists and where it came from. Never the key. */
+export interface EncryptionKeyStatus {
+  configured: boolean
+  origin: 'env' | 'file' | 'none'
+  envVarName: string
+  keyFilePath: string
 }
 
 // --- System settings -----------------------------------------------------------------

@@ -86,6 +86,7 @@ export function EnvEditor({ path }: Props) {
                 keyPlaceholder="var.name"
                 valuePlaceholder="value"
                 allowSecretToggle
+                variableContext={{ envPath: path }}
                 emptyHint="No variables defined for this environment yet."
               />
             </Box>

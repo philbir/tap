@@ -20,6 +20,13 @@ export const MANIFEST_TAB_PATH = '__manifest__'
 /** Reserved path for the Settings tab — not a real workspace file. */
 export const SETTINGS_TAB_PATH = '__settings__'
 
+/** Reserved tab path for one variable provider's editor. Providers aren't workspace files —
+ *  a system-scope one has no path at all — so the name is carried in the token itself. */
+export const PROVIDER_TAB_PREFIX = '__provider__:'
+export const providerTabPath = (name: string) => `${PROVIDER_TAB_PREFIX}${name}`
+export const providerNameFromTab = (path: string) =>
+  path.startsWith(PROVIDER_TAB_PREFIX) ? path.slice(PROVIDER_TAB_PREFIX.length) : null
+
 /**
  * Single global app store. Holds server-derived state (workspace info, tree, catalogs,
  * known-workspaces) plus UI state that's shared across components (tabs, active env).

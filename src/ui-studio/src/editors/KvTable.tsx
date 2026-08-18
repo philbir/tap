@@ -2,7 +2,9 @@ import { ActionIcon, Autocomplete, Box, Button, Group, Table, TextInput, Tooltip
 import { IconEye, IconEyeOff, IconPlus, IconX } from '@tabler/icons-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import type { VariableContext } from '../api/types'
+import { useTapStore } from '../store'
 import { passwordManagerOptOut } from './passwordManagerOptOut'
+import { PromoteSecretModal, type PromoteSecretRequest } from './PromoteSecretModal'
 import { VariableInput } from './VariableInput'
 
 /**
@@ -49,6 +51,13 @@ export interface KvTableProps {
   getValueSuggestions?: (key: string) => string[]
 }
 
+/** A value that is already a lone `{{…}}` token references something rather than holding it,
+ *  so marking it secret has nothing to move — the flag just changes. */
+function isReference(value: string): boolean {
+  const trimmed = value.trim()
+  return trimmed.startsWith('{{') && trimmed.endsWith('}}') && trimmed.indexOf('{{', 2) === -1
+}
+
 let nextIdCounter = 0
 const nextId = () => `kvr-${++nextIdCounter}-${Math.random().toString(36).slice(2, 6)}`
 
@@ -63,6 +72,13 @@ export function KvTable({
   keySuggestions,
   getValueSuggestions,
 }: KvTableProps) {
+  // Marking a variable secret has to move its value somewhere that isn't the workspace file;
+  // see PromoteSecretModal. Rows with nothing to move (empty, or already a reference) skip
+  // the prompt entirely — asking there would be ceremony with no effect.
+  const [promoting, setPromoting] = useState<{ id: string; request: PromoteSecretRequest } | null>(null)
+  const activeEnv = useTapStore((s) => s.activeEnvByRoot[s.info?.root ?? ''] ?? null)
+  const envForWrite = variableContext?.envPath ?? activeEnv
+
   // Local state mirrors `externalRows` but adds a stable id per row so React keys stay
   // consistent across edits and the "+ Add" button can introduce drafts with empty keys.
   const [internal, setInternal] = useState<InternalRow[]>(() =>
@@ -156,7 +172,16 @@ export function KvTable({
                         variant="subtle"
                         color={r.secret ? 'yellow' : 'gray'}
                         size="sm"
-                        onClick={() => patch(r.id, { secret: !r.secret })}
+                        onClick={() => {
+                          if (r.secret || !r.value.trim() || isReference(r.value)) {
+                            patch(r.id, { secret: !r.secret })
+                            return
+                          }
+                          setPromoting({
+                            id: r.id,
+                            request: { name: r.key || '(unnamed)', value: r.value, envPath: envForWrite },
+                          })
+                        }}
                         aria-label="Toggle secret"
                       >
                         {r.secret ? <IconEyeOff size={14} /> : <IconEye size={14} />}
@@ -192,6 +217,20 @@ export function KvTable({
           Add
         </Button>
       </Group>
+
+      {allowSecretToggle && (
+        <PromoteSecretModal
+          request={promoting?.request ?? null}
+          onResolve={(outcome) => {
+            const pending = promoting
+            setPromoting(null)
+            if (!pending || !outcome) return
+            patch(pending.id, 'inline' in outcome
+              ? { secret: true }
+              : { secret: true, value: outcome.token })
+          }}
+        />
+      )}
     </Box>
   )
 }

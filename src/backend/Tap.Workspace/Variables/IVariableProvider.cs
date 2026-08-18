@@ -34,6 +34,13 @@ public interface IVariableProvider
     /// instructs the provider whether to apply at-rest encryption (file provider) or
     /// otherwise treat the value as sensitive.</summary>
     ValueTask SetAsync(string name, string value, bool isSecret, CancellationToken ct);
+
+    /// <summary>Removes a variable. <c>true</c> when something was removed, <c>false</c> when
+    /// the name wasn't there — deleting an absent name is not an error, so a UI can converge on
+    /// "gone" without racing itself. Throws <see cref="NotSupportedException"/> when
+    /// <see cref="Mode"/> is <see cref="ProviderMode.Read"/>, matching
+    /// <see cref="SetAsync"/>.</summary>
+    ValueTask<bool> DeleteAsync(string name, CancellationToken ct);
 }
 
 /// <summary>Optional capability for providers whose <see cref="IVariableProvider.ListAsync"/>

@@ -78,4 +78,7 @@ internal sealed class StubVariableProvider(string name, params VariableValue[] v
 
     public ValueTask SetAsync(string variable, string value, bool isSecret, CancellationToken ct)
         => throw new NotSupportedException();
+
+    public ValueTask<bool> DeleteAsync(string variable, CancellationToken ct)
+        => throw new NotSupportedException();
 }

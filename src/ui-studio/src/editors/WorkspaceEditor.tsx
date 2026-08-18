@@ -438,7 +438,12 @@ function ProviderRow({
             type={provider.type}
             settings={provider.settings}
           />
-          {provider.name && <BrowseProviderControl providerName={provider.name} />}
+          {provider.name && (
+            <BrowseProviderControl
+              providerName={provider.name}
+              writable={descriptor?.mode === 'readwrite'}
+            />
+          )}
           {!readOnly && (
             <ActionIcon variant="subtle" color="red" size="sm" onClick={onRemove} title="Remove variable provider" aria-label="Remove variable provider">
               <IconX size={14} />

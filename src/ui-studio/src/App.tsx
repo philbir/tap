@@ -12,6 +12,7 @@ import { FlowEditor } from './editors/FlowEditor'
 import { GitDiffEditor } from './editors/GitDiffEditor'
 import shellStyles from './editors/EditorShell.module.css'
 import { RequestEditor } from './editors/RequestEditor'
+import { ProviderEditor } from './editors/ProviderEditor'
 import { SettingsEditor } from './editors/SettingsEditor'
 import { TestSetEditor } from './editors/TestSetEditor'
 import { WorkspaceEditor } from './editors/WorkspaceEditor'
@@ -19,7 +20,7 @@ import { collectionDirOf } from './shell/explorerTree'
 import { Header } from './shell/Header'
 import { Sidebar } from './shell/Sidebar'
 import { TabBar } from './shell/TabBar'
-import { bootstrapStore, MANIFEST_TAB_PATH, SETTINGS_TAB_PATH, useHasActiveWorkspace, useTapStore } from './store'
+import { bootstrapStore, MANIFEST_TAB_PATH, providerNameFromTab, SETTINGS_TAB_PATH, useHasActiveWorkspace, useTapStore } from './store'
 import { useTheme } from './workspace/useTheme'
 import { labelForPath } from './shell/tapFiles'
 import { HttpFileEditor } from './editors/HttpFileEditor'
@@ -151,6 +152,9 @@ export function App() {
                 {active?.kind === 'test' && <TestSetEditor key={active.path} path={active.path} />}
                 {active?.kind === 'flow' && <FlowEditor key={active.path} path={active.path} />}
                 {active?.kind === 'settings' && <SettingsEditor />}
+                {active?.kind === 'provider' && (
+                  <ProviderEditor key={active.path} name={providerNameFromTab(active.path) ?? ''} />
+                )}
                 {active?.kind === 'git-diff' && <GitDiffEditor key={active.path} path={active.path} />}
                 {active?.kind === 'httpfile' && <HttpFileEditor key={active.path} path={active.path} />}
               </Box>

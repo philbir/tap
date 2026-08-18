@@ -6,6 +6,7 @@ using Tap.Studio.Auth;
 using Tap.Studio.Contracts;
 using Tap.Studio.Endpoints;
 using Tap.Studio.Variables;
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 using Tap.Workspace.Variables.Providers;
 using Tap.Execution.Variables;
@@ -83,6 +84,9 @@ public static class StudioHost
             SystemProviders = options.SystemProviders,
         });
         builder.Services.AddSingleton<SystemSettingsStore>();
+        // One key source for the process, pinned to the same system dir as system.json, so
+        // TAP_SYSTEM_DIR moves every piece of user-level state as a unit.
+        builder.Services.AddSingleton<IEncryptionKeySource>(new MachineEncryptionKeySource(options.SystemDir));
         builder.Services.AddSingleton<Tap.Studio.Ai.AiProviderFactory>();
         builder.Services.AddSingleton<KnownWorkspaceStore>();
         builder.Services.AddSingleton<WorkspaceService>();

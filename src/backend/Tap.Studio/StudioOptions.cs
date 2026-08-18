@@ -1,3 +1,4 @@
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 
 namespace Tap.Studio;
@@ -82,13 +83,7 @@ public sealed class StudioOptions
         var host = config["Studio:Host"] ?? "localhost";
         var desktop = string.Equals(
             Environment.GetEnvironmentVariable("TAP_STUDIO_DESKTOP"), "1", StringComparison.Ordinal);
-        var systemDir = Environment.GetEnvironmentVariable("TAP_SYSTEM_DIR");
-        if (string.IsNullOrWhiteSpace(systemDir))
-        {
-            systemDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".tap");
-        }
+        var systemDir = MachineEncryptionKeySource.DefaultSystemDir();
         systemDir = Path.GetFullPath(systemDir);
 
         // The CLI is run *from* a workspace, so the working directory is the right default

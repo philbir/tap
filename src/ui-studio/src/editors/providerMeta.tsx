@@ -3,12 +3,13 @@ import {
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
-  IconAlertCircle, IconBrandAzure, IconEye, IconFileText, IconListSearch, IconPlug, IconPlugConnected,
-  IconRefresh, IconSearch, IconSettings, IconShieldLock, IconTerminal2, IconX,
+  IconAlertCircle, IconBrandAzure, IconEye, IconFileText, IconListSearch, IconPencil, IconPlug,
+  IconPlugConnected, IconRefresh, IconSearch, IconSettings, IconShieldLock, IconTerminal2, IconX,
 } from '@tabler/icons-react'
 import { useEffect, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { ProviderSettingField, ProviderTypeDescriptor, ProviderVariable, TestProviderResult } from '../api/types'
+import { providerTabPath, useTapStore } from '../store'
 import { AzureVaultPicker } from './AzureVaultPicker'
 import { OnePasswordVaultPicker } from './OnePasswordVaultPicker'
 
@@ -579,11 +580,29 @@ export function TestProviderControl({
  * "Browse" button opening a drawer that lists the provider's variables. Secret values
  * are masked; each row has an eye icon that fetches the clear value on demand (azkv
  * values are per-secret GETs anyway, so lazy reveal is also the cheap path).
+ *
+ * <p>A quick look while configuring something else — which is why it stays a drawer. Actually
+ * changing what's in there is editing, and editing happens in a tab like every other editor:
+ * pass <c>writable</c> to surface the button that opens it.</p>
  */
-export function BrowseProviderControl({ providerName, env }: { providerName: string; env?: string | null }) {
+export function BrowseProviderControl({ providerName, env, writable }: {
+  providerName: string
+  env?: string | null
+  writable?: boolean
+}) {
   const [opened, { open, close }] = useDisclosure(false)
+  const openTab = useTapStore((s) => s.openTab)
   return (
     <>
+      {writable && (
+        <Button
+          size="xs" variant="default"
+          leftSection={<IconPencil size={14} />}
+          onClick={() => openTab({ path: providerTabPath(providerName), kind: 'provider', label: providerName })}
+        >
+          Manage
+        </Button>
+      )}
       <Button size="xs" variant="default" leftSection={<IconListSearch size={14} />} onClick={open}>
         Browse
       </Button>

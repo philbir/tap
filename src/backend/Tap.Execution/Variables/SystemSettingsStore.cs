@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 using Tap.Execution.IO;
 
@@ -19,14 +20,11 @@ public sealed record SystemSettingsOptions
     /// file is the source of truth.</summary>
     public IReadOnlyList<VariableProviderConfig> SystemProviders { get; init; } = [];
 
-    /// <summary>The conventional location: <c>$TAP_SYSTEM_DIR</c>, else <c>~/.tap</c>.</summary>
-    public static string DefaultSystemDir()
-    {
-        var configured = Environment.GetEnvironmentVariable("TAP_SYSTEM_DIR");
-        if (!string.IsNullOrWhiteSpace(configured)) return Path.GetFullPath(configured);
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".tap");
-    }
+    /// <summary>The conventional location: <c>$TAP_SYSTEM_DIR</c>, else <c>~/.tap</c>. One
+    /// definition, shared with the encryption-key source — <c>system.json</c> and
+    /// <c>encryption.key</c> are neighbours, and a machine that moved one but not the other
+    /// would be the worst kind of half-working.</summary>
+    public static string DefaultSystemDir() => MachineEncryptionKeySource.DefaultSystemDir();
 }
 
 /// <summary>
@@ -303,6 +301,26 @@ public sealed class SystemSettingsStore
             Persist();
         }
         Changed?.Invoke();
+    }
+
+    /// <summary>Removes one variable. <c>false</c> when the name wasn't stored — the caller
+    /// wanted it gone and it is, so that isn't an error. No write (and no
+    /// <see cref="Changed"/>) happens in that case.</summary>
+    public bool RemoveVariable(string name)
+    {
+        if (string.IsNullOrEmpty(name)) return false;
+
+        lock (_gate)
+        {
+            ReloadIfChangedLocked();
+            if (!_state.Variables.ContainsKey(name)) return false;
+            var dict = new Dictionary<string, StoredVariable>(_state.Variables, StringComparer.Ordinal);
+            dict.Remove(name);
+            _state = _state with { Variables = dict };
+            Persist();
+        }
+        Changed?.Invoke();
+        return true;
     }
 
     /// <summary>Fired after any successful write. The provider-registry rebuild path picks

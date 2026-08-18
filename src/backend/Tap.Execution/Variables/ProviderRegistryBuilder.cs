@@ -1,6 +1,7 @@
 using System.Text;
 using Tap.Workspace;
 using Tap.Workspace.Model;
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 
 namespace Tap.Execution.Variables;
@@ -30,8 +31,13 @@ namespace Tap.Execution.Variables;
 /// owns its own per-render resolution cache + trace — only the underlying providers are
 /// shared.</para>
 /// </summary>
-public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory> factories, ILogger<ProviderRegistryBuilder> logger)
+public sealed class ProviderRegistryBuilder(
+    IEnumerable<IVariableProviderFactory> factories,
+    ILogger<ProviderRegistryBuilder> logger,
+    IEncryptionKeySource? keySource = null)
 {
+    private readonly IEncryptionKeySource _keySource = keySource ?? MachineEncryptionKeySource.Default;
+
     private readonly Dictionary<string, IVariableProviderFactory> _factories =
         factories.ToDictionary(f => f.Type, StringComparer.OrdinalIgnoreCase);
 
@@ -84,7 +90,7 @@ public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory
         }
 
         var providers = new List<IVariableProvider>(effective.Count);
-        var context = new ProviderFactoryContext(workspaceRoot);
+        var context = new ProviderFactoryContext(workspaceRoot) { KeySource = _keySource };
 
         lock (_cacheGate)
         {

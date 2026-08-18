@@ -296,6 +296,10 @@ public sealed class OnePasswordVariableProvider : IVariableProvider, IRefreshabl
             $"1Password provider '{Name}' is read-only. Edit the item or Environment in the " +
             "1Password app, or point the write at a read/write provider.");
 
+    public ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
+        => throw new NotSupportedException(
+            $"1Password provider '{Name}' is read-only. Delete the item or field in the 1Password app.");
+
     public void InvalidateListCache()
     {
         lock (_gate) { _listCache = null; }

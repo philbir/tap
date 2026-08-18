@@ -5,7 +5,7 @@ import {
   IconChecklist,
   IconDotsVertical,
   IconFileCode,
-  IconFolder, IconFolders, IconLayoutDashboard, IconLock, IconSend, IconSettings, IconWorld, IconX,
+  IconFolder, IconFolders, IconLayoutDashboard, IconLock, IconSend, IconServer, IconSettings, IconWorld, IconX,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useEffect, useRef, useState } from 'react'
@@ -26,6 +26,7 @@ const KIND_ICON: Record<WorkspaceFileKind, TablerIcon> = {
   settings: IconSettings,
   'git-diff': IconBrandGit,
   httpfile: IconFileCode,
+  provider: IconServer,
 }
 const KIND_COLOR: Partial<Record<WorkspaceFileKind, string>> = {
   request: 'var(--mantine-color-tap-6)',
@@ -35,6 +36,7 @@ const KIND_COLOR: Partial<Record<WorkspaceFileKind, string>> = {
   flow: 'var(--mantine-color-violet-6)',
   test: 'var(--mantine-color-teal-6)',
   settings: 'var(--mantine-color-gray-6)',
+  provider: 'var(--mantine-color-blue-6)',
 }
 
 const TAB_HEIGHT = 36

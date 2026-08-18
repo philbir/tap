@@ -61,6 +61,17 @@ app.Configure(cfg =>
             .WithExample(["agent", "init", "--env", "codex", "--scope", "user", "--mcp"]);
     });
 
+    cfg.AddBranch("key", key =>
+    {
+        key.SetDescription("This machine's encryption key — the one secret that unlocks everything Tap encrypts at rest.");
+        key.AddCommand<KeyStatusCommand>("status")
+            .WithDescription("Report whether this machine has an encryption key and where it came from. Never prints the key. Exits 3 when there is none.")
+            .WithExample(["key", "status"]);
+        key.AddCommand<KeyInitCommand>("init")
+            .WithDescription("Generate an encryption key into <system-dir>/encryption.key. Refuses to overwrite an existing key.")
+            .WithExample(["key", "init"]);
+    });
+
     cfg.AddCommand<LintCommand>("lint")
         .WithDescription("Parse every file in the workspace and report what doesn't load.")
         .WithExample(["lint"])

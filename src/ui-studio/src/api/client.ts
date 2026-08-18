@@ -62,6 +62,8 @@ import type {
   ProviderTypeDescriptor,
   ProviderVariable,
   ProviderVariableValue,
+  ProviderVariableWrite,
+  EncryptionKeyStatus,
   TestProviderResult,
   SaveSystemSettings,
   SetVariablePayload,
@@ -492,6 +494,27 @@ export const api = {
     return get<ProviderVariableValue>(
       `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}${q}`)
   },
+
+  /** Upsert one variable in a ReadWrite provider. Idempotent — the key is in the URL. */
+  setProviderVariable: (name: string, key: string, body: ProviderVariableWrite) =>
+    put(
+      `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}`,
+      body),
+
+  /** Remove one variable from a ReadWrite provider. Absent keys succeed. */
+  deleteProviderVariable: (name: string, key: string, env?: string | null) => {
+    const q = env ? `?env=${encodeURIComponent(env)}` : ''
+    return del(
+      `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}${q}`)
+  },
+
+  // --- Encryption key ------------------------------------------------------------------
+
+  /** Whether this machine can encrypt at rest, and where its key comes from. */
+  encryptionKey: () => get<EncryptionKeyStatus>('/api/encryption-key'),
+
+  /** Generate a key file on this machine. Fails if a key already exists or the env var wins. */
+  generateEncryptionKey: () => post<EncryptionKeyStatus>('/api/encryption-key/generate', {}),
 
   // --- Azure discovery (Key Vault picker) ----------------------------------------------
 

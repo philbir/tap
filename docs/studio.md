@@ -710,7 +710,7 @@ same-named system one):
 | Type | Source |
 |---|---|
 | `env` | Process environment, gated by two allowlists — `TAP_VARS_ALLOWED` (names whose values may be *shown*) and `TAP_SECRETS_ALLOWED` (names that stay masked but resolve at execute time). Both take comma-separated globs; unset means deny-everything. |
-| `file` | `.tap/.vars/<provider>.yml` in the workspace. Values marked `secret: true` are encrypted at rest with AES-256-GCM under a passphrase-derived key. |
+| `file` | `.tap/.vars/<provider>.yml` in the workspace. Values marked `secret: true` are encrypted at rest with AES-256-GCM under a key derived from this machine's encryption key (`TAP_ENCRYPTION_KEY`, else `~/.tap/encryption.key`). |
 | `azkv` | Azure Key Vault, via `DefaultAzureCredential`. |
 | `1password` | 1Password, via the local [`op` CLI](https://www.1password.dev/cli), which must be installed. **Read-only** — secrets are created and rotated in 1Password itself, where the audit trail and sharing rules live. `mode` picks one of three shapes: **`environment`** — a [1Password Environment](https://www.1password.dev/environments)'s variables become the provider's (needs the beta CLI, 2.38.2-beta.01+); **`item`** — one item's *fields* become the variables, named after the field labels; **`vault`** — every item in a vault becomes a variable named after its title, valued by its `field` (default: the item's password/credential). Reads use whatever session `op` already has (desktop app integration, `op signin`) — set `serviceAccountToken` only for headless hosts. The settings form switches modes, browses your vaults, and auto-detects the `op` binary. |
 | `system` | Variables stored in Studio's own `system.json`, edited from Settings. Machine-local, outside the repo. |

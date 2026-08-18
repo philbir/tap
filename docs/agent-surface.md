@@ -60,9 +60,9 @@ tap-studio agent init --env claude --skills              # just the skills
 | `--env` | Skills go to | MCP registered in |
 |---|---|---|
 | `claude` | `.claude/skills/` (project) or `~/.claude/skills/` (user) | `.mcp.json` (project); user scope prints the `claude mcp add` command |
-| `codex` | `.tap/agent/` + a managed block in `AGENTS.md` (`~/.codex/AGENTS.md` for user) | `.codex/config.toml` (project) or `~/.codex/config.toml` (user) |
-| `copilot` | `.tap/agent/` + a managed block in `.github/copilot-instructions.md` | `.vscode/mcp.json` (`servers` key); user scope prints the VS Code step |
-| `opencode` | `.tap/agent/` + a managed block in `AGENTS.md` (`~/.config/opencode/AGENTS.md` for user) | `opencode.json` (project) or `~/.config/opencode/opencode.json` (user) |
+| `codex` | `.agents/skills/` + a managed block in `AGENTS.md` (`~/.codex/AGENTS.md` for user) | `.codex/config.toml` (project) or `~/.codex/config.toml` (user) |
+| `copilot` | `.agents/skills/` + a managed block in `.github/copilot-instructions.md` | `.vscode/mcp.json` (`servers` key); user scope prints the VS Code step |
+| `opencode` | `.agents/skills/` + a managed block in `AGENTS.md` (`~/.config/opencode/AGENTS.md` for user) | `opencode.json` (project) or `~/.config/opencode/opencode.json` (user) |
 
 With no `--env` on an interactive terminal, a three-question wizard runs instead: it
 detects which environments this machine plausibly has (CLIs on PATH, config directories,
@@ -76,6 +76,11 @@ idempotent: registrations are added once (an existing `tap-studio` entry is left
 unless `--force`), and the instructions block is replaced between its markers, never
 duplicated. Config files owned by another app (Claude's `~/.claude.json`, Copilot's user
 profile) are never edited — the command prints the exact manual step instead.
+
+Skills for the non-Claude environments used to land in `.tap/agent/`. A run that installs
+skills clears that directory if it finds one — only the skill directories this tool wrote,
+and the empty `.tap/` parent afterwards — so the move to `.agents/skills/` doesn't leave a
+stale second copy for an agent to read.
 
 Project-scope MCP registrations pin `--workspace <relative path>` to the workspace found
 from the project root; user-scope ones omit it, so the server resolves whatever

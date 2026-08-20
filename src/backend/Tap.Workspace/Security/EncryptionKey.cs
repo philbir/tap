@@ -24,9 +24,17 @@ namespace Tap.Workspace.Security;
 public interface IEncryptionKeySource
 {
     /// <summary>The passphrase, or <c>null</c> when this machine has no key configured.
-    /// Callers that only need plain values must tolerate null; callers that are about to
-    /// encrypt should fail with a message naming both sources.</summary>
+    /// Read-only: never creates one. This is the call for status, diagnostics, and every
+    /// <i>decrypt</i> — a missing key there means the data is unreadable, and answering that
+    /// with a freshly minted key would turn an actionable error into silent corruption.</summary>
     string? GetPassphrase();
+
+    /// <summary>The passphrase, creating one on this machine if it has none. This is the call
+    /// for the <i>encrypt</i> path: the first secret Tap is asked to store is the moment a key
+    /// is actually needed, so that is when it appears — no <c>key init</c> step in between.
+    /// Still <c>null</c> when no key exists and none can be created (a host that supplies its
+    /// own key, or a home directory that cannot be written).</summary>
+    string? EnsurePassphrase();
 
     /// <summary>Where the passphrase came from, for diagnostics the user can act on.</summary>
     EncryptionKeyOrigin Origin { get; }
@@ -92,6 +100,32 @@ public sealed class MachineEncryptionKeySource(string? systemDir = null) : IEncr
         return ReadKeyFile();
     }
 
+    /// <summary>
+    /// Resolves the passphrase, generating <see cref="KeyFilePath"/> when this machine has
+    /// none. Deliberately *not* what <see cref="GetPassphrase"/> does — see the interface.
+    ///
+    /// <para>An exported <see cref="EnvVar"/> short-circuits it: the variable already answers
+    /// the question, and writing a key file nothing reads is the same mistake
+    /// <c>key init</c> refuses to make.</para>
+    /// </summary>
+    public string? EnsurePassphrase()
+    {
+        if (GetPassphrase() is { } existing) return existing;
+
+        try
+        {
+            return GenerateKeyFile();
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        {
+            // Either another process won the race to create the file — in which case its key
+            // is now *the* key and ours was never written — or the directory is not writable.
+            // Re-reading answers both: the winner's passphrase, or null for the caller to
+            // report with the usual both-sources hint.
+            return ReadKeyFile();
+        }
+    }
+
     private string? ReadKeyFile()
     {
         var path = KeyFilePath;
@@ -115,26 +149,39 @@ public sealed class MachineEncryptionKeySource(string? systemDir = null) : IEncr
     public string GenerateKeyFile(bool force = false)
     {
         var path = KeyFilePath;
-        if (!force && ReadKeyFile() is not null)
-            throw new InvalidOperationException($"'{path}' already holds a key. Move it aside first if you really mean to replace it — data encrypted with the old key will not decrypt with the new one.");
+        if (!force && ReadKeyFile() is not null) throw AlreadyHoldsKey(path);
 
         var passphrase = Convert.ToBase64String(RandomNumberGenerator.GetBytes(32));
         var dir = Path.GetDirectoryName(path)!;
         if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dir);
         else Directory.CreateDirectory(dir, OwnerOnlyDirectory);
 
+        // CreateNew, not Create: the check above is a check, and a check has a window. Two
+        // processes reaching EnsurePassphrase() at once would both pass it, and the second
+        // would truncate the first's key — leaving whatever the first had already encrypted
+        // unreadable. Letting the filesystem arbitrate closes that window; the loser is told
+        // the same thing it would have been told a millisecond earlier.
+        //
+        // A file that exists but holds nothing (`touch encryption.key`) is not a key and has
+        // nothing to lose, so it stays overwritable — otherwise it would wedge the machine
+        // into a state where no key can ever be generated.
         var options = new FileStreamOptions
         {
-            Mode = FileMode.Create,
+            Mode = force || KeyFileIsBlank() ? FileMode.Create : FileMode.CreateNew,
             Access = FileAccess.Write,
             Share = FileShare.None,
         };
         if (!OperatingSystem.IsWindows()) options.UnixCreateMode = OwnerOnlyFile;
 
-        using (var fs = new FileStream(path, options))
+        try
         {
+            using var fs = new FileStream(path, options);
             fs.Write(Encoding.UTF8.GetBytes(passphrase + "\n"));
             fs.Flush(flushToDisk: true);
+        }
+        catch (IOException) when (!force && File.Exists(path))
+        {
+            throw AlreadyHoldsKey(path);
         }
 
         if (!OperatingSystem.IsWindows())
@@ -144,6 +191,22 @@ public sealed class MachineEncryptionKeySource(string? systemDir = null) : IEncr
         }
         return passphrase;
     }
+
+    /// <summary>True when the key file is present but empty — readable, and holding no key.
+    /// Distinct from "unreadable", which must never be treated as clobberable.</summary>
+    private bool KeyFileIsBlank()
+    {
+        try
+        {
+            return File.Exists(KeyFilePath) && File.ReadAllText(KeyFilePath).Trim().Length == 0;
+        }
+        catch (IOException) { return false; }
+        catch (UnauthorizedAccessException) { return false; }
+    }
+
+    private static InvalidOperationException AlreadyHoldsKey(string path) => new(
+        $"'{path}' already holds a key. Move it aside first if you really mean to replace it — "
+        + "data encrypted with the old key will not decrypt with the new one.");
 }
 
 /// <summary>Fixed-passphrase source for tests and for hosts that resolve the key their own
@@ -151,5 +214,9 @@ public sealed class MachineEncryptionKeySource(string? systemDir = null) : IEncr
 public sealed class StaticEncryptionKeySource(string? passphrase) : IEncryptionKeySource
 {
     public string? GetPassphrase() => string.IsNullOrEmpty(passphrase) ? null : passphrase;
+
+    /// <summary>Nothing to create — this source's key is whatever the host handed it.</summary>
+    public string? EnsurePassphrase() => GetPassphrase();
+
     public EncryptionKeyOrigin Origin => string.IsNullOrEmpty(passphrase) ? EncryptionKeyOrigin.None : EncryptionKeyOrigin.Environment;
 }

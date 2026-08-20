@@ -15,6 +15,11 @@ namespace Tap.Studio.Cli.Commands;
 /// <c>&lt;system-dir&gt;/encryption.key</c> and refuses to overwrite an existing key, because
 /// the old key is the only thing that can read data written with it.</para>
 ///
+/// <para><c>init</c> is not a prerequisite: storing a secret on a machine with no key creates
+/// one first (<see cref="MachineEncryptionKeySource.EnsurePassphrase"/>). It stays for people
+/// who want the key provisioned and backed up before there is anything to lose, and for
+/// <c>--force</c> rotation.</para>
+///
 /// <para>CI doesn't use <c>init</c> — it exports <c>TAP_ENCRYPTION_KEY</c>, which wins over
 /// the file. That is also why <c>init</c> declines while the variable is set: writing a key
 /// nothing reads is worse than doing nothing.</para>
@@ -45,10 +50,12 @@ public sealed class KeyStatusCommand : Command<KeyStatusCommand.Settings>
                 return ExitCode.Ok;
 
             default:
-                console.MarkupLine("[yellow]No encryption key on this machine.[/]");
-                console.MarkupLine($"  Secret values in [bold]file[/] providers cannot be written or read.");
-                console.MarkupLine($"  Set [bold]{MachineEncryptionKeySource.EnvVar}[/], or run [bold]tap-studio key init[/] "
-                    + $"to generate [dim]{Markup.Escape(source.KeyFilePath)}[/].");
+                console.MarkupLine("[yellow]No encryption key on this machine yet.[/]");
+                console.MarkupLine($"  One is generated at [dim]{Markup.Escape(source.KeyFilePath)}[/] the first time a secret is stored,");
+                console.MarkupLine($"  so nothing is blocked. Run [bold]tap-studio key init[/] to create it now, or set "
+                    + $"[bold]{MachineEncryptionKeySource.EnvVar}[/] to supply your own.");
+                // Still non-zero: this machine cannot decrypt anything today, which is what a
+                // script gating on `key status` is asking about.
                 return ExitCode.WorkspaceError;
         }
     }

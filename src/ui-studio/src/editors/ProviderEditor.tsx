@@ -150,7 +150,9 @@ export function ProviderEditor({ name }: { name: string }) {
     }
   }
 
-  const secretsBlocked = encrypts && keyStatus !== null && !keyStatus.configured
+  // No key yet is a note, not a wall: storing a secret creates one server-side. What the
+  // user still needs from us is the path, because that file becomes theirs to back up.
+  const keyPending = encrypts && keyStatus !== null && !keyStatus.configured
 
   return (
     <EditorShell
@@ -186,7 +188,7 @@ export function ProviderEditor({ name }: { name: string }) {
           </Group>
         )}
 
-        {secretsBlocked && <NoKeyBanner status={keyStatus!} onGenerated={setKeyStatus} />}
+        {keyPending && <NoKeyBanner status={keyStatus!} onGenerated={setKeyStatus} />}
 
         {readOnly && (
           <Alert color="gray" variant="light" icon={<IconAlertTriangle size={16} />}>
@@ -202,7 +204,6 @@ export function ProviderEditor({ name }: { name: string }) {
             rows={rows}
             readOnly={readOnly}
             busyRowId={busyKey}
-            secretsBlocked={!!secretsBlocked}
             onChange={update}
             onReveal={(row) => void reveal(row)}
             onRemove={(id) => setRows((cur) => cur.filter((r) => r.id !== id))}
@@ -245,17 +246,17 @@ function NoKeyBanner({ status, onGenerated }: {
   }
 
   return (
-    <Alert color="yellow" variant="light" icon={<IconKey size={16} />} title="No encryption key on this machine">
+    <Alert color="blue" variant="light" icon={<IconKey size={16} />} title="No encryption key on this machine yet">
       <Stack gap="xs">
         <Text size="sm">
-          Secret values can't be written or read until this machine has a key. Set{' '}
-          <Code fz="xs">{status.envVarName}</Code>, or generate one at{' '}
-          <Code fz="xs">{status.keyFilePath}</Code>.
+          One is created at <Code fz="xs">{status.keyFilePath}</Code> the first time you save a
+          secret here — or generate it now, to have it before there is anything to lose. Set{' '}
+          <Code fz="xs">{status.envVarName}</Code> instead to supply your own.
         </Text>
         {failed && <Text size="sm" c="red">{failed}</Text>}
         <Group>
-          <Button size="xs" loading={busy} onClick={() => void generate()} leftSection={<IconKey size={14} />}>
-            Generate a key
+          <Button size="xs" variant="default" loading={busy} onClick={() => void generate()} leftSection={<IconKey size={14} />}>
+            Generate it now
           </Button>
           <Text size="xs" c="dimmed">
             Back the file up — it is the only thing that can decrypt what it encrypts.
@@ -267,12 +268,11 @@ function NoKeyBanner({ status, onGenerated }: {
 }
 
 function VariableTable({
-  rows, readOnly, busyRowId, secretsBlocked, onChange, onReveal, onRemove, onAdd,
+  rows, readOnly, busyRowId, onChange, onReveal, onRemove, onAdd,
 }: {
   rows: Row[]
   readOnly: boolean
   busyRowId: string | null
-  secretsBlocked: boolean
   onChange: (id: string, patch: Partial<Row>) => void
   onReveal: (row: Row) => void
   onRemove: (id: string) => void
@@ -347,21 +347,16 @@ function VariableTable({
                 )}
               </Table.Td>
               <Table.Td>
-                <Tooltip
-                  label={secretsBlocked
-                    ? 'Needs an encryption key on this machine'
-                    : 'Encrypt this value at rest and mask it everywhere'}
-                  withArrow
-                >
+                <Tooltip label="Encrypt this value at rest and mask it everywhere" withArrow>
                   <Badge
                     component="button"
                     type="button"
                     variant={row.secret ? 'filled' : 'outline'}
                     color={row.secret ? 'orange' : 'gray'}
                     size="sm"
-                    style={{ cursor: readOnly || secretsBlocked ? 'not-allowed' : 'pointer' }}
+                    style={{ cursor: readOnly ? 'not-allowed' : 'pointer' }}
                     onClick={() => {
-                      if (readOnly || secretsBlocked) return
+                      if (readOnly) return
                       onChange(row.id, { secret: !row.secret })
                     }}
                   >

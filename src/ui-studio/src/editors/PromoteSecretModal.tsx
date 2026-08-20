@@ -65,7 +65,9 @@ export function PromoteSecretModal({ request, onResolve }: PromoteSecretModalPro
   const chosen = providers?.find((p) => p.name === target) ?? null
   // Only the file provider encrypts with the machine key; the others carry their own
   // protection (a vault, the user profile), so a missing key doesn't concern them.
-  const needsKey = chosen?.type === 'file' && keyStatus !== null && !keyStatus.configured
+  // Not a blocker: the server generates the key as part of storing the first secret. This
+  // only decides whether to say so, since the file that appears is the user's to back up.
+  const willCreateKey = chosen?.type === 'file' && keyStatus !== null && !keyStatus.configured
   const token = target && key.trim() ? `{{${target}:${key.trim()}}}` : ''
 
   async function store() {
@@ -81,18 +83,6 @@ export function PromoteSecretModal({ request, onResolve }: PromoteSecretModalPro
         envPath,
       })
       onResolve({ token })
-    } catch (e) {
-      setError(e instanceof ApiError ? e.message : String(e))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function generateKey() {
-    setBusy(true)
-    setError(null)
-    try {
-      setKeyStatus(await api.generateEncryptionKey())
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
     } finally {
@@ -146,19 +136,14 @@ export function PromoteSecretModal({ request, onResolve }: PromoteSecretModalPro
                 <Text size="xs" c="dimmed" mb={4}>The file will contain:</Text>
                 <Code block fz="xs">{token || '—'}</Code>
               </div>
-              {needsKey && (
-                <Alert color="yellow" variant="light" icon={<IconKey size={16} />}>
-                  <Stack gap="xs">
-                    <Text size="sm">
-                      This machine has no encryption key, so the file provider can't store a
-                      secret yet. Set <Code fz="xs">{keyStatus?.envVarName}</Code>, or generate one.
-                    </Text>
-                    <Group>
-                      <Button size="xs" loading={busy} onClick={() => void generateKey()} leftSection={<IconKey size={14} />}>
-                        Generate a key
-                      </Button>
-                    </Group>
-                  </Stack>
+              {willCreateKey && (
+                <Alert color="blue" variant="light" icon={<IconKey size={16} />}>
+                  <Text size="sm">
+                    This machine has no encryption key yet — one will be created at{' '}
+                    <Code fz="xs">{keyStatus?.keyFilePath}</Code> when you store this.{' '}
+                    <Text span size="sm" fw={600}>Back that file up:</Text> it is the only thing
+                    that can decrypt what it encrypts.
+                  </Text>
                 </Alert>
               )}
             </>
@@ -174,7 +159,7 @@ export function PromoteSecretModal({ request, onResolve }: PromoteSecretModalPro
               <Button variant="default" onClick={() => onResolve(null)}>Cancel</Button>
               <Button
                 loading={busy}
-                disabled={!target || !key.trim() || needsKey || noWritableProvider}
+                disabled={!target || !key.trim() || noWritableProvider}
                 onClick={() => void store()}
               >
                 Store &amp; reference

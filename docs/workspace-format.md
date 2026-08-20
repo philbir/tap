@@ -1121,18 +1121,28 @@ cannot be declared in `workspace.tap` — a passphrase stored beside the ciphert
 travels with it into Git, and is not encryption. The PBKDF2 salt is still per provider
 (`tap-file-provider:<name>`), so one machine key yields a distinct derived key per store.
 
-The key is needed only for `secret: true` values. A machine with no key reads and writes plain
-values normally; a secret read fails with `E_PROVIDER_DECRYPT_FAILED` and a secret write with
-`E_PROVIDER_CONFIG_INVALID`, both naming the two sources above.
+The key is needed only for `secret: true` values, and it provisions itself: **storing a secret on
+a machine with no key generates `<system-dir>/encryption.key` first**, so nothing has to be set up
+before the first secret. A machine with no key reads and writes plain values normally.
+
+Generation happens on the write path only. A secret *read* with no key still fails with
+`E_PROVIDER_DECRYPT_FAILED` naming both sources — the ciphertext on disk was written under a key
+that is gone, and minting a fresh one would answer that with a key which still cannot read it.
+A secret write fails with `E_PROVIDER_CONFIG_INVALID` only when no key can be created either:
+`TAP_ENCRYPTION_KEY` is exported empty, or the system directory is not writable.
+
+`TAP_ENCRYPTION_KEY` suppresses generation entirely. The variable already answers the question,
+and a key file it shadows is one nothing reads.
 
 ```shell
 tap-studio key status      # is there a key, and where did it come from
-tap-studio key init        # generate <system-dir>/encryption.key (refuses to overwrite)
+tap-studio key init        # generate <system-dir>/encryption.key now (refuses to overwrite)
 ```
 
-Studio offers the same generation step inline wherever a missing key blocks a secret. Back the
-file up: it is the only thing that can decrypt what it encrypted, and no endpoint or command
-will print it back to you.
+`key init` is optional — it exists to provision and back the key up *before* there is anything to
+lose, and for `--force` rotation. Studio offers the same step inline. Back the file up either way:
+it is the only thing that can decrypt what it encrypted, and no endpoint or command will print it
+back to you.
 
 ### 12.6 Marking a variable secret
 

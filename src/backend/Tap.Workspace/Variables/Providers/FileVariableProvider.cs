@@ -77,10 +77,16 @@ public sealed class FileVariableProvider : IVariableProvider
 
     /// <summary>The AES key for this store, or <c>null</c> when the machine has no passphrase.
     /// Resolved per call rather than at construction: providers are cached across requests, and
-    /// a key generated after the instance was built must take effect immediately.</summary>
-    private byte[]? Key()
+    /// a key generated after the instance was built must take effect immediately.
+    ///
+    /// <para><paramref name="create"/> is the encrypt/decrypt asymmetry. Storing a secret is a
+    /// request to protect something, so a machine with no key gets one made for it. Reading one
+    /// is not: no key there means the ciphertext on disk was written under a key that is gone,
+    /// and minting a fresh one would answer "your data is unreadable" with a key that still
+    /// cannot read it.</para></summary>
+    private byte[]? Key(bool create = false)
     {
-        var passphrase = _keySource.GetPassphrase();
+        var passphrase = create ? _keySource.EnsurePassphrase() : _keySource.GetPassphrase();
         if (string.IsNullOrEmpty(passphrase)) return null;
 
         lock (_gate)
@@ -95,8 +101,11 @@ public sealed class FileVariableProvider : IVariableProvider
     }
 
     /// <summary>The message every "no key" failure shares. Names both sources, because the
-    /// only useful thing to say to someone holding undecryptable data is where to put the
-    /// key.</summary>
+    /// only useful thing to say to someone holding undecryptable data is where to put the key.
+    ///
+    /// <para>On the write path this is now the rare case: storing a secret generates a key when
+    /// the machine has none. Reaching it there means generation itself failed — an unwritable
+    /// system directory — which is why the message still names the manual routes.</para></summary>
     private static string NoKeyHint =>
         $"No encryption key on this machine — set {MachineEncryptionKeySource.EnvVar}, or generate "
         + $"'{MachineEncryptionKeySource.Default.KeyFilePath}' from Settings or `tap-studio key init`.";
@@ -132,7 +141,7 @@ public sealed class FileVariableProvider : IVariableProvider
     {
         // Derive before taking the gate: PBKDF2 is the slow part, and it needs nothing the
         // store holds.
-        var key = isSecret ? Key() : null;
+        var key = isSecret ? Key(create: true) : null;
         if (isSecret && key is null)
         {
             throw new WorkspaceParseException(new WorkspaceError(

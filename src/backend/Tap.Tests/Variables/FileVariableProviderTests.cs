@@ -134,6 +134,9 @@ public sealed class FileVariableProviderTests : IDisposable
     {
         public string? Passphrase { get; set; } = passphrase;
         public string? GetPassphrase() => Passphrase;
+        /// <summary>Stands in for a host that resolves its key elsewhere: there is nothing
+        /// for Tap to create, so "ensure" is just "get".</summary>
+        public string? EnsurePassphrase() => Passphrase;
         public EncryptionKeyOrigin Origin
             => Passphrase is null ? EncryptionKeyOrigin.None : EncryptionKeyOrigin.KeyFile;
     }

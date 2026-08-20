@@ -41,23 +41,30 @@ public static class FileParser
                 relativePath));
         }
 
-        var common = ReadCommon(split.Frontmatter, relativePath, suffixKind);
+        var common = ReadCommon(split.Frontmatter, split.Body, relativePath, suffixKind);
         return suffixKind switch
         {
-            WorkspaceKind.Request => ParseRequest(common, split.Frontmatter, split.Body, relativePath),
+            WorkspaceKind.Request => ParseRequest(common, split.Frontmatter, relativePath),
             WorkspaceKind.Auth => ParseAuth(common, split.Frontmatter, relativePath),
             WorkspaceKind.Env => ParseEnv(common, split.Frontmatter),
-            WorkspaceKind.Collection => ParseCollection(common, split.Frontmatter, split.Body, relativePath),
+            WorkspaceKind.Collection => ParseCollection(common, split.Frontmatter, relativePath),
             WorkspaceKind.Workspace => ParseWorkspace(common, split.Frontmatter),
-            WorkspaceKind.Flow => ParseFlow(common, split.Frontmatter, split.Body, relativePath),
-            WorkspaceKind.Test => ParseTestSet(common, split.Frontmatter, split.Body, relativePath),
+            WorkspaceKind.Flow => ParseFlow(common, split.Frontmatter, relativePath),
+            WorkspaceKind.Test => ParseTestSet(common, split.Frontmatter, relativePath),
             _ => throw new InvalidOperationException(),
         };
     }
 
     private readonly record struct Common(WorkspaceKind Kind, string RelativePath, string? Id, string? Name, IReadOnlyList<string> Tags, string Body);
 
-    private static Common ReadCommon(YamlMappingNode fm, string relativePath, WorkspaceKind kind)
+    /// <summary>
+    /// Everything read the same way for every kind — including the Markdown body, which is
+    /// user-authored documentation and belongs to the file regardless of what the frontmatter
+    /// declares. It is filled here rather than per-kind on purpose: the Studio rewrites the
+    /// whole file from the parsed model on every save, so a kind whose parser forgot to carry
+    /// the body would silently delete it on the next unrelated edit.
+    /// </summary>
+    private static Common ReadCommon(YamlMappingNode fm, string body, string relativePath, WorkspaceKind kind)
     {
         return new Common(
             kind,
@@ -65,12 +72,12 @@ public static class FileParser
             fm.String("id"),
             fm.String("name"),
             fm.StringList("tags"),
-            string.Empty); // body filled per-kind below
+            body);
     }
 
-    private static RequestFile ParseRequest(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static RequestFile ParseRequest(Common c, YamlMappingNode fm, string relativePath)
     {
-        var block = HttpBlockExtractor.Extract(body, relativePath);
+        var block = HttpBlockExtractor.Extract(c.Body, relativePath);
         var protoRaw = fm.String("protocol");
         var protocol = protoRaw is null
             ? RequestProtocol.Http
@@ -86,7 +93,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             Auth = fm.Ref("auth"),
             Protocol = protocol,
             Transport = ParseTransport(fm, relativePath),
@@ -165,6 +172,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
+            Body = c.Body,
             Type = type,
             Fields = bag,
             Headers = fm.StringMap("headers"),
@@ -182,6 +190,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
+            Body = c.Body,
             // Env vars use the same VarSpec shape as workspace/collection/request vars
             // so the `secret: true` flag is uniformly available across every scope.
             Vars = fm.VarSpecMap("vars"),
@@ -195,7 +204,7 @@ public static class FileParser
         };
     }
 
-    private static CollectionFile ParseCollection(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static CollectionFile ParseCollection(Common c, YamlMappingNode fm, string relativePath)
     {
         var stages = ParseStages(fm, relativePath);
         var defaultStage = fm.String("defaultStage");
@@ -214,7 +223,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             BaseUrl = fm.String("baseUrl") ?? string.Empty,
             DefaultAuth = fm.Ref("defaultAuth"),
             DefaultHeaders = fm.StringMap("defaultHeaders"),
@@ -262,7 +271,7 @@ public static class FileParser
             relativePath));
     }
 
-    private static FlowFile ParseFlow(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static FlowFile ParseFlow(Common c, YamlMappingNode fm, string relativePath)
     {
         return new FlowFile
         {
@@ -271,13 +280,13 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             Vars = fm.VarSpecMap("vars"),
             Steps = FlowParser.ParseSteps(fm, relativePath),
         };
     }
 
-    private static TestSetFile ParseTestSet(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static TestSetFile ParseTestSet(Common c, YamlMappingNode fm, string relativePath)
     {
         return new TestSetFile
         {
@@ -286,7 +295,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             Vars = fm.VarSpecMap("vars"),
             OnFailure = TestSetParser.ParseOnFailure(fm, relativePath),
             Tests = TestSetParser.ParseTests(fm, relativePath),
@@ -325,6 +334,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
+            Body = c.Body,
             DefaultEnv = fm.Ref("defaultEnv"),
             VariableProviders = providers,
             DefaultVariableProvider = fm.String("defaultVariableProvider") ?? fm.String("defaultProvider"),

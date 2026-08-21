@@ -1,21 +1,24 @@
 import {
-  ActionIcon, Badge, Box, Button, Checkbox, Code, Group, NumberInput, ScrollArea, Select, Stack, Switch, Tabs, TagsInput, Text, TextInput,
+  ActionIcon, Badge, Box, Button, Checkbox, Code, Group, NumberInput, Paper, ScrollArea, Select, Stack, Switch, Tabs, TagsInput, Text, TextInput,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
-  IconCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRocket, IconShieldCheck, IconTrash, IconVariable,
+  IconApi, IconCode, IconFileCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRefresh, IconRocket,
+  IconShieldCheck, IconTrash, IconVariable, IconWorld,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type {
-  AuthSummary, CollectionDetail, CollectionSpec, CollectionStageSpec, CollectionSummary, VariableContext,
+  AuthSummary, CollectionDetail, CollectionSpec, CollectionStageSpec, CollectionSummary, OpenApiLink, VariableContext,
 } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { authSelectGroups } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
+import { ImportOpenApiDialog } from './ImportOpenApiDialog'
 import { KvTable, type KvRow } from './KvTable'
+import { ResyncOpenApiDialog } from './ResyncOpenApiDialog'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
 import { VariableInput } from './VariableInput'
@@ -49,6 +52,12 @@ export function CollectionEditor({ path }: Props) {
   const [varsOpened, varsCtl] = useDisclosure(false)
   const variableContext = useMemo<VariableContext>(() => ({ collectionPath: collectionFilePath }), [collectionFilePath])
 
+  // The OpenAPI document this collection was imported from, if any. Null both while loading
+  // and when the collection was hand-written — the tab reads the same either way.
+  const [link, setLink] = useState<OpenApiLink | null>(null)
+  const [importOpen, importCtl] = useDisclosure(false)
+  const [resyncOpen, resyncCtl] = useDisclosure(false)
+
   useEffect(() => {
     let cancelled = false
     setError(null)
@@ -59,6 +68,8 @@ export function CollectionEditor({ path }: Props) {
       setSpec(initial)
       setSavedSpec(initial)
     }).catch((e: Error) => !cancelled && setError(e.message))
+    // A missing link isn't an error — most collections have none.
+    api.openApiLink(slug).then((l) => !cancelled && setLink(l)).catch(() => {})
     return () => { cancelled = true }
   }, [slug, generation])
 
@@ -124,6 +135,9 @@ export function CollectionEditor({ path }: Props) {
           </Tabs.Tab>
           <Tabs.Tab value="docs" leftSection={<IconFileText size={14} />}>
             Docs <TabDot active={!!spec.body && spec.body.trim().length > 0} />
+          </Tabs.Tab>
+          <Tabs.Tab value="openapi" leftSection={<IconApi size={14} />}>
+            OpenAPI <TabDot active={!!link} />
           </Tabs.Tab>
           <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
         </Tabs.List>
@@ -285,6 +299,14 @@ export function CollectionEditor({ path }: Props) {
           />
         </Tabs.Panel>
 
+        <Tabs.Panel value="openapi">
+          <OpenApiPanel
+            link={link}
+            onImport={importCtl.open}
+            onResync={resyncCtl.open}
+          />
+        </Tabs.Panel>
+
         <Tabs.Panel value="source">
           {detail.exists
             ? <SourceTab path={collectionFilePath} source={detail.source} />
@@ -293,8 +315,96 @@ export function CollectionEditor({ path }: Props) {
       </Tabs>
     </EditorShell>
     <VariablesPanel opened={varsOpened} onClose={varsCtl.close} context={variableContext} />
+    {importOpen && (
+      <ImportOpenApiDialog
+        open={importOpen}
+        onOpenChange={(v) => !v && importCtl.close()}
+        initialSlug={slug}
+        onImported={importCtl.close}
+      />
+    )}
+    {resyncOpen && (
+      <ResyncOpenApiDialog
+        open={resyncOpen}
+        onOpenChange={(v) => !v && resyncCtl.close()}
+        slug={slug}
+      />
+    )}
     </>
   )
+}
+
+// ---- OpenAPI ------------------------------------------------------------------------
+
+/** Import and re-sync live here rather than on the explorer's context menu: they're
+ *  occasional, collection-scoped operations, and the tab has room to show what the
+ *  collection is actually linked to before you fire one. */
+function OpenApiPanel({ link, onImport, onResync }: {
+  link: OpenApiLink | null
+  onImport: () => void
+  onResync: () => void
+}) {
+  if (!link) {
+    return (
+      <Stack gap="md" maw={620}>
+        <Text size="sm" c="dimmed">
+          This collection isn't linked to an OpenAPI document. Import one to generate requests
+          from its operations — pick which ones you want, how they're laid out, and which
+          security scheme becomes the collection's default auth.
+        </Text>
+        <Box>
+          <Button leftSection={<IconApi size={14} />} onClick={onImport}>Import from OpenAPI…</Button>
+        </Box>
+      </Stack>
+    )
+  }
+
+  // `aspire` links carry a URL too — what matters for the icon is whether there's an address
+  // to re-fetch from or just an uploaded file.
+  const fromUrl = !!link.url
+  return (
+    <Stack gap="md" maw={620}>
+      <Paper withBorder radius="sm" p="md">
+        <Stack gap="xs">
+          <Group gap="xs" wrap="nowrap">
+            {fromUrl ? <IconWorld size={16} opacity={0.6} /> : <IconFileCode size={16} opacity={0.6} />}
+            <Text size="sm" ff="var(--mono)" truncate style={{ flex: 1 }}>
+              {link.url ?? link.fileName ?? link.sourceKind}
+            </Text>
+          </Group>
+          <Group gap={6}>
+            <Badge size="sm" variant="light" color="gray">OpenAPI {link.specVersion}</Badge>
+            {link.apiVersion && <Badge size="sm" variant="light" color="gray">api {link.apiVersion}</Badge>}
+            {link.sourceKind === 'aspire' && <Badge size="sm" variant="light" color="gray">aspire</Badge>}
+            <Badge size="sm" variant="light" color="gray">{link.layout} layout</Badge>
+            <Badge size="sm" variant="light" color="tap">
+              {link.trackedOperations} tracked {link.trackedOperations === 1 ? 'operation' : 'operations'}
+            </Badge>
+          </Group>
+          <Text size="xs" c="dimmed">Last synced {formatFetchedAt(link.fetchedAt)}.</Text>
+        </Stack>
+      </Paper>
+      <Group gap="sm">
+        <Button leftSection={<IconRefresh size={14} />} onClick={onResync}>Re-sync…</Button>
+        <Button variant="default" leftSection={<IconApi size={14} />} onClick={onImport}>
+          Import from OpenAPI…
+        </Button>
+      </Group>
+      <Text size="xs" c="dimmed">
+        Re-sync diffs the collection against the document and lets you decide, per operation,
+        what to take. Importing again adds operations from any document — including a different one.
+      </Text>
+    </Stack>
+  )
+}
+
+/** Absolute date plus a coarse relative hint — "when did I last pull this" is the question. */
+function formatFetchedAt(iso: string): string {
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return iso
+  const days = Math.floor((Date.now() - at.getTime()) / 86_400_000)
+  const rel = days <= 0 ? 'today' : days === 1 ? 'yesterday' : `${days} days ago`
+  return `${at.toLocaleDateString()} (${rel})`
 }
 
 function specFromDetail(d: CollectionDetail): CollectionSpec {

@@ -769,8 +769,8 @@ converts a Postman collection export into a Tap collection: one `_collection.tap
 
 ## Importing from OpenAPI
 
-Create → Collection → *From OpenAPI*, or right-click a collection → *Import from OpenAPI…*.
-Upload a document or fetch a URL; pick the operations; choose a layout. JSON or YAML,
+Create → Collection → *From OpenAPI*, or open a collection → **OpenAPI** tab → *Import from
+OpenAPI…*. Upload a document or fetch a URL; pick the operations; choose a layout. JSON or YAML,
 OpenAPI 3.0/3.1, and Swagger 2.0 (converted on read).
 
 Two layouts, chosen per import:
@@ -798,8 +798,10 @@ Each import records `collections/<slug>/_openapi.lock.json` — the document it 
 two hashes per operation. One says whether *upstream* changed; the other, compared against the
 file on disk, says whether *you* changed it. Only when both moved is there a conflict.
 
-Right-click the collection → *Re-sync from OpenAPI…*. It re-fetches the recorded URL, diffs,
-and shows one row per operation with a **non-destructive default**:
+Open the collection → **OpenAPI** tab. It shows what the collection is linked to — source,
+spec version, layout, tracked operation count, when it was last synced — and *Re-sync…*
+re-fetches the recorded URL, diffs, and shows one row per operation with a
+**non-destructive default**:
 
 | Verdict | Default |
 |---|---|

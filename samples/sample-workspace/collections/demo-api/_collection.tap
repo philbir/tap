@@ -1,5 +1,11 @@
 ---
 kind: collection
-name: demo-api
+name: Demo.Api | v1
 baseUrl: '{{aspire:demo-api}}'
 ---
+
+# Demo.Api | v1
+
+Version `1.0.0`.
+
+Imported from an OpenAPI description — 45 operations.

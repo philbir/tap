@@ -153,11 +153,18 @@ One interpolation syntax, two token forms:
 The provider prefix has the same shape as a provider name: a letter followed by
 letters/digits/`_`/`-`. Whitespace inside the braces is tolerated (`{{ name }}`).
 
-Expansion is **single-pass**: a resolved value is emitted verbatim and never re-scanned, so
-a value that happens to contain `{{…}}` cannot trigger another round of lookups (that would
-be second-order injection straight out of a workspace file). The corollary: a token written
-*inside a variable's value* does not expand when that variable is referenced — put provider
-tokens directly in the template or auth field that needs them.
+**A declared variable may hold a token of its own.** When `{{name}}` hits a variable a
+`vars:` block declared, that variable's value is expanded in turn — which is what makes
+`default: '{{file:stripe.key}}'` (§12.6) resolve to the value in the provider instead of
+going out as the literal token. The chain is followed as far as it goes, each level starting
+from the author's template, and a chain that closes on itself fails with `E_VAR_CYCLE` naming
+every variable in the loop.
+
+**Nothing else is re-scanned.** A value a provider returned, a value a flow step bound with
+`extract:` (§10.3), and a per-run override (`--var`, the Studio's input form) are all emitted
+verbatim, however token-shaped they look. That line is the whole point: re-scanning a value
+that arrived in a response would let the upstream choose which secret the next request
+carries.
 
 There is **no separate secret syntax**. Whether a resolution is secret comes from the source:
 a provider marks its values (Key Vault values are always secret; the env provider follows the
@@ -522,11 +529,11 @@ cascade and binds provider prefixes for the duration of the run.
 | `providerAliases` | map<string, string> | no | Alias → provider-name bindings. Requests use a stable prefix (`{{kv:secret}}`); each env points the alias at its own provider (`kv: kv-dev` vs `kv: kv-prod`). |
 | `strictVariables` | boolean | no | With a `defaultVariableProvider` set: bare `{{name}}` lookups that miss it fail instead of falling through to other providers. Recommended for one-vault-per-environment setups. |
 
-A `vars` value is a literal (or a var-spec object). Because expansion is single-pass (§3.2),
-a `{{provider:name}}` token written inside a var's value is **not** re-expanded when the
-variable is referenced — to pull a provider value into a request, write the provider token
-directly where it's needed, or bind the prefix with `providerAliases` so one spelling works
-across environments.
+A `vars` value is a literal, a var-spec object, or a reference: a `{{provider:name}}` token
+written inside a var's value resolves when the variable is read (§3.2), so
+`apiToken: { default: '{{kv:client-secret}}', secret: true }` puts the vault behind a name
+requests can spell plainly. Binding the prefix with `providerAliases` does the same job one
+level up, so the same spelling reaches a different vault per environment.
 
 The provider-binding fields make the one-vault-per-environment pattern work: declare
 `kv-dev` and `kv-prod` once (in `workspace.tap` or the system settings), then have
@@ -582,9 +589,9 @@ therefore equivalent to `GET /orders` inside Tap, and unlike the relative form i
 tools that know nothing about collections (§13.5.5).
 
 The merged cascade wins over providers for bare `{{name}}` tokens; `{{provider:name}}`
-bypasses it. Resolution is **single-pass**: values are substituted verbatim and never
-re-scanned, so a variable cannot reference another variable (and reference cycles cannot
-occur — the `E_VAR_CYCLE` code is reserved).
+bypasses it. A value that a `vars:` block declared may itself reference another variable and
+is expanded when it is read (§3.2); a value that arrived at runtime never is. A reference
+chain that closes on itself fails with `E_VAR_CYCLE`.
 
 ---
 
@@ -1162,6 +1169,11 @@ the request renders the same value it always did, from somewhere that isn't the 
 Hand-authored files can of course write the reference directly; the flag and the reference are
 independent, and `secret: true` on a literal still only masks.
 
+A reference resolves wherever a `vars:` block can be written — the workspace manifest, a
+collection, a stage, an env, a request, a `.http` file's `@name = value` lines, and a test
+set's or flow's own variables. What it resolves *to* is redacted on the strength of the
+provider's own mark, so the value in the store is the one that says `secret: true`.
+
 ---
 
 ## 13. Rendering: from files to a ResolvedRequest
@@ -1195,9 +1207,10 @@ The render pipeline:
    (`collections/<slug>/…`); pick the active stage (explicit, else `defaultStage`); resolve
    the auth ref — the request's `auth:`, else the stage's `defaultAuth`, else the
    collection's; merge transport settings (request over collection).
-2. Build the merged variable cascade (§7.3), tracking which names are secret. Template-valued
-   overrides (a flow step's `vars:`) are expanded against the cascade in order, each seeing
-   the ones before it.
+2. Build the merged variable cascade (§7.3), tracking which names are secret and which came
+   out of a `vars:` block — the latter decides whose value may itself carry a token (§3.2).
+   Template-valued overrides (a flow step's `vars:`) are expanded against the cascade in
+   order, each seeing the ones before it.
 3. Expand `{{…}}` tokens in the fenced `http` block — cascade first, then providers (§3.2) —
    and parse it into method / URL / headers / body.
 4. If the URL is relative, expand the stage-or-collection `baseUrl`, normalize its scheme
@@ -1205,7 +1218,7 @@ The render pipeline:
    rewritten to `ws(s)` for websocket), and join. Failing that, `E_HTTP_BLOCK_SYNTAX`.
 5. Merge headers: collection `defaultHeaders` (each value expanded) under the block's
    headers, under auth-derived headers (§8's inline family). Every source is interpolated
-   exactly once — an expanded value is never re-scanned (§3.2) — and the assembled request
+   exactly once — a resolved value is never re-scanned (§3.2) — and the assembled request
    line and headers are rejected if anything smuggled in a line break.
 6. Render the request's assertions against the same cascade; an expected value that pulled
    in anything secret is flagged so reports mask it as `***`.
@@ -1393,7 +1406,7 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 | `E_MULTIPLE_REQUEST_BLOCKS` | A `request` file has more than one fenced `http` block. |
 | `E_DANGLING_REF` | A `path` or `id:` reference does not resolve. |
 | `E_VAR_UNKNOWN` | A `{{name}}` token is neither in the cascade nor resolvable by any provider. |
-| `E_VAR_CYCLE` | Reserved. Expansion is single-pass (§3.2), so reference cycles cannot currently occur. |
+| `E_VAR_CYCLE` | A declared variable resolves through itself — `a: '{{b}}'`, `b: '{{a}}'` (§3.2). The message names every variable in the loop. |
 | `E_UNKNOWN_PROVIDER` | A `{{provider:name}}` token (or the target of an env alias) names a provider that isn't registered. |
 | `E_PROVIDER_RESOLUTION_FAILED` | A registered provider failed to produce the value — CLI not installed, vault unreachable, name absent. |
 | `E_PROVIDER_CONFIG_INVALID` | A `variableProviders:` entry is unusable — invalid name shape, bad settings. |

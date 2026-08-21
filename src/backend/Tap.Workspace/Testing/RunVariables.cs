@@ -41,6 +41,37 @@ public static class RunVariables
     }
 
     /// <summary>
+    /// The names in a bag whose value came out of a <c>vars:</c> block — as opposed to a per-run
+    /// override the caller typed or a value a step bound with <c>extract:</c>.
+    ///
+    /// <para>The distinction is what lets a declared <c>'{{file:api.token}}'</c> resolve while a
+    /// value that arrived in a response never does: only a file's own declaration is a template.
+    /// The renderer takes this set as its <c>declaredOverrides</c>.</para>
+    /// </summary>
+    public static HashSet<string> DeclaredNames(
+        IReadOnlyDictionary<string, VarSpec> vars, IReadOnlyDictionary<string, string>? overrides = null)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        MergeDeclaredNames(names, vars);
+        if (overrides is not null)
+        {
+            // An override wins the value, so it also decides what the value is: data, not a template.
+            foreach (var name in overrides.Keys) names.Remove(name);
+        }
+        return names;
+    }
+
+    /// <summary>Adds another file's declared names — the counterpart to
+    /// <see cref="MergeLiterals"/>, applied to the same vars in the same order.</summary>
+    public static void MergeDeclaredNames(HashSet<string> names, IReadOnlyDictionary<string, VarSpec> vars)
+    {
+        foreach (var (name, spec) in vars)
+        {
+            if (spec.Default is not null) names.Add(name);
+        }
+    }
+
+    /// <summary>
     /// Orders the template-valued overrides for one step: the enclosing entry's variables,
     /// then the step's own, which win.
     ///

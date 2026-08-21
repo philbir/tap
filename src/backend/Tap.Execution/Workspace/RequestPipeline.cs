@@ -27,18 +27,22 @@ public sealed class RequestPipeline(IWorkspaceHost host)
     /// <param name="templateOverrides">Overrides whose values are themselves templates,
     /// expanded in order against everything below them. A flow step's <c>vars:</c> arrive
     /// here.</param>
+    /// <param name="declaredOverrides">Which of <paramref name="overrides"/> came out of a
+    /// <c>vars:</c> block — a test set's or a flow's own variables, as opposed to a value a
+    /// step extracted from a response. Only those may hold a reference to another variable.</param>
     public async ValueTask<ResolvedRequest> RenderAsync(
         RequestFile request,
         string? envPath,
         IReadOnlyDictionary<string, string>? overrides,
         CancellationToken ct,
         string? stageName = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         var env = ResolveEnv(envPath);
         var renderer = new WorkspaceRenderer(host.Workspace, host.CreateRegistry(env));
         var rendered = await renderer
-            .RenderAsync(request, env, overrides, ct, stageName, templateOverrides)
+            .RenderAsync(request, env, overrides, ct, stageName, templateOverrides, declaredOverrides)
             .ConfigureAwait(false);
 
         rendered = ResolveBinaryRef(request, rendered);
@@ -57,7 +61,8 @@ public sealed class RequestPipeline(IWorkspaceHost host)
         CancellationToken ct,
         bool tolerant = false,
         IReadOnlyDictionary<string, string>? overrides = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         if (assertions.Count == 0) return [];
 
@@ -70,7 +75,8 @@ public sealed class RequestPipeline(IWorkspaceHost host)
         var env = ResolveEnv(envPath);
         var renderer = new WorkspaceRenderer(host.Workspace, host.CreateRegistry(env));
         return await renderer
-            .RenderAssertionsAsync(request, env, assertions, ct, stageName, tolerant, overrides, templateOverrides)
+            .RenderAssertionsAsync(
+                request, env, assertions, ct, stageName, tolerant, overrides, templateOverrides, declaredOverrides)
             .ConfigureAwait(false);
     }
 

@@ -27,6 +27,10 @@ public sealed class AuthFieldResolver
 {
     private readonly VariableProviderRegistry _registry;
     private readonly IReadOnlyDictionary<string, string> _cascade;
+    /// <summary>Every name here came out of a <c>vars:</c> block, so every value may itself be a
+    /// reference — <c>clientSecret: '{{oauth.secret}}'</c> where that variable holds
+    /// <c>'{{file:oauth.secret}}'</c> resolves the whole way down. See <see cref="Interpolation"/>.</summary>
+    private readonly IReadOnlySet<string> _declared;
 
     public AuthFieldResolver(
         LoadedWorkspace workspace,
@@ -43,6 +47,7 @@ public sealed class AuthFieldResolver
         if (context.Stage is not null) Merge(cascade, context.Stage.Vars);
         if (context.Env is not null) Merge(cascade, context.Env.Vars);
         _cascade = cascade;
+        _declared = new HashSet<string>(cascade.Keys, StringComparer.Ordinal);
     }
 
     private static void Merge(Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src)
@@ -56,7 +61,7 @@ public sealed class AuthFieldResolver
     public async ValueTask<string?> AllAsync(string? input, CancellationToken ct)
     {
         if (string.IsNullOrEmpty(input)) return input;
-        return await Interpolation.ExpandAsync(input!, _cascade, _registry, ct).ConfigureAwait(false);
+        return await Interpolation.ExpandAsync(input!, _cascade, _registry, ct, _declared).ConfigureAwait(false);
     }
 
     /// <summary>Same as <see cref="AllAsync(string?, CancellationToken)"/> but expanded for

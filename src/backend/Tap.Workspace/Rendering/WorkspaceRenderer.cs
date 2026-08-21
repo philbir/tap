@@ -21,13 +21,17 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     /// arrive here: <c>id: '{{orderId}}'</c> has to see the value an earlier step bound, and a
     /// plain override would land in the cascade unexpanded and go out on the wire verbatim.
     /// Applied after <paramref name="overrides"/>, in order, each seeing the ones before it.</param>
+    /// <param name="declaredOverrides">Names among <paramref name="overrides"/> that came from
+    /// a <c>vars:</c> block rather than from a response or a command line — a test set's or a
+    /// flow's own variables. Only those may hold a reference to another variable.</param>
     public async ValueTask<ResolvedRequest> RenderAsync(
         RequestFile request,
         EnvFile? env,
         IReadOnlyDictionary<string, string>? overrides,
         CancellationToken ct,
         string? stageName = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
         var collection = CollectionLocator.ForRequest(workspace, request);
@@ -50,10 +54,11 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             auth = workspace.Resolve(collection.DefaultAuth, collectionDir) as AuthFile;
         }
 
-        var built = BuildCascade(request, collection, stage, env, overrides);
+        var built = BuildCascade(request, collection, stage, env, overrides, declaredOverrides);
         var cascade = built.Values;
         var secretNames = built.SecretNames;
-        await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
+        var declared = built.Declared;
+        await ApplyTemplateOverridesAsync(built, templateOverrides, ct).ConfigureAwait(false);
 
         // Resolve the effective base URL *before* the block is interpolated, so the block can
         // refer to it as {{baseUrl}}. It only needs the cascade and the providers, never the
@@ -61,7 +66,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         var effectiveBaseUrl = await BindBaseUrlAsync(built, collection, stage, request.Protocol, ct)
             .ConfigureAwait(false);
 
-        var expandedBlock = await Interpolation.ExpandAsync(request.HttpBlock, cascade, registry, ct).ConfigureAwait(false);
+        var expandedBlock = await Interpolation.ExpandAsync(request.HttpBlock, cascade, registry, ct, declared).ConfigureAwait(false);
         var parsed = HttpBlockParser.Parse(expandedBlock);
 
         var url = parsed.Url;
@@ -95,14 +100,14 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         if (collection is not null)
         {
             foreach (var (k, v) in collection.DefaultHeaders)
-                resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct).ConfigureAwait(false);
+                resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct, declared).ConfigureAwait(false);
         }
         foreach (var (k, v) in parsed.Headers) resolvedHeaders[k] = v;
 
         var authHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         ApplyAuthHeaders(auth, authHeaders);
         foreach (var (k, v) in authHeaders)
-            resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct).ConfigureAwait(false);
+            resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct, declared).ConfigureAwait(false);
 
         // Re-check the fully assembled request line and headers: the baseUrl, the collection
         // defaults and the auth-derived values never passed through HttpBlockParser's own guard.
@@ -113,7 +118,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             HttpBlockParser.EnsureNoLineBreaks($"The '{k}' header value", v);
         }
 
-        var assertions = await RenderAssertionsAsync(request.Assertions, cascade, secretNames, ct).ConfigureAwait(false);
+        var assertions = await RenderAssertionsAsync(request.Assertions, cascade, secretNames, declared, ct).ConfigureAwait(false);
 
         // Built last, after every expansion has run, so the registry's secret cache is
         // complete. Cascade secrets are collected by their winning value; the auth-derived
@@ -122,7 +127,13 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         var secretValues = new List<string>(registry.SecretValues);
         foreach (var name in secretNames)
         {
-            if (cascade.TryGetValue(name, out var secretValue)) secretValues.Add(secretValue);
+            // A declared secret that only holds a reference has nothing of its own to mask —
+            // whatever the reference resolved to came through the registry, which collected it.
+            if (cascade.TryGetValue(name, out var secretValue)
+                && !(declared.Contains(name) && secretValue.Contains("{{", StringComparison.Ordinal)))
+            {
+                secretValues.Add(secretValue);
+            }
         }
         var redactor = new SecretRedactor(secretValues, authHeaders.Keys);
 
@@ -164,18 +175,20 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         string? stageName = null,
         bool tolerant = false,
         IReadOnlyDictionary<string, string>? overrides = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         var collection = CollectionLocator.ForRequest(workspace, request);
         var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
-        var built = BuildCascade(request, collection, stage, env, overrides);
+        var built = BuildCascade(request, collection, stage, env, overrides, declaredOverrides);
         var cascade = built.Values;
         var secretNames = built.SecretNames;
-        await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
+        await ApplyTemplateOverridesAsync(built, templateOverrides, ct).ConfigureAwait(false);
         // Same built-in the send path binds, so an assertion reading {{baseUrl}} gets the value
         // the request was actually built against rather than an unknown-variable error.
         await BindBaseUrlAsync(built, collection, stage, request.Protocol, ct).ConfigureAwait(false);
-        return await RenderAssertionsAsync(assertions, cascade, secretNames, ct, tolerant).ConfigureAwait(false);
+        return await RenderAssertionsAsync(assertions, cascade, secretNames, built.Declared, ct, tolerant)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -184,8 +197,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     /// something secret is marked so an assertion built from it reports <c>***</c>.
     /// </summary>
     private async ValueTask ApplyTemplateOverridesAsync(
-        Dictionary<string, string> cascade,
-        HashSet<string> secretNames,
+        Cascade built,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides,
         CancellationToken ct)
     {
@@ -193,11 +205,14 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
 
         foreach (var (name, template) in templateOverrides)
         {
-            var (value, secret) = await ExpandTrackingSecretsAsync(template, cascade, secretNames, ct)
-                .ConfigureAwait(false);
-            cascade[name] = value;
-            if (secret) secretNames.Add(name);
-            else secretNames.Remove(name);
+            var (value, secret) = await ExpandTrackingSecretsAsync(
+                template, built.Values, built.SecretNames, built.Declared, ct).ConfigureAwait(false);
+            built.Values[name] = value;
+            // What lands here is already expanded; leaving the name declared would put it
+            // through a second pass the next time something reads it.
+            built.Declared.Remove(name);
+            if (secret) built.SecretNames.Add(name);
+            else built.SecretNames.Remove(name);
         }
     }
 
@@ -220,10 +235,15 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         var source = !string.IsNullOrWhiteSpace(stage?.BaseUrl) ? stage!.BaseUrl : collection?.BaseUrl;
         if (string.IsNullOrWhiteSpace(source)) return null;
 
-        var expanded = await Interpolation.ExpandAsync(source!, built.Values, registry, ct).ConfigureAwait(false);
+        var expanded = await Interpolation.ExpandAsync(source!, built.Values, registry, ct, built.Declared)
+            .ConfigureAwait(false);
         var normalized = NormalizeScheme(expanded, protocol);
         if (!built.TapDefined.Contains(BaseUrlVariable))
+        {
             built.Values[BaseUrlVariable] = normalized.TrimEnd('/');
+            // Already expanded — see ApplyTemplateOverridesAsync.
+            built.Declared.Remove(BaseUrlVariable);
+        }
         return normalized;
     }
 
@@ -233,13 +253,20 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     /// and the selected stage answer instead.</summary>
     public const string BaseUrlVariable = "baseUrl";
 
-    /// <summary>The assembled cascade, the names whose winning definition is secret, and the
-    /// names any Tap scope defined (i.e. everything except the portable layer) — the last of
-    /// which decides whether the built-in <see cref="BaseUrlVariable"/> is allowed to bind.</summary>
+    /// <summary>The assembled cascade, the names whose winning definition is secret, the names
+    /// any Tap scope defined (i.e. everything except the portable layer) — which decides whether
+    /// the built-in <see cref="BaseUrlVariable"/> is allowed to bind — and the names whose
+    /// winning value came from a <c>vars:</c> block.
+    ///
+    /// <para><see cref="Declared"/> is what tells <see cref="Interpolation"/> which values are
+    /// templates in their own right: a declared <c>'{{file:stripe.key}}'</c> resolves, while a
+    /// value a flow step extracted from a response never does. See
+    /// <see cref="BuildCascade"/>.</para></summary>
     private readonly record struct Cascade(
         Dictionary<string, string> Values,
         HashSet<string> SecretNames,
-        HashSet<string> TapDefined);
+        HashSet<string> TapDefined,
+        HashSet<string> Declared);
 
     /// <summary>Composes the variable cascade — portable &lt; workspace &lt; collection &lt; stage
     /// &lt; env &lt; request &lt; overrides.
@@ -253,7 +280,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         CollectionFile? collection,
         CollectionStage? stage,
         EnvFile? env,
-        IReadOnlyDictionary<string, string>? overrides)
+        IReadOnlyDictionary<string, string>? overrides,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         var cascade = new Dictionary<string, string>(StringComparer.Ordinal);
         // Sensitivity is tracked alongside the values because merging keeps only the value —
@@ -261,13 +289,14 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         // to echo back into a results pane.
         var secretNames = new HashSet<string>(StringComparer.Ordinal);
         var tapDefined = new HashSet<string>(StringComparer.Ordinal);
+        var declared = new HashSet<string>(StringComparer.Ordinal);
 
-        MergeVars(cascade, request.PortableVars, secretNames);
-        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames, tapDefined);
-        if (collection is not null) MergeVars(cascade, collection.Vars, secretNames, tapDefined);
-        if (stage is not null) MergeVars(cascade, stage.Vars, secretNames, tapDefined);
-        if (env is not null) MergeVars(cascade, env.Vars, secretNames, tapDefined);
-        MergeVars(cascade, request.Vars, secretNames, tapDefined);
+        MergeVars(cascade, request.PortableVars, secretNames, declared: declared);
+        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames, tapDefined, declared);
+        if (collection is not null) MergeVars(cascade, collection.Vars, secretNames, tapDefined, declared);
+        if (stage is not null) MergeVars(cascade, stage.Vars, secretNames, tapDefined, declared);
+        if (env is not null) MergeVars(cascade, env.Vars, secretNames, tapDefined, declared);
+        MergeVars(cascade, request.Vars, secretNames, tapDefined, declared);
 
         if (overrides is not null)
         {
@@ -277,23 +306,31 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
                 tapDefined.Add(k);
                 // A per-run override is a literal the caller just typed, not a secret lookup.
                 secretNames.Remove(k);
+                // …and not a template either, unless the caller vouched for it: a test set's
+                // own `vars:` arrive through this tier alongside values a flow step pulled out
+                // of a response, and only the first kind may hold a reference.
+                if (declaredOverrides?.Contains(k) == true) declared.Add(k);
+                else declared.Remove(k);
             }
         }
 
-        return new Cascade(cascade, secretNames, tapDefined);
+        return new Cascade(cascade, secretNames, tapDefined, declared);
     }
 
     /// <param name="tapDefined">Collects the names this scope defined. Null for the portable
     /// layer, which is deliberately not counted as a Tap-side definition.</param>
+    /// <param name="declared">Collects every name that came out of a <c>vars:</c> block,
+    /// portable layer included — those values are templates and may reference others.</param>
     private static void MergeVars(
         Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src,
-        HashSet<string> secretNames, HashSet<string>? tapDefined = null)
+        HashSet<string> secretNames, HashSet<string>? tapDefined = null, HashSet<string>? declared = null)
     {
         foreach (var (k, v) in src)
         {
             if (v.Default is not { } d) continue;
             dest[k] = d;
             tapDefined?.Add(k);
+            declared?.Add(k);
             // A later scope redefining the name also redefines its sensitivity — an env that
             // overrides a secret with a literal test value is no longer holding a secret.
             if (v.Secret) secretNames.Add(k);
@@ -315,6 +352,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         IReadOnlyList<AssertSpec> assertions,
         IReadOnlyDictionary<string, string> cascade,
         IReadOnlySet<string> secretNames,
+        IReadOnlySet<string> declared,
         CancellationToken ct,
         bool tolerant = false)
     {
@@ -327,7 +365,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             {
                 try
                 {
-                    resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, ct).ConfigureAwait(false));
+                    resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, declared, ct).ConfigureAwait(false));
                 }
                 catch (WorkspaceParseException ex)
                 {
@@ -335,7 +373,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
                 }
                 continue;
             }
-            resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, ct).ConfigureAwait(false));
+            resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, declared, ct).ConfigureAwait(false));
         }
         return resolved;
     }
@@ -344,18 +382,19 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         AssertSpec assertion,
         IReadOnlyDictionary<string, string> cascade,
         IReadOnlySet<string> secretNames,
+        IReadOnlySet<string> declared,
         CancellationToken ct)
     {
         var selector = assertion.Selector is null
             ? null
-            : await Interpolation.ExpandAsync(assertion.Selector, cascade, registry, ct).ConfigureAwait(false);
+            : await Interpolation.ExpandAsync(assertion.Selector, cascade, registry, ct, declared).ConfigureAwait(false);
 
         var secret = false;
         string? expected = null;
         if (assertion.Expected is not null)
         {
-            (expected, secret) = await ExpandTrackingSecretsAsync(assertion.Expected, cascade, secretNames, ct)
-                .ConfigureAwait(false);
+            (expected, secret) = await ExpandTrackingSecretsAsync(
+                assertion.Expected, cascade, secretNames, declared, ct).ConfigureAwait(false);
         }
 
         IReadOnlyList<string>? expectedList = null;
@@ -364,8 +403,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             var expandedList = new List<string>(list.Count);
             foreach (var item in list)
             {
-                var (value, itemSecret) = await ExpandTrackingSecretsAsync(item, cascade, secretNames, ct)
-                    .ConfigureAwait(false);
+                var (value, itemSecret) = await ExpandTrackingSecretsAsync(
+                    item, cascade, secretNames, declared, ct).ConfigureAwait(false);
                 expandedList.Add(value);
                 secret |= itemSecret;
             }
@@ -383,10 +422,11 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         string input,
         IReadOnlyDictionary<string, string> cascade,
         IReadOnlySet<string> secretNames,
+        IReadOnlySet<string> declared,
         CancellationToken ct)
     {
         var traceBefore = registry.Trace.Count;
-        var value = await Interpolation.ExpandAsync(input, cascade, registry, ct).ConfigureAwait(false);
+        var value = await Interpolation.ExpandAsync(input, cascade, registry, ct, declared).ConfigureAwait(false);
 
         foreach (var name in Interpolation.ReferencedNames(input))
         {

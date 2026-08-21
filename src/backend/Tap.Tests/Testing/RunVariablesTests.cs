@@ -92,4 +92,43 @@ public class RunVariablesTests
         var stepOnly = RunVariables.Templates(null, new Dictionary<string, string> { ["b"] = "2" })!;
         Assert.Equal("b", Assert.Single(stepOnly).Key);
     }
+
+    // -------------------------------------------------------------------------------------
+    // Which of the bag's names are templates. A file's own declaration may reference another
+    // variable; a value the run produced may not — see DeclaredReferenceTests.
+    // -------------------------------------------------------------------------------------
+
+    [Fact]
+    public void Declared_names_are_the_ones_a_file_wrote()
+    {
+        var names = RunVariables.DeclaredNames(Vars(("sku", "ABC-1"), ("customer", "cus_demo")));
+        Assert.Equal(["customer", "sku"], names.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public void A_variable_with_no_default_declares_no_value_to_expand()
+    {
+        Assert.Empty(RunVariables.DeclaredNames(Vars(("sku", null))));
+    }
+
+    [Fact]
+    public void A_per_run_override_takes_the_name_back()
+    {
+        // `--var sku='{{file:sku}}'` is the caller's literal, not the file's template — and the
+        // caller's value is the one in the bag.
+        var names = RunVariables.DeclaredNames(
+            Vars(("sku", "ABC-1"), ("customer", "cus_demo")),
+            new Dictionary<string, string> { ["sku"] = "OVERRIDE" });
+
+        Assert.Equal("customer", Assert.Single(names));
+    }
+
+    [Fact]
+    public void A_flows_declarations_join_the_sets()
+    {
+        var names = RunVariables.DeclaredNames(Vars(("customer", "cus_demo")));
+        RunVariables.MergeDeclaredNames(names, Vars(("sku", "from-flow"), ("empty", null)));
+
+        Assert.Equal(["customer", "sku"], names.Order(StringComparer.Ordinal));
+    }
 }

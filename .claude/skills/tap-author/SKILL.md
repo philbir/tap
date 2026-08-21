@@ -33,8 +33,10 @@ one collection (the nearest `_collection.tap` above it), and inherits its `baseU
 **The variable cascade.** `{{name}}` tokens resolve through scopes, later wins:
 workspace `workspace.tap` vars → owning collection vars → active stage vars → active env vars →
 request vars → per-run overrides (`--var`), plus flow-extracted values in the run bag.
-Resolution is single-pass — a var must not reference a var that depends on it
-(`E_VAR_CYCLE`). Unknown vars fail the render.
+A var declared in any of those scopes may hold a token of its own —
+`apiToken: { default: '{{file:api.token}}', secret: true }` resolves through to the provider
+— but a var must not resolve through itself (`E_VAR_CYCLE`), and a value that arrived at
+runtime (an `extract:`, a `--var`) is never re-scanned. Unknown vars fail the render.
 
 **Token syntax.** `{{name}}` — cascade first, then providers in registration order.
 `{{provider:name}}` — that provider only (e.g. `{{env:DEMO_API_URL}}`,

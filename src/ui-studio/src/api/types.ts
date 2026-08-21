@@ -22,6 +22,9 @@ export interface WorkspaceInfo {
 
 export interface KnownWorkspace {
   path: string
+  /** Manifest `name:` — what the switcher shows. Falls back to the folder name. */
+  name: string
+  /** Folder name, shown under the name in the dropdown so two same-named workspaces stay apart. */
   label: string
   isActive: boolean
   available: boolean

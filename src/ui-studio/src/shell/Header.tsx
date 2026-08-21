@@ -1,6 +1,7 @@
 import { ActionIcon, Anchor, Badge, Box, Button, Divider, Group, Modal, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
+import type { ComboboxItem, ComboboxLikeRenderOptionInput } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconBrandGit, IconChevronDown, IconDeviceDesktop, IconFolders, IconPencil, IconPlugConnected, IconPlus, IconStack2 } from '@tabler/icons-react'
+import { IconBrandGit, IconCheck, IconChevronDown, IconDeviceDesktop, IconFolders, IconPencil, IconPlugConnected, IconPlus, IconStack2 } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
 import { MANIFEST_TAB_PATH, useActiveEnv, useTapStore } from '../store'
@@ -47,7 +48,7 @@ export function Header({ rightAction }: Props) {
     : [
         ...knownWorkspaces.map((w) => ({
           value: w.path,
-          label: w.label + (w.available ? '' : ' (missing)'),
+          label: w.name + (w.available ? '' : ' (missing)'),
         })),
         { value: ADD_WORKSPACE_SENTINEL, label: '+ Add workspace…' },
       ]
@@ -63,6 +64,25 @@ export function Header({ rightAction }: Props) {
     if (value === activeWs?.path) return
     try { await activateWorkspace(value) }
     catch (e) { console.error(e) }
+  }
+
+  /** Dropdown row: the workspace's own name, with the folder holding it underneath. The closed
+   *  input shows the name alone — the folder is a disambiguator you only need while choosing,
+   *  and it says nothing extra when a manifest never got a name of its own. Providing this
+   *  replaces Mantine's default row, check icon included, so the selected row draws its own. */
+  function renderWorkspaceOption({ option, checked }: ComboboxLikeRenderOptionInput<ComboboxItem>) {
+    const ws = knownWorkspaces.find((w) => w.path === option.value)
+    return (
+      <Group gap="xs" wrap="nowrap" style={{ flex: 1, minWidth: 0 }}>
+        <Box style={{ flex: 1, minWidth: 0 }}>
+          <Text size="sm" truncate="end">{option.label}</Text>
+          {ws && ws.label !== ws.name && (
+            <Text size="xs" c="dimmed" truncate="end">{ws.label}</Text>
+          )}
+        </Box>
+        {checked && <IconCheck size={14} stroke={2} />}
+      </Group>
+    )
   }
 
   function openWorkspaceTab() {
@@ -102,6 +122,7 @@ export function Header({ rightAction }: Props) {
             aria-label="Workspace"
             placeholder="No workspace"
             data={wsOptions}
+            renderOption={renderWorkspaceOption}
             value={isPinned ? (info?.root ?? null) : (activeWs?.path ?? null)}
             onChange={handleWorkspacePick}
             w={260}

@@ -1,6 +1,7 @@
 using Tap.Studio.Contracts;
 using Tap.Workspace;
 using Tap.Workspace.Model;
+using Tap.Workspace.Parsing;
 using Tap.Execution.Workspace;
 
 namespace Tap.Studio.Endpoints;
@@ -160,6 +161,7 @@ public static class WorkspaceEndpoints
             var dtos = store.List()
                 .Select(k => new KnownWorkspaceDto(
                     Path: k.Path,
+                    Name: ReadWorkspaceName(k.Path, k.Label),
                     Label: k.Label,
                     IsActive: string.Equals(k.Path, active, StringComparison.Ordinal),
                     Available: Directory.Exists(k.Path),
@@ -185,7 +187,8 @@ public static class WorkspaceEndpoints
             {
                 var added = store.Add(body.Path);
                 return Results.Ok(new KnownWorkspaceDto(
-                    added.Path, added.Label, IsActive: false, Available: true,
+                    added.Path, ReadWorkspaceName(added.Path, added.Label), added.Label,
+                    IsActive: false, Available: true,
                     Git: BuildGitDto(added.Path, added.GitRoot)));
             }
             catch (DirectoryNotFoundException ex) { return Results.BadRequest(new { code = "missing-folder", message = ex.Message }); }
@@ -308,6 +311,32 @@ public static class WorkspaceEndpoints
     private static bool TryResolveWorkspacePath(WorkspaceService svc, string relative,
         out string full, out string error)
         => WorkspacePaths.TryResolve(svc.RootDirectory, relative, out full, out error);
+
+    /// <summary>Display name for a known workspace: the manifest's <c>name:</c>, falling back to
+    /// the folder name when the manifest is missing, unnamed, or unreadable. Read from disk rather
+    /// than from the loaded workspace because only one entry in the list is ever the loaded one,
+    /// and the switcher has to name all of them. A malformed manifest is not reported here — it
+    /// surfaces with line numbers the moment that workspace is activated.</summary>
+    private static string ReadWorkspaceName(string workspacePath, string fallback)
+    {
+        var manifest = new[] { WorkspaceLoader.ManifestFileName, WorkspaceLoader.LegacyManifestFileName }
+            .Select(n => Path.Combine(workspacePath, n))
+            .FirstOrDefault(File.Exists);
+        if (manifest is null) return fallback;
+
+        try
+        {
+            if (new FileInfo(manifest).Length > WorkspaceLoader.MaxFileBytes) return fallback;
+            var parsed = FileParser.Parse(Path.GetFileName(manifest), File.ReadAllText(manifest));
+            return parsed is WorkspaceManifestFile { Name: { } name } && !string.IsNullOrWhiteSpace(name)
+                ? name
+                : fallback;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or WorkspaceParseException)
+        {
+            return fallback;
+        }
+    }
 
     /// <summary>Re-runs <see cref="GitInspector.Inspect(string)"/> so branch + remote URLs
     /// are fresh on every list call. Falls back to the workspace path when no persisted git

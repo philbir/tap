@@ -20,11 +20,13 @@ public sealed record WorkspaceInfoDto(
     /// the UI locks the switcher and badges the header instead of offering an action that 409s.</summary>
     string Mode = "normal");
 
-/// <summary>Entry in the workspace switcher dropdown. <c>Available</c> is false if the
-/// folder no longer contains a <c>.tap/</c> directory — the UI greys it out. <c>Git</c> is
-/// filled when an enclosing git repository was discovered at add-time (and is still on
-/// disk); the UI shows branch + origin chips.</summary>
-public sealed record KnownWorkspaceDto(string Path, string Label, bool IsActive, bool Available, GitInfoDto? Git);
+/// <summary>Entry in the workspace switcher dropdown. <c>Name</c> is the manifest's
+/// <c>name:</c> — what the switcher shows — and <c>Label</c> is the folder name, shown
+/// underneath it as the disambiguator when two workspaces share a name. <c>Available</c> is
+/// false if the folder no longer contains a <c>.tap/</c> directory — the UI greys it out.
+/// <c>Git</c> is filled when an enclosing git repository was discovered at add-time (and is
+/// still on disk); the UI shows branch + origin chips.</summary>
+public sealed record KnownWorkspaceDto(string Path, string Name, string Label, bool IsActive, bool Available, GitInfoDto? Git);
 
 public sealed record AddWorkspaceDto(string Path);
 public sealed record ActivateWorkspaceDto(string Path);

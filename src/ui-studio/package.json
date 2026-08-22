@@ -22,7 +22,7 @@
     "@codemirror/language": "^6.12.4",
     "@codemirror/lint": "^6.9.7",
     "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.8",
+    "@codemirror/view": "^6.43.9",
     "@lezer/highlight": "^1.2.3",
     "@lezer/lr": "^1.4.10",
     "@mantine/core": "9.5.1",
@@ -79,6 +79,6 @@
     "dompurify": "^3.4.13",
     "linkify-it": "^5.0.2",
     "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.8"
+    "@codemirror/view": "^6.43.9"
   }
 }

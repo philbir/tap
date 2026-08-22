@@ -1057,7 +1057,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@tiptap/pm@npm:3.30.1, @tiptap/pm@npm:^3.30.1":
+"@tiptap/pm@npm:3.30.1":
   version: 3.30.1
   resolution: "@tiptap/pm@npm:3.30.1"
   dependencies:
@@ -1075,6 +1075,27 @@ __metadata:
     prosemirror-transform: "npm:^1.12.0"
     prosemirror-view: "npm:^1.41.9"
   checksum: 10c0/214bf4120c89ba328621ab78cd21efdef5038bf56349b40f2c5c3405b9a27c1f5b6b3a58d95c7b90a522fab24257a87170a23de1b88aa4afef18b376574e2c0a
+  languageName: node
+  linkType: hard
+
+"@tiptap/pm@npm:^3.30.2":
+  version: 3.30.2
+  resolution: "@tiptap/pm@npm:3.30.2"
+  dependencies:
+    prosemirror-changeset: "npm:^2.4.1"
+    prosemirror-commands: "npm:^1.7.1"
+    prosemirror-dropcursor: "npm:^1.8.2"
+    prosemirror-gapcursor: "npm:^1.4.1"
+    prosemirror-history: "npm:^1.5.0"
+    prosemirror-inputrules: "npm:^1.5.1"
+    prosemirror-keymap: "npm:^1.2.3"
+    prosemirror-model: "npm:^1.25.11"
+    prosemirror-schema-list: "npm:^1.5.1"
+    prosemirror-state: "npm:^1.4.4"
+    prosemirror-tables: "npm:^1.8.5"
+    prosemirror-transform: "npm:^1.12.0"
+    prosemirror-view: "npm:^1.41.9"
+  checksum: 10c0/a8e71cd4ebf49bccaa7805fdbe05c54e12fd2f6db936bec01ad08c9172058f287cb12ad2ee2308fd7c0a1bee22f13cfccf22c1a4732713ef2cf0fe7dd9023220
   languageName: node
   linkType: hard
 
@@ -3608,7 +3629,7 @@ __metadata:
     "@tauri-apps/api": "npm:^2.11.1"
     "@tiptap/core": "npm:^3.30.1"
     "@tiptap/extension-link": "npm:^3.30.1"
-    "@tiptap/pm": "npm:^3.30.1"
+    "@tiptap/pm": "npm:^3.30.2"
     "@tiptap/react": "npm:^3.30.1"
     "@tiptap/starter-kit": "npm:^3.30.1"
     "@types/node": "npm:^26.2.0"

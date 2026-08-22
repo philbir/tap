@@ -3,14 +3,15 @@ import {
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconAlertTriangle, IconBolt, IconBraces, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileCode, IconFileText, IconFlag, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
+  IconAlertTriangle, IconBolt, IconBraces, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileCode, IconFileText, IconFlag, IconHistory, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, type AssertResponseSnapshot } from '../api/client'
 import type {
-  AssertResult, AssertSummary, ExecutionResult, HttpHeaderSpec, RequestDetail, RequestSpec, TlsDiagnosis, VariableContext,
+  AssertResult, AssertSummary, ExecutionResult, HistoryEntry, HistorySummary, HttpHeaderSpec, RequestDetail,
+  RequestSpec, TlsDiagnosis, VariableContext,
 } from '../api/types'
 import { useActiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
@@ -25,6 +26,8 @@ import { CollectionLinkChip } from './CollectionLinkChip'
 import { authSelectGroups, relativizeFrom } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
+import { HistoryPanel } from './HistoryPanel'
+import { HistorySettings } from './HistorySettings'
 import { GraphQLEditor } from './GraphQLEditor'
 import { AssertsPanel } from './AssertsPanel'
 import { KvTable, type KvRow } from './KvTable'
@@ -33,7 +36,9 @@ import { RawBodyEditor } from './RawBodyEditor'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { ResponsePanel } from './ResponsePanel'
 import { SourceTab } from './SourceTab'
-import { useExecution } from './useExecution'
+import { restoreDraft, usePublishDraft } from './useDraft'
+import { useTabView } from './useTabView'
+import { moveExecution, useExecution } from './useExecution'
 import { joinUrl, splitUrl } from './url-utils'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
@@ -52,6 +57,7 @@ export function RequestEditor({ path }: Props) {
   const auths = useTapStore((s) => s.auths)
   const openTab = useTapStore((s) => s.openTab)
   const renameTab = useTapStore((s) => s.renameTab)
+  const clearDraft = useTapStore((s) => s.clearDraft)
   const reload = useTapStore((s) => s.reload)
   const activeEnv = useActiveEnv()
   const tagSuggestions = useTagDictionary()
@@ -59,16 +65,17 @@ export function RequestEditor({ path }: Props) {
   const [detail, setDetail] = useState<RequestDetail | null>(null)
   const [spec, setSpec] = useState<RequestSpec | null>(null)
   const [savedSpec, setSavedSpec] = useState<RequestSpec | null>(null)
-  const [tab, setTab] = useState<string | null>('params')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'params')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
   // Sending, and everything the response pane renders. Shared with the .http editor, which
-  // sends the same way from its own request list.
+  // sends the same way from its own request list. Keyed by tab path, so the response — and a
+  // stream still arriving — outlives a trip to another tab.
   const {
     rendered, execution, error: actionError, sending, stopped,
-    send: startSend, stop, clear: clearExecution, abort: abortStream, setError: setActionError,
-  } = useExecution()
-  const [stage, setStage] = useState<string | null>(null)
+    send: startSend, stop, clear: clearExecution, setError: setActionError,
+  } = useExecution(path)
+  const [stage, setStage] = useTabView<string | null>(path, 'stage', null)
   const [diagnosis, setDiagnosis] = useState<TlsDiagnosis | null>(null)
   const [diagnosing, setDiagnosing] = useState(false)
   const [varsOpened, varsCtl] = useDisclosure(false)
@@ -79,20 +86,28 @@ export function RequestEditor({ path }: Props) {
   // The assertions the last Send actually evaluated — re-checking those would just
   // recompute what the server already told us.
   const sentAssertionsRef = useRef<string>('')
+  // A recorded exchange the user opened from the History tab. Kept apart from the live
+  // execution so picking one doesn't overwrite the response you just got — and so leaving the
+  // tab puts the live one straight back.
+  const [replay, setReplay] = useState<HistoryEntry | null>(null)
+  const [historyCount, setHistoryCount] = useState(0)
 
   useEffect(() => {
     let cancelled = false
-    setError(null); clearExecution()
+    setError(null)
     api.request(path).then((d) => {
       if (cancelled) return
       setDetail(d)
       const initial = specFromDetail(d, path)
-      setSpec(initial); setSavedSpec(initial)
+      // `restoreDraft` keeps unsaved edits across a tab switch and across the re-fetch a
+      // `generation` bump forces; `savedSpec` is always what is actually on disk.
+      setSpec(restoreDraft(path, initial)); setSavedSpec(initial)
     }).catch((e: Error) => !cancelled && setError(e.message))
     return () => { cancelled = true }
-  }, [path, generation, clearExecution])
+  }, [path, generation])
 
   const dirty = useMemo(() => JSON.stringify(spec) !== JSON.stringify(savedSpec), [spec, savedSpec])
+  usePublishDraft(path, spec, dirty)
 
   /**
    * This request lives inside a `.http` file, which has no spec form on disk: the raw text is
@@ -111,40 +126,56 @@ export function RequestEditor({ path }: Props) {
   async function save() {
     if (!spec) return
     setSaving(true); setError(null)
+    let saved: { id: string }
     try {
-      await api.saveRequestSpec(spec)
+      saved = await api.saveRequestSpec(spec)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
       setSaving(false)
       return
     }
 
-    // The spec is on disk from here on. Renaming the file that holds it is a separate,
-    // best-effort step — a collision on the target name must not leave the editor looking
-    // unsaved, so it reports through a notification instead of the save error bar.
-    const label = spec.name || basename(spec.path)
+    // A request created without an id gets one from the server. Adopting it here rather than
+    // waiting for the watcher-driven refetch is what lets a just-created request be sent
+    // straight away and still land in history — the send carries the draft spec, and a draft
+    // with no id has nothing durable to file the exchange under.
+    const stored: RequestSpec = spec.id === saved.id ? spec : { ...spec, id: saved.id }
+    if (stored !== spec) setSpec(stored)
+
+    // The spec is on disk from here on, so the draft has done its job. Dropping it here
+    // rather than leaving it to the publish effect matters for the rename branch below:
+    // that one re-keys the tab and unmounts this editor, so the effect never gets to run
+    // and a stale draft would come back as a phantom dirty marker on the renamed tab.
+    clearDraft(path)
+
+    // Renaming the file that holds it is a separate, best-effort step — a collision on the
+    // target name must not leave the editor looking unsaved, so it reports through a
+    // notification instead of the save error bar.
+    const label = stored.name || basename(stored.path)
     try {
       // When the request was renamed, keep the on-disk filename in step with the new
       // name (the explorer shows the spec name, so a stale filename would only surface
       // in git / the filesystem view). Falls back to a no-op when the slug is unchanged
       // or empty.
-      const renamedPath = await syncFilenameToName(spec, savedSpec)
-      if (renamedPath && renamedPath !== spec.path) {
-        const moved = { ...spec, path: renamedPath }
+      const renamedPath = await syncFilenameToName(stored, savedSpec)
+      if (renamedPath && renamedPath !== stored.path) {
+        const moved = { ...stored, path: renamedPath }
         // Rename before the reload: the tab (and the editor keyed off it) has to follow the
         // file to its new path in the same commit the explorer learns about the move, or the
-        // editor refetches a path that no longer exists.
-        renameTab(spec.path, renamedPath, label)
+        // editor refetches a path that no longer exists. The response moves first — dropping
+        // the old tab is what prunes its entry.
+        moveExecution(stored.path, renamedPath)
+        renameTab(stored.path, renamedPath, label)
         setSpec(moved); setSavedSpec(moved)
         await reload()
       } else {
         // Same file, possibly a new name — the tab still carries the old label.
-        renameTab(spec.path, spec.path, label)
-        setSavedSpec(spec)
+        renameTab(stored.path, stored.path, label)
+        setSavedSpec(stored)
       }
     } catch (e) {
-      renameTab(spec.path, spec.path, label)
-      setSavedSpec(spec)
+      renameTab(stored.path, stored.path, label)
+      setSavedSpec(stored)
       notifications.show({
         color: 'yellow',
         title: 'Saved, but the file kept its name',
@@ -177,7 +208,16 @@ export function RequestEditor({ path }: Props) {
     return collections.find((c) => c.slug === slug) ?? null
   }, [collections, path])
 
-  useEffect(() => { setStage(null) }, [linkedCollection?.slug])
+  // Drop the override only on an actual move between collections. The slug resolves from
+  // null on the first render pass, and treating that as a move would undo the stage the tab
+  // is being restored with.
+  const lastSlugRef = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    const slug = linkedCollection?.slug ?? null
+    const previous = lastSlugRef.current
+    lastSlugRef.current = slug
+    if (previous !== undefined && previous !== slug) setStage(null)
+  }, [linkedCollection?.slug, setStage])
   const effectiveStage = stage ?? linkedCollection?.defaultStage ?? null
 
   const variableContext = useMemo<VariableContext>(() => ({
@@ -217,8 +257,55 @@ export function RequestEditor({ path }: Props) {
   const assertResults = liveAsserts?.results ?? execution?.assertions ?? null
   const assertSummary = liveAsserts?.summary ?? execution?.assertSummary ?? null
 
-  // Cancel any in-flight stream on unmount or when the request file changes.
-  useEffect(() => () => abortStream(), [path, abortStream])
+  /**
+   * Opens a recorded exchange in the response panel. Fetched on demand — the History list holds
+   * summaries, and the bodies stay on disk until someone actually wants one.
+   *
+   * <p>A locked entry (encrypted, no key on this machine) fails with 423 rather than 404, which
+   * is a different thing to tell the user: the entry is there, it just can't be opened here.</p>
+   */
+  async function openHistoryEntry(summary: HistorySummary) {
+    setActionError(null)
+    try {
+      setReplay(await api.historyEntry(summary.requestId, summary.id))
+    } catch (e) {
+      setReplay(null)
+      setActionError(e instanceof ApiError && e.status === 423
+        ? 'This entry is encrypted and this machine has no key that opens it.'
+        : e instanceof Error ? e.message : String(e))
+    }
+  }
+
+  /** A recorded entry rendered in the shapes the response panel already speaks. Assembled here
+   *  rather than stored that way so the on-disk format stays its own thing. */
+  const replayed = useMemo(() => {
+    if (!replay) return null
+    const result: ExecutionResult = {
+      status: replay.response?.status ?? 0,
+      statusText: replay.response?.statusText ?? null,
+      url: replay.request.url,
+      method: replay.request.method,
+      requestHeaders: replay.request.headers,
+      requestBody: replay.request.body,
+      responseHeaders: replay.response?.headers ?? {},
+      responseBody: replay.response?.body ?? null,
+      contentType: replay.response?.contentType ?? null,
+      responseBodyBytes: replay.response?.bodyBytes ?? 0,
+      // What was stored is all there is — there is no retained copy to expand into, so the
+      // inline count is the body's own length and "Show all" correctly offers nothing.
+      responseBodyInlineBytes: replay.response?.body?.length ?? 0,
+      durationMs: replay.durationMs,
+      variablesUsed: replay.variablesUsed.map((v) => ({
+        variableProvider: v.provider, name: v.name, resolved: true, isSecret: v.secret, durationMs: 0,
+      })),
+      stage: replay.stage,
+      error: replay.error,
+      protocol: replay.request.protocol === 'websocket' ? 'websocket' : 'http',
+      assertions: replay.assertions,
+      assertSummary: replay.assertSummary,
+    }
+    return result
+  }, [replay])
 
   function send() {
     // Record what this Send evaluates, so the Asserts tab's live re-check knows not to
@@ -327,18 +414,23 @@ export function RequestEditor({ path }: Props) {
         // Only mount the response pane when there's actually something to show — keeps
         // the request editor full-height until the user clicks Send, and lets
         // the × close button collapse it back.
-        (execution || rendered || actionError || sending) ? (
+        (replayed || execution || rendered || actionError || sending) ? (
           <ResponsePanel
-            rendered={rendered}
-            execution={execution}
+            tabPath={path}
+            // A recorded entry takes the pane while it is open; closing it puts the live
+            // response — which was never discarded — straight back.
+            rendered={replayed ? null : rendered}
+            execution={replayed ?? execution}
             error={actionError}
-            busy={sending}
-            stopped={stopped}
-            onStop={sending ? stop : undefined}
+            busy={replayed ? false : sending}
+            stopped={replayed ? false : stopped}
+            onStop={!replayed && sending ? stop : undefined}
             requestPath={path}
             requestName={spec.name || basename(path)}
             requestAuth={spec.auth ?? null}
-            onClose={clearExecution}
+            replayedAt={replay?.at ?? null}
+            replayRedacted={replay ? replay.redacted : undefined}
+            onClose={replayed ? () => setReplay(null) : clearExecution}
           />
         ) : undefined
       }
@@ -462,6 +554,7 @@ export function RequestEditor({ path }: Props) {
             },
             { value: 'transport', label: 'Transport', icon: <IconShieldCheck size={14} /> },
             { value: 'vars', label: 'Variables', icon: <IconVariable size={14} />, adornment: <TabCount count={Object.keys(spec.vars ?? {}).length} /> },
+            { value: 'history', label: 'History', icon: <IconHistory size={14} />, adornment: <TabCount count={historyCount} /> },
             { value: 'meta', label: 'Meta', icon: <IconFlag size={14} /> },
             { value: 'docs', label: 'Docs', icon: <IconFileText size={14} />, adornment: <TabDot active={!!spec.body && spec.body.trim().length > 0} /> },
             { value: 'source', label: 'Source', icon: <IconCode size={14} /> },
@@ -631,6 +724,19 @@ export function RequestEditor({ path }: Props) {
           </Box>
         </Tabs.Panel>
 
+        <Tabs.Panel value="history">
+          <Box maw={880}>
+            <HistoryPanel
+              requestId={detail.id}
+              enabled={detail.effectiveHistory?.enabled ?? false}
+              selectedId={replay?.id ?? null}
+              onSelect={openHistoryEntry}
+              onCountChange={setHistoryCount}
+              onOpenSettings={() => setTab('meta')}
+            />
+          </Box>
+        </Tabs.Panel>
+
         <Tabs.Panel value="meta">
           <Stack gap="md" maw={760}>
             <TextInput label="Name" value={spec.name} onChange={(e) => update('name', e.currentTarget.value)} />
@@ -649,6 +755,19 @@ export function RequestEditor({ path }: Props) {
                 stages, default auth, and default headers come from there.
               </Text>
             )}
+
+            <Box>
+              <Text fw={600} size="sm" mb={2}>History</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                Overrides this request's collection and the workspace, one key at a time.
+              </Text>
+              <HistorySettings
+                value={spec.history}
+                onChange={(v) => update('history', v)}
+                inherited={detail.effectiveHistory}
+                inheritedFrom={linkedCollection?.name}
+              />
+            </Box>
           </Stack>
         </Tabs.Panel>
 
@@ -926,17 +1045,17 @@ function parseBinaryRef(body: string): { ref: string; relPath: string; name: str
   return { ref: refForDisplay, relPath: rest, name }
 }
 
-/** The 2 MiB capture cap the server applies. Past it the body on screen is a prefix, and
- *  body assertions refuse to run rather than match one. */
-const BODY_CAP_BYTES = 2 * 1024 * 1024
-
-/** Repackage an on-screen result as the snapshot the re-check endpoint evaluates against. */
+/** Repackage an on-screen result as the snapshot the re-check endpoint evaluates against.
+ *  Truncation is whatever the server reported for this response — the cap is the workspace's
+ *  `response.maxBytes`, not a constant the client can assume. Past it the body on screen is a
+ *  prefix, and body assertions refuse to run rather than match one. */
 function assertSnapshot(execution: ExecutionResult): AssertResponseSnapshot {
+  const inline = execution.responseBodyInlineBytes ?? 0
   return {
     status: execution.status,
     headers: Object.entries(execution.responseHeaders ?? {}).map(([name, value]) => ({ name, value })),
     body: execution.responseBody,
-    bodyTruncated: execution.responseBodyBytes > BODY_CAP_BYTES,
+    bodyTruncated: inline > 0 && execution.responseBodyBytes > inline,
     durationMs: execution.durationMs,
   }
 }

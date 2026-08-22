@@ -114,6 +114,11 @@ public sealed record RawSourceDto(string Path, string Content);
 
 public sealed record WorkspaceErrorDto(string Code, string Message, string? Path, int? Line, string Severity = "error");
 
+/// <summary>What every spec PUT answers with. Carries the stable id the file was stored under —
+/// freshly minted when the client sent none — so a just-created request knows its own identity
+/// before the watcher-driven reload lands. Request history keys on it.</summary>
+public sealed record SavedSpecDto(string Id);
+
 public sealed record TreeNodeDto(
     string Path,
     string Kind,
@@ -149,7 +154,14 @@ public sealed record RequestDetailDto(
     string Protocol,
     RequestTransportSettingsDto? Transport,
     /// <summary>Declared expectations about the response, in file order.</summary>
-    IReadOnlyList<AssertSpecDto> Assertions);
+    IReadOnlyList<AssertSpecDto> Assertions,
+    /// <summary>The request's own <c>history:</c> keys, or null when it declares none.</summary>
+    HistoryOptionsDto? History = null,
+    /// <summary>The same block after the workspace → collection → request merge — what
+    /// recording this request will actually do. The editor shows it as the inherited value
+    /// behind each unset field, so "why is this being recorded?" is answerable without
+    /// opening two other files.</summary>
+    HistoryOptionsDto? EffectiveHistory = null);
 
 public sealed record AuthDetailDto(
     string Path,
@@ -231,7 +243,12 @@ public sealed record CollectionDetailDto(
     IReadOnlyList<CollectionStageDto> Stages,
     string? DefaultStage,
     /// <summary>The collection's <c>agent:</c> option — whether agent surfaces may use it.</summary>
-    bool AgentEnabled);
+    bool AgentEnabled,
+    /// <summary>The collection's own <c>history:</c> keys, or null when it declares none.</summary>
+    HistoryOptionsDto? History = null,
+    /// <summary>The workspace-level defaults this collection inherits, for the editor to show
+    /// behind unset fields.</summary>
+    HistoryOptionsDto? InheritedHistory = null);
 
 /// <summary>Structured PUT spec for a collection. The server resolves the on-disk path
 /// from <see cref="Slug"/> and writes canonical YAML via <c>CollectionSpecEmitter</c>.</summary>
@@ -245,6 +262,7 @@ public sealed record CollectionSpecDto
     public string? DefaultAuth { get; init; }
     public IReadOnlyDictionary<string, string>? DefaultHeaders { get; init; }
     public RequestTransportSettingsDto? Transport { get; init; }
+    public HistoryOptionsDto? History { get; init; }
     public IReadOnlyDictionary<string, string>? Vars { get; init; }
     /// <summary>Variable names marked secret. Same encoding as <see cref="EnvSpecDto.Secrets"/>.</summary>
     public IReadOnlyList<string>? Secrets { get; init; }
@@ -524,7 +542,20 @@ public sealed record WorkspaceDetailDto(
     /// when surfaced via <c>/api/tags/dictionary</c>, so this list is purely additive.</summary>
     IReadOnlyList<string> Tags,
     string Body,
-    string Source);
+    string Source,
+    /// <summary>The workspace's response caps, or null when the manifest leaves them at the
+    /// defaults.</summary>
+    ResponseLimitsDto? Response = null,
+    /// <summary>The workspace-wide <c>history:</c> defaults, or null when the manifest is
+    /// silent (which means off).</summary>
+    HistoryOptionsDto? History = null);
+
+/// <summary>Response caps declared in <c>workspace.tap</c>. Both members are byte counts;
+/// null means "leave it at the default" and the emitter writes nothing.</summary>
+/// <param name="MaxBytes">How much of a body is delivered inline to the panel / CLI.</param>
+/// <param name="MaxRetainedBytes">How much is held back for "show all" and the full
+/// download.</param>
+public sealed record ResponseLimitsDto(long? MaxBytes, long? MaxRetainedBytes);
 
 /// <summary>
 /// Variable provider configuration as exposed to the UI. <see cref="Settings"/> may include
@@ -738,6 +769,8 @@ public sealed record WorkspaceSpecDto
     public IReadOnlyList<string>? Secrets { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
     public string? Body { get; init; }
+    public ResponseLimitsDto? Response { get; init; }
+    public HistoryOptionsDto? History { get; init; }
 }
 
 public sealed record RequestSpecDto
@@ -758,6 +791,7 @@ public sealed record RequestSpecDto
     public string? RequestBody { get; init; }
     public string? Protocol { get; init; }
     public RequestTransportSettingsDto? Transport { get; init; }
+    public HistoryOptionsDto? History { get; init; }
 
     /// <summary>Declared expectations about the response. Omitted (or empty) leaves the
     /// <c>assertions:</c> key out of the emitted file entirely.</summary>
@@ -765,6 +799,19 @@ public sealed record RequestSpecDto
 }
 
 public sealed record RequestTransportSettingsDto(bool? IgnoreTlsErrors, int? TimeoutMs);
+
+/// <summary>
+/// Wire form of a <c>history:</c> block. Every field is nullable and means "inherit" — the
+/// editors show the inherited value greyed out and only send a key the user actually set, which
+/// is what keeps a collection's policy from being silently copied into every request under it.
+/// <c>OrphanRetentionDays</c> is only meaningful on the workspace manifest.
+/// </summary>
+public sealed record HistoryOptionsDto(
+    bool? Enabled,
+    int? MaxEntries,
+    bool? Encrypt,
+    long? MaxBodyBytes,
+    int? OrphanRetentionDays);
 
 public sealed record HttpHeaderSpecDto(string Name, string Value);
 
@@ -1261,7 +1308,17 @@ public sealed record ExecutionResultDto(
     IReadOnlyList<AssertResultDto> Assertions,
     /// <summary>Roll-up of <see cref="Assertions"/>. Null when the request declares none, so
     /// a request without assertions shows no pass/fail chrome at all.</summary>
-    AssertSummaryDto? AssertSummary);
+    AssertSummaryDto? AssertSummary,
+    /// <summary>How many bytes of the body <see cref="ResponseBody"/> actually carries. Below
+    /// <see cref="ResponseBodyBytes"/> when the workspace's <c>response.maxBytes</c> cut it
+    /// short — that difference is what the truncation banner reports.</summary>
+    long ResponseBodyInlineBytes = 0,
+    /// <summary>Handle for the retained copy held by <see cref="ResponseBodyStore"/>, or null
+    /// when the whole body already rode inline. Backs "show all" and the full download.</summary>
+    string? BodyId = null,
+    /// <summary>How much of the body the retained copy holds. Equals
+    /// <see cref="ResponseBodyBytes"/> when the response was kept whole.</summary>
+    long RetainedBytes = 0);
 
 public sealed record ExecuteStreamMetaDto(
     string Method,
@@ -1311,7 +1368,25 @@ public sealed record ExecuteStreamWsDto(
 
 public sealed record ExecuteStreamBodyDto(
     string? ResponseBody,
-    long ResponseBodyBytes);
+    long ResponseBodyBytes,
+    /// <summary>Bytes of the body carried by <see cref="ResponseBody"/> — see
+    /// <see cref="ExecutionResultDto.ResponseBodyInlineBytes"/>.</summary>
+    long ResponseBodyInlineBytes = 0,
+    /// <summary>Handle for the retained copy, or null when nothing was held back.</summary>
+    string? BodyId = null,
+    long RetainedBytes = 0);
+
+/// <summary>Reply from <c>GET /api/execute/body/{id}/text</c> — a longer prefix of a body the
+/// panel first showed truncated.</summary>
+/// <param name="Text">Decoded body, capped at the requested size.</param>
+/// <param name="InlineBytes">Bytes of the body <paramref name="Text"/> was decoded from.</param>
+/// <param name="TotalBytes">What the upstream sent.</param>
+/// <param name="RetainedBytes">What the host kept — the ceiling on any future ask.</param>
+public sealed record ResponseBodyTextDto(
+    string? Text,
+    long InlineBytes,
+    long TotalBytes,
+    long RetainedBytes);
 
 public sealed record ExecuteStreamSseDto(
     int Seq,
@@ -1462,6 +1537,7 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(TaggedItemDto))]
 [JsonSerializable(typeof(IReadOnlyList<TaggedItemDto>))]
 [JsonSerializable(typeof(WorkspaceSpecDto))]
+[JsonSerializable(typeof(ResponseLimitsDto))]
 [JsonSerializable(typeof(RequestSpecDto))]
 [JsonSerializable(typeof(AiStatusDto))]
 [JsonSerializable(typeof(AiConfigDto))]
@@ -1484,6 +1560,7 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(ExecuteStreamWsDto))]
 [JsonSerializable(typeof(ExecuteStreamDoneDto))]
 [JsonSerializable(typeof(ExecuteStreamErrorDto))]
+[JsonSerializable(typeof(ResponseBodyTextDto))]
 [JsonSerializable(typeof(TlsDiagnosisDto))]
 [JsonSerializable(typeof(GraphQLSchemaRequestDto))]
 [JsonSerializable(typeof(GraphQLSchemaResponseDto))]

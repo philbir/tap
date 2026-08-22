@@ -313,6 +313,21 @@ public sealed class LoadedWorkspace
     public IReadOnlyList<FlowFile> Flows { get; }
     public IReadOnlyList<TestSetFile> TestSets { get; }
 
+    /// <summary>The workspace's response caps, or the defaults when it has no manifest or the
+    /// manifest is silent. Read this rather than <c>Manifest?.Response</c> — a workspace loaded
+    /// from a folder with no <c>workspace.tap</c> still has to answer "how much do we keep".</summary>
+    public ResponseLimits ResponseLimits => Manifest?.Response ?? DefaultResponseLimits;
+
+    private static readonly ResponseLimits DefaultResponseLimits = new();
+
+    /// <summary>The workspace's history defaults — the weakest tier a request's own
+    /// <c>history:</c> block cascades onto, and the only scope that answers "how long do we keep
+    /// an orphan". Same reasoning as <see cref="ResponseLimits"/>: a manifest-less folder still
+    /// has to have an answer.</summary>
+    public HistoryOptions HistoryDefaults => Manifest?.History ?? DefaultHistory;
+
+    private static readonly HistoryOptions DefaultHistory = new();
+
     public WorkspaceFile? FindByPath(string relativePath)
         => _byPath.GetValueOrDefault(relativePath.Replace('\\', '/'));
 

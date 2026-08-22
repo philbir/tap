@@ -97,6 +97,7 @@ public static class FileParser
             Auth = fm.Ref("auth"),
             Protocol = protocol,
             Transport = ParseTransport(fm, relativePath),
+            History = ParseHistory(fm, relativePath),
             HttpBlock = block.Content,
             HttpBlockStartLine = block.StartLine,
             Vars = fm.VarSpecMap("vars"),
@@ -232,6 +233,7 @@ public static class FileParser
             Stages = stages,
             DefaultStage = defaultStage,
             Agent = ParseAgent(fm, relativePath),
+            History = ParseHistory(fm, relativePath),
         };
     }
 
@@ -339,7 +341,114 @@ public static class FileParser
             VariableProviders = providers,
             DefaultVariableProvider = fm.String("defaultVariableProvider") ?? fm.String("defaultProvider"),
             Vars = fm.VarSpecMap("vars"),
+            Response = ParseResponseLimits(fm, c.RelativePath),
+            History = ParseHistory(fm, c.RelativePath, workspaceScope: true),
         };
+    }
+
+    /// <summary>
+    /// Reads a <c>history:</c> block. Accepts the same bool-or-mapping shape as <c>agent:</c> —
+    /// <c>history: true</c> is the common case and shouldn't cost four lines — and leaves every
+    /// unmentioned key null so the tier below still has a say (see
+    /// <see cref="HistoryOptions.Resolve"/>).
+    ///
+    /// <para><c>orphanRetentionDays</c> is workspace-only: by the time a history folder is
+    /// orphaned, the collection and request that would have configured it are the very things
+    /// that no longer exist. Accepting it elsewhere would be accepting a value nothing can
+    /// ever read.</para>
+    /// </summary>
+    private static HistoryOptions ParseHistory(YamlMappingNode fm, string relativePath, bool workspaceScope = false)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("history"), out var node))
+            return new HistoryOptions();
+
+        if (node is YamlScalarNode scalar)
+        {
+            if (bool.TryParse(scalar.Value, out var enabled))
+                return new HistoryOptions { Enabled = enabled };
+            throw Invalid($"'history: {scalar.Value}' is not valid. Use true, false, or a mapping like 'history: {{ enabled: true, maxEntries: 50 }}'.");
+        }
+
+        if (node is not YamlMappingNode map)
+            throw Invalid("'history:' must be a bool or a mapping (history: { enabled: true }).");
+
+        return new HistoryOptions
+        {
+            Enabled = Bool(map, "enabled"),
+            MaxEntries = Count(map, "maxEntries"),
+            Encrypt = Bool(map, "encrypt"),
+            MaxBodyBytes = Size(map, "maxBodyBytes"),
+            OrphanRetentionDays = workspaceScope
+                ? Count(map, "orphanRetentionDays")
+                : RejectOrphanRetention(map),
+        };
+
+        bool? Bool(YamlMappingNode m, string key)
+        {
+            var raw = m.String(key);
+            if (raw is null) return null;
+            if (bool.TryParse(raw, out var value)) return value;
+            throw Invalid($"'history.{key}: {raw}' is not valid. Use true or false.");
+        }
+
+        int? Count(YamlMappingNode m, string key)
+        {
+            var raw = m.String(key);
+            if (raw is null) return null;
+            if (int.TryParse(raw, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var value))
+                return value;
+            throw Invalid($"'history.{key}' must be a non-negative whole number. Got '{raw}'.");
+        }
+
+        long? Size(YamlMappingNode m, string key)
+        {
+            var raw = m.String(key);
+            if (raw is null) return null;
+            if (ByteSize.TryParse(raw, out var bytes)) return bytes;
+            throw Invalid($"'history.{key}' must be a byte count, optionally with a kb/mb/gb suffix (e.g. '256kb'). Got '{raw}'.");
+        }
+
+        int? RejectOrphanRetention(YamlMappingNode m)
+        {
+            if (m.String("orphanRetentionDays") is null) return null;
+            throw Invalid("'history.orphanRetentionDays' belongs on workspace.tap — an orphaned history has no collection or request left to read it from.");
+        }
+
+        WorkspaceParseException Invalid(string message) => new(new WorkspaceError(
+            WorkspaceErrorCode.E_UNKNOWN_FIELD, message, relativePath));
+    }
+
+    /// <summary>
+    /// Reads the manifest's <c>response:</c> block. Both caps accept a plain byte count or a
+    /// <c>kb</c>/<c>mb</c>/<c>gb</c> size (§4.1); anything else is rejected rather than
+    /// silently falling back to the default, because a typo'd cap that reads as "no cap
+    /// configured" is exactly the surprise the field exists to remove.
+    /// </summary>
+    private static ResponseLimits ParseResponseLimits(YamlMappingNode fm, string relativePath)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("response"), out var node) || node is not YamlMappingNode response)
+            return new ResponseLimits();
+
+        return new ResponseLimits
+        {
+            MaxBytes = Size(response, "maxBytes"),
+            MaxRetainedBytes = Size(response, "maxRetainedBytes"),
+        };
+
+        long? Size(YamlMappingNode map, string key)
+        {
+            var raw = map.String(key);
+            if (raw is null) return null;
+            if (!ByteSize.TryParse(raw, out var bytes))
+            {
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"'response.{key}' must be a byte count, optionally with a kb/mb/gb suffix (e.g. '8mb'). Got '{raw}'.",
+                    relativePath));
+            }
+            return bytes;
+        }
     }
 
     /// <summary>

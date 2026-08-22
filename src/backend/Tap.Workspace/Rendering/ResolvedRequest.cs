@@ -25,6 +25,12 @@ public sealed record ResolvedRequest
     public RequestProtocol Protocol { get; init; } = RequestProtocol.Http;
     public RequestTransportSettings Transport { get; init; } = new();
 
+    /// <summary>Whether this exchange gets recorded, and how — the <c>history:</c> block from
+    /// the request, its collection, and the manifest, already merged per key. Sits here rather
+    /// than in <see cref="Metadata"/> because it is policy the host acts on, not a record of
+    /// what the render resolved.</summary>
+    public HistoryOptions History { get; init; } = new();
+
     /// <summary>Assertions to evaluate once the response lands, with their selectors and
     /// expected values already expanded through the same cascade as the request itself.</summary>
     public IReadOnlyList<ResolvedAssert> Assertions { get; init; } = [];

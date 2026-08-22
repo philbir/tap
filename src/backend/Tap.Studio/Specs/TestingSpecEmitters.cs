@@ -22,7 +22,7 @@ public static class FlowSpecEmitter
 
         var fm = new YamlMappingNode();
         fm.Set("kind", "flow");
-        fm.SetIfNotEmpty("id", spec.Id);
+        fm.Set("id", SpecIds.Ensure(spec.Id));
         fm.Set("name", spec.Name);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
         fm.SetFlowSteps(steps);
@@ -46,7 +46,7 @@ public static class TestSetSpecEmitter
 
         var fm = new YamlMappingNode();
         fm.Set("kind", "test");
-        fm.SetIfNotEmpty("id", spec.Id);
+        fm.Set("id", SpecIds.Ensure(spec.Id));
         fm.Set("name", spec.Name);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
         if (onFailure != TestFailureMode.Continue) fm.Set("onFailure", onFailure.ToWire());

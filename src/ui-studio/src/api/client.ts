@@ -85,6 +85,10 @@ import type {
   AiModels,
   AiAssistRequest,
   AiAssistResponse,
+  SavedSpec,
+  HistorySummary,
+  HistoryEntry,
+  HistoryStatus,
 } from './types'
 
 async function get<T>(path: string): Promise<T> {
@@ -161,7 +165,7 @@ export const api = {
   // Workspace
   workspace: () => get<WorkspaceInfo>('/api/workspace'),
   workspaceManifest: () => get<WorkspaceDetail>('/api/workspace/manifest'),
-  saveWorkspaceSpec: (spec: WorkspaceSpec) => put('/api/workspace/manifest/spec', spec),
+  saveWorkspaceSpec: (spec: WorkspaceSpec) => putJson<SavedSpec>('/api/workspace/manifest/spec', spec),
 
   /** Save a workspace file by its raw text content. The server validates by parsing
    *  through `FileParser` before writing — invalid YAML/kind/etc. rejects with 400 +
@@ -215,7 +219,7 @@ export const api = {
   // Requests
   requests: () => get<RequestSummary[]>('/api/requests'),
   request: (path: string) => get<RequestDetail>(`/api/requests/${encodePath(path)}`),
-  saveRequestSpec: (spec: RequestSpec) => put('/api/requests/spec', spec),
+  saveRequestSpec: (spec: RequestSpec) => putJson<SavedSpec>('/api/requests/spec', spec),
 
   /** Re-check assertions against a response the client already holds, without sending the
    *  request again. Backs the Asserts tab's live pass/fail while you edit: the verdicts are
@@ -253,17 +257,17 @@ export const api = {
   // Auths
   auths: () => get<AuthSummary[]>('/api/auths'),
   authDetail: (path: string) => get<AuthDetail>(`/api/auths/${encodePath(path)}`),
-  saveAuthSpec: (spec: AuthSpec) => put('/api/auths/spec', spec),
+  saveAuthSpec: (spec: AuthSpec) => putJson<SavedSpec>('/api/auths/spec', spec),
 
   // Environments
   environments: () => get<EnvSummary[]>('/api/environments'),
   envDetail: (path: string) => get<EnvDetail>(`/api/environments/${encodePath(path)}`),
-  saveEnvSpec: (spec: EnvSpec) => put('/api/environments/spec', spec),
+  saveEnvSpec: (spec: EnvSpec) => putJson<SavedSpec>('/api/environments/spec', spec),
 
   // Collections
   collections: () => get<CollectionSummary[]>('/api/collections'),
   collectionDetail: (slug: string) => get<CollectionDetail>(`/api/collections/${encodeURIComponent(slug)}`),
-  saveCollectionSpec: (spec: CollectionSpec) => put('/api/collections/spec', spec),
+  saveCollectionSpec: (spec: CollectionSpec) => putJson<SavedSpec>('/api/collections/spec', spec),
   deleteCollection: (slug: string) => del(`/api/collections/${encodeURIComponent(slug)}`),
 
   /** Import a Postman v2.1 collection JSON. <c>collection</c> is the parsed JSON body of
@@ -342,6 +346,18 @@ export const api = {
   diagnoseTls: (path: string, env: string | null, stage: string | null, spec?: RequestSpec) =>
     post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, stage, spec }),
 
+  /** Fetch more of a response the panel showed truncated. `max` is a byte ceiling — the
+   *  server clamps it to what it actually retained (and to its own text ceiling). The
+   *  request is never re-sent; this reads the copy spooled during the original send. */
+  responseBodyText: (bodyId: string, max?: number) =>
+    get<ResponseBodyText>(`/api/execute/body/${encodeURIComponent(bodyId)}/text${max ? `?max=${Math.floor(max)}` : ''}`),
+
+  /** URL that streams the whole retained body as a download. Used as an anchor href rather
+   *  than fetched — letting the browser stream it straight to disk is the point, since the
+   *  body is by definition bigger than what we were willing to hold in the page. */
+  responseBodyUrl: (bodyId: string, filename?: string) =>
+    `/api/execute/body/${encodeURIComponent(bodyId)}${filename ? `?name=${encodeURIComponent(filename)}` : ''}`,
+
   /**
    * Streaming variant of `execute()`. Drives a single fetch + ReadableStream against
    * `/api/execute/stream` and dispatches each SSE event (`meta` / `body` / `sse` /
@@ -377,11 +393,47 @@ export const api = {
 
   flows: () => get<FlowSummary[]>('/api/flows'),
   flow: (path: string) => get<FlowDetail>(`/api/flows/${encodePath(path)}`),
-  saveFlowSpec: (spec: FlowSpec) => put('/api/flows/spec', spec),
+  saveFlowSpec: (spec: FlowSpec) => putJson<SavedSpec>('/api/flows/spec', spec),
 
   testSets: () => get<TestSetSummary[]>('/api/test-sets'),
   testSet: (path: string) => get<TestSetDetail>(`/api/test-sets/${encodePath(path)}`),
-  saveTestSetSpec: (spec: TestSetSpec) => put('/api/test-sets/spec', spec),
+  saveTestSetSpec: (spec: TestSetSpec) => putJson<SavedSpec>('/api/test-sets/spec', spec),
+
+  // ---- Request history ------------------------------------------------------------------
+  // `.tap-history/`, one folder per request id. The listings return summaries only — a
+  // timeline row needs a status and a URL, not every recorded body.
+
+  /** Newest exchanges across the workspace. */
+  history: (params?: { limit?: number; collection?: string; status?: string; includeOrphans?: boolean }) => {
+    const q = new URLSearchParams()
+    if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    if (params?.collection) q.set('collection', params.collection)
+    if (params?.status) q.set('status', params.status)
+    if (params?.includeOrphans === false) q.set('includeOrphans', 'false')
+    const query = q.toString()
+    return get<HistorySummary[]>(`/api/history/${query ? `?${query}` : ''}`)
+  },
+
+  /** One request's recorded exchanges, newest first. */
+  requestHistory: (requestId: string, limit?: number) =>
+    get<HistorySummary[]>(
+      `/api/history/request/${encodeURIComponent(requestId)}${limit ? `?limit=${limit}` : ''}`),
+
+  /** One entry in full. Throws 423 when the entry is encrypted and this machine has no key. */
+  historyEntry: (requestId: string, entryId: string) =>
+    get<HistoryEntry>(`/api/history/entry/${encodeURIComponent(requestId)}/${encodeURIComponent(entryId)}`),
+
+  deleteHistoryEntry: (requestId: string, entryId: string) =>
+    del(`/api/history/entry/${encodeURIComponent(requestId)}/${encodeURIComponent(entryId)}`),
+
+  clearRequestHistory: (requestId: string) =>
+    del(`/api/history/request/${encodeURIComponent(requestId)}`),
+
+  /** Drops every folder whose request no longer exists. */
+  clearOrphanedHistory: () => del('/api/history/orphans'),
+
+  /** Where history lives, and whether encrypted entries can be opened here. */
+  historyStatus: () => get<HistoryStatus>('/api/history/status'),
 
   /**
    * Run a test set or a flow — `path` points at either kind and the server decides from the
@@ -644,6 +696,20 @@ export interface StreamMeta {
 export interface StreamBody {
   responseBody: string | null
   responseBodyBytes: number
+  /** Bytes of the body this event carries — below `responseBodyBytes` when the workspace's
+   *  `response.maxBytes` cut it short. */
+  responseBodyInlineBytes: number
+  /** Handle for the copy held back on the server, or null when nothing was. */
+  bodyId: string | null
+  retainedBytes: number
+}
+
+/** A longer prefix of a retained body, from `GET /api/execute/body/{id}/text`. */
+export interface ResponseBodyText {
+  text: string | null
+  inlineBytes: number
+  totalBytes: number
+  retainedBytes: number
 }
 
 export interface StreamDone {

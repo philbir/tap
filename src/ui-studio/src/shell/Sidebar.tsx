@@ -6,7 +6,7 @@ import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
 import {
   IconAlertCircle, IconBrandGit, IconChecklist, IconCopy, IconEdit, IconFilePlus, IconFolderPlus,
-  IconFolderShare, IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
+  IconFolderShare, IconHistory, IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
@@ -18,6 +18,7 @@ import { DuplicateRequestDialog } from './DuplicateRequestDialog'
 import { buildAuthView, buildRequestsView, filterExplorerTree, type ExplorerNode } from './explorerTree'
 import { FilesystemView } from './FilesystemView'
 import { GitView } from './GitView'
+import { HistoryView } from './HistoryView'
 import { NewFolderDialog } from './NewFolderDialog'
 import { PierreFileTree } from './PierreFileTree'
 import { TagsView } from './TagsView'
@@ -25,13 +26,14 @@ import { TestingView } from './TestingView'
 import { makeTapTreeIcons, TAP_ICONS, TAP_TREE_UNSAFE_CSS } from './treeIcons'
 import { fileNameFor, labelForPath, stripTapSuffix } from './tapFiles'
 
-type Filter = 'requests' | 'auth' | 'testing' | 'tags' | 'fs' | 'git'
+type Filter = 'requests' | 'auth' | 'testing' | 'tags' | 'history' | 'fs' | 'git'
 
 const BASE_FILTER_TABS: { value: Filter; label: string; icon: TablerIcon }[] = [
   { value: 'requests', label: 'Requests', icon: IconSend },
   { value: 'auth', label: 'Auth', icon: IconLock },
   { value: 'testing', label: 'Testing', icon: IconChecklist },
   { value: 'tags', label: 'Tags', icon: IconTag },
+  { value: 'history', label: 'History', icon: IconHistory },
   { value: 'fs', label: 'Filesystem', icon: IconFolderShare },
 ]
 const GIT_TAB = { value: 'git' as const, label: 'Git', icon: IconBrandGit }
@@ -95,6 +97,21 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   // `.req.tap` suffix) plus a map from display path → callback that opens the real
   // workspace file. Mirrored for the auth tab.
   const requestsLookup = useMemo(() => collectRequestRows(requestsView, onOpenFile), [requestsView, onOpenFile])
+
+  /** Opens a request by its workspace-relative path — what the history timeline has to work
+   *  with, since an entry records where the request lived, not the tree node it came from. */
+  const openRequestByPath = useCallback((path: string) => {
+    const find = (nodes: TreeNode[]): TreeNode | null => {
+      for (const n of nodes) {
+        if (n.path === path && n.kind !== 'directory') return n
+        const hit = find(n.children ?? [])
+        if (hit) return hit
+      }
+      return null
+    }
+    const node = find(tree)
+    if (node) onOpenFile(node)
+  }, [tree, onOpenFile])
   const requestsPaths = requestsLookup.paths
   const requestsActivePath = useMemo(
     () => activePath ? requestsLookup.realToDisplay.get(activePath) ?? null : null,
@@ -334,6 +351,12 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
       {filter === 'git' ? (
         <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <GitView />
+        </Box>
+      ) : filter === 'history' ? (
+        // Its own branch rather than a row source for the shared tree: a timeline is grouped by
+        // day and filtered by outcome, which the explorer's search box can't express.
+        <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <HistoryView onOpenRequest={openRequestByPath} />
         </Box>
       ) : (
       <>

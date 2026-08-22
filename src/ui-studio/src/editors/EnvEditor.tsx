@@ -9,6 +9,7 @@ import { EditorShell, TabCount } from './EditorShell'
 import { KvTable } from './KvTable'
 import { ProviderTypeIcon } from './providerMeta'
 import { SourceTab } from './SourceTab'
+import { useTabView } from './useTabView'
 import { useSpecEditor } from './useSpecEditor'
 import { flatVarsToRows, rowsToFlatVars } from './varRows'
 
@@ -25,7 +26,7 @@ export function EnvEditor({ path }: Props) {
     saveSpec: (s) => api.saveEnvSpec(s),
   })
   const { detail, spec, setSpec, update, dirty, saving, errorMessage, save, discard } = editor
-  const [tab, setTab] = useState<string | null>('variables')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'variables')
 
   if (!detail || !spec) {
     return (

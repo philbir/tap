@@ -41,6 +41,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             IgnoreTlsErrors = request.Transport.IgnoreTlsErrors ?? collection?.Transport.IgnoreTlsErrors,
             TimeoutMs = request.Transport.TimeoutMs ?? collection?.Transport.TimeoutMs,
         };
+        var history = HistoryOptions.Resolve(
+            workspace.Manifest?.History, collection?.History, request.History);
 
         var auth = workspace.Resolve(request.Auth, requestDir) as AuthFile;
         if (auth is null && stage?.DefaultAuth is not null && collection is not null)
@@ -145,6 +147,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             Body = parsed.Body,
             Protocol = request.Protocol,
             Transport = transport,
+            History = history,
             Assertions = assertions,
             Redactor = redactor,
             Metadata = new ResolvedRequestMetadata

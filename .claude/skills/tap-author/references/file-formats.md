@@ -28,6 +28,8 @@ renaming files and rewriting refs together.
 | `vars` | map<string, var-spec> | Lowest cascade tier. |
 | `variableProviders` | array | Declares named providers: `{ name, type, settings? }`. Types: `env` (host env vars, gated by `TAP_VARS_ALLOWED`/`TAP_SECRETS_ALLOWED`), `file` (workspace-local store, secrets encrypted), `azkv` (Azure Key Vault; settings `vaultName`, `tenantId`), `1p` (1Password CLI). A host-level `system` provider also exists (`~/.tap/system.json`). |
 | `defaultVariableProvider` | string | Provider bare `{{name}}` tokens hit first after the cascade. |
+| `response` | map | Body caps: `maxBytes` (default `2mb`) is how much of a response is delivered inline and seen by body assertions; `maxRetainedBytes` (default `64mb`) is how much the Studio holds back for "Show all" / a full download. Sizes are bytes or `kb`/`mb`/`gb` (1024-based). |
+| `history` | bool \| map | Record exchanges to `.tap-history/`. Off by default. See **History** below. Workspace tier is the weakest; a collection or request overrides it per key. Only this scope may set `orphanRetentionDays`. |
 
 ```markdown
 ---
@@ -45,6 +47,9 @@ variableProviders:
   settings:
     vaultName: acme-prod
     tenantId: 00000000-0000-0000-0000-000000000000
+response:
+  maxBytes: 8mb
+  maxRetainedBytes: 256mb
 vars:
   app.userAgent: acme-tap/1.0
 ---
@@ -66,6 +71,7 @@ Workspace docs for humans.
 | `stages` | sequence | Each: `name` (required), `baseUrl?`, `defaultAuth?`, `vars?`. Named env-of-the-API overrides; select with `--stage`. |
 | `defaultStage` | string | Stage preselected in the editor. |
 | `agent` | bool \| mapping | `agent: false` (or `agent: { enabled: false }`) fences the collection off from agent surfaces. Default enabled; omit unless opting out. |
+| `history` | bool \| map | Recording policy for every request in the collection. Overrides the workspace per key; a request overrides it in turn. See **History** below. |
 
 ```markdown
 ---
@@ -97,6 +103,7 @@ stages:
 | `protocol` | `http` \| `websocket` | Default `http`. `websocket`: scheme normalizes to ws/wss, body (if any) is sent as the first text frame. WS requests run from the editor/send only — not from flows/test sets. |
 | `vars` | map<string, var-spec> | Request tier (top file tier). |
 | `transport` | mapping | `ignoreTlsErrors`, `timeoutMs` — overrides collection transport. |
+| `history` | bool \| map | Recording policy for this request alone. Strongest tier. See **History** below. |
 | `assertions` | array | See references/assertions.md. |
 
 Body: **exactly one** fenced ```` ```http ```` block (REST-Client syntax): request line
@@ -255,6 +262,36 @@ tests:
   flow: ./checkout.flow.tap
 ---
 ```
+
+## History
+
+`history:` records each exchange to `.tap-history/` at the workspace root — one folder per
+request id, one JSON file per exchange. Declarable on `workspace.tap`, `_collection.tap`, and a
+single request, merged **per key** with the nearest scope winning.
+
+```yaml
+history: true              # shorthand for { enabled: true }
+
+history:
+  enabled: true
+  maxEntries: 25           # per request, oldest pruned
+  encrypt: false
+  maxBodyBytes: 256kb      # same size grammar as `response:`
+  orphanRetentionDays: 30  # workspace.tap only
+```
+
+Two things to know when authoring:
+
+- **It needs an `id:`.** History is keyed by the request's stable id so a rename doesn't orphan
+  it. A request with no `id:` is not recorded. The Studio assigns one on save; a hand-written
+  file needs one written in.
+- **Redacted, or encrypted — never both off.** With `encrypt: false` (default) credential
+  headers are masked and every resolved secret is replaced by value. With `encrypt: true` the
+  entry keeps what actually went on the wire and the file is sealed with the machine key; if no
+  key can be obtained, nothing is written rather than being stored in the clear.
+
+The folder writes its own `.gitignore`, so recorded traffic stays out of commits. Only the
+Studio's interactive Send records — `tap-studio send`, MCP tools, and test runs do not.
 
 ## Run-override precedence (top tier of the cascade, later wins)
 

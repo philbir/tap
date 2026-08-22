@@ -16,11 +16,14 @@ import { useTagDictionary } from '../workspace/useTagDictionary'
 import { authSelectGroups } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
+import { HistorySettings } from './HistorySettings'
 import { ImportOpenApiDialog } from './ImportOpenApiDialog'
 import { KvTable, type KvRow } from './KvTable'
 import { ResyncOpenApiDialog } from './ResyncOpenApiDialog'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
+import { restoreDraft, usePublishDraft } from './useDraft'
+import { useTabView } from './useTabView'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
 import { COLLECTION_FILE } from '../shell/tapFiles'
@@ -46,7 +49,7 @@ export function CollectionEditor({ path }: Props) {
   const [detail, setDetail] = useState<CollectionDetail | null>(null)
   const [spec, setSpec] = useState<CollectionSpec | null>(null)
   const [savedSpec, setSavedSpec] = useState<CollectionSpec | null>(null)
-  const [tab, setTab] = useState<string | null>('general')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'general')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
   const [varsOpened, varsCtl] = useDisclosure(false)
@@ -65,7 +68,9 @@ export function CollectionEditor({ path }: Props) {
       if (cancelled) return
       setDetail(d)
       const initial = specFromDetail(d)
-      setSpec(initial)
+      // Keeps unsaved edits across a tab switch and across the re-fetch a `generation`
+      // bump forces; `savedSpec` stays whatever is actually on disk.
+      setSpec(restoreDraft(path, initial))
       setSavedSpec(initial)
     }).catch((e: Error) => !cancelled && setError(e.message))
     // A missing link isn't an error — most collections have none.
@@ -74,6 +79,7 @@ export function CollectionEditor({ path }: Props) {
   }, [slug, generation])
 
   const dirty = useMemo(() => JSON.stringify(spec) !== JSON.stringify(savedSpec), [spec, savedSpec])
+  usePublishDraft(path, spec, dirty)
 
   function update<K extends keyof CollectionSpec>(key: K, value: CollectionSpec[K]) {
     setSpec((cur) => cur ? { ...cur, [key]: value } : cur)
@@ -200,6 +206,19 @@ export function CollectionEditor({ path }: Props) {
                 No <Code fz="xs">_collection.tap</Code> on disk yet — saving will create it.
               </Text>
             )}
+
+            <Box>
+              <Text fw={600} size="sm" mb={2}>History</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                Applies to every request in this collection. A request can override any of it.
+              </Text>
+              <HistorySettings
+                value={spec.history}
+                onChange={(v) => update('history', v)}
+                inherited={detail.inheritedHistory}
+                inheritedFrom="workspace"
+              />
+            </Box>
           </Stack>
         </Tabs.Panel>
 
@@ -451,6 +470,7 @@ function specFromDetail(d: CollectionDetail): CollectionSpec {
     // Only the opt-out is carried: undefined means enabled and keeps the emitted file
     // silent, mirroring what the server writes.
     agentEnabled: d.agentEnabled === false ? false : undefined,
+    history: d.history ?? undefined,
     body: d.body && d.body.trim().length > 0 ? d.body : undefined,
   }
 }

@@ -37,13 +37,9 @@ public sealed class FileVariableProvider : IVariableProvider
 {
     /// <summary>On-disk marker for encrypted values. Public so the Studio's provider-test
     /// endpoint can detect secrets that failed to decrypt (ListAsync surfaces the raw
-    /// envelope on decrypt failure instead of throwing).</summary>
-    public const string EnvelopePrefix = "enc:v1:";
-
-    private const int Pbkdf2Iterations = 200_000;
-    private const int KeyBytes = 32;
-    private const int IvBytes = 12;
-    private const int TagBytes = 16;
+    /// envelope on decrypt failure instead of throwing). The format itself lives in
+    /// <see cref="SecretEnvelope"/>, shared with request history.</summary>
+    public const string EnvelopePrefix = SecretEnvelope.Prefix;
 
     private const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
@@ -52,22 +48,17 @@ public sealed class FileVariableProvider : IVariableProvider
 
     private readonly string _storePath;
     private readonly IEncryptionKeySource _keySource;
-    private readonly string _salt;
+    private readonly DerivedKey _derived;
     private readonly Lock _gate = new();
     private VariableProviderConfig _config;
-
-    /// <summary>Derived key cache, keyed by the passphrase that produced it. PBKDF2 at 200k
-    /// iterations is ~100ms; a listing of twenty secrets would otherwise spend two seconds
-    /// re-deriving the same key. Re-derives when the passphrase changes, which is what makes
-    /// "generate a key, then save" work without restarting the host.</summary>
-    private (string Passphrase, byte[] Key)? _derived;
 
     public FileVariableProvider(VariableProviderConfig config, string workspaceRoot, IEncryptionKeySource keySource)
     {
         _config = config;
         _keySource = keySource;
         _storePath = Path.Combine(workspaceRoot, ".vars", config.Name + ".yml");
-        _salt = "tap-file-provider:" + config.Name;
+        // Per-provider salt: one machine key, a distinct derived key per store.
+        _derived = new DerivedKey(keySource, "tap-file-provider:" + config.Name);
     }
 
     /// <summary>True when this machine has no encryption passphrase, so secret values can
@@ -77,28 +68,8 @@ public sealed class FileVariableProvider : IVariableProvider
 
     /// <summary>The AES key for this store, or <c>null</c> when the machine has no passphrase.
     /// Resolved per call rather than at construction: providers are cached across requests, and
-    /// a key generated after the instance was built must take effect immediately.
-    ///
-    /// <para><paramref name="create"/> is the encrypt/decrypt asymmetry. Storing a secret is a
-    /// request to protect something, so a machine with no key gets one made for it. Reading one
-    /// is not: no key there means the ciphertext on disk was written under a key that is gone,
-    /// and minting a fresh one would answer "your data is unreadable" with a key that still
-    /// cannot read it.</para></summary>
-    private byte[]? Key(bool create = false)
-    {
-        var passphrase = create ? _keySource.EnsurePassphrase() : _keySource.GetPassphrase();
-        if (string.IsNullOrEmpty(passphrase)) return null;
-
-        lock (_gate)
-        {
-            if (_derived is { } d && string.Equals(d.Passphrase, passphrase, StringComparison.Ordinal))
-                return d.Key;
-            var key = Rfc2898DeriveBytes.Pbkdf2(
-                passphrase, Encoding.UTF8.GetBytes(_salt), Pbkdf2Iterations, HashAlgorithmName.SHA256, KeyBytes);
-            _derived = (passphrase, key);
-            return key;
-        }
-    }
+    /// a key generated after the instance was built must take effect immediately.</summary>
+    private byte[]? Key(bool create = false) => _derived.Get(create);
 
     /// <summary>The message every "no key" failure shares. Names both sources, because the
     /// only useful thing to say to someone holding undecryptable data is where to put the key.
@@ -288,23 +259,11 @@ public sealed class FileVariableProvider : IVariableProvider
         }
     }
 
-    private static string Encrypt(string clear, byte[] key)
-    {
-        var iv = RandomNumberGenerator.GetBytes(IvBytes);
-        var plain = Encoding.UTF8.GetBytes(clear);
-        var cipher = new byte[plain.Length];
-        var tag = new byte[TagBytes];
-        using var aes = new AesGcm(key, TagBytes);
-        aes.Encrypt(iv, plain, cipher, tag);
-        return EnvelopePrefix
-            + Convert.ToBase64String(iv) + ":"
-            + Convert.ToBase64String(cipher) + ":"
-            + Convert.ToBase64String(tag);
-    }
+    private static string Encrypt(string clear, byte[] key) => SecretEnvelope.Protect(clear, key);
 
     private string Decrypt(string stored, string name)
     {
-        if (!stored.StartsWith(EnvelopePrefix, StringComparison.Ordinal))
+        if (!SecretEnvelope.IsEnvelope(stored))
         {
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
@@ -317,28 +276,21 @@ public sealed class FileVariableProvider : IVariableProvider
                 WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
                 $"Cannot decrypt secret variable '{name}' in file provider '{Name}'. {NoKeyHint}"));
         }
-        var parts = stored[EnvelopePrefix.Length..].Split(':');
-        if (parts.Length != 3)
-        {
-            throw new WorkspaceParseException(new WorkspaceError(
-                WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
-                $"File provider '{Name}' variable '{name}' has a malformed envelope."));
-        }
         try
         {
-            var iv = Convert.FromBase64String(parts[0]);
-            var cipher = Convert.FromBase64String(parts[1]);
-            var tag = Convert.FromBase64String(parts[2]);
-            var plain = new byte[cipher.Length];
-            using var aes = new AesGcm(key, TagBytes);
-            aes.Decrypt(iv, cipher, tag, plain);
-            return Encoding.UTF8.GetString(plain);
+            return SecretEnvelope.Unprotect(stored, key);
         }
         catch (CryptographicException ex)
         {
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
                 $"File provider '{Name}' could not decrypt variable '{name}': {ex.Message}"));
+        }
+        catch (FormatException ex)
+        {
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
+                $"File provider '{Name}' variable '{name}' has a malformed envelope: {ex.Message}"));
         }
     }
 

@@ -91,6 +91,10 @@ public static class StudioHost
         builder.Services.AddSingleton<KnownWorkspaceStore>();
         builder.Services.AddSingleton<WorkspaceService>();
         builder.Services.AddSingleton<GitService>();
+        builder.Services.AddSingleton<ResponseBodyStore>();
+        builder.Services.AddSingleton<History.HistoryStoreProvider>();
+        builder.Services.AddSingleton<History.IHistoryStores>(sp => sp.GetRequiredService<History.HistoryStoreProvider>());
+        builder.Services.AddSingleton<History.HistoryRecorder>();
 
         // The agent surface as MCP tools at /mcp, over the live WorkspaceService — same
         // shared tool layer the CLI's stdio server hosts, but with this process's cached
@@ -252,6 +256,8 @@ public static class StudioHost
         HttpFileEndpoints.Map(app);
         ExecuteEndpoint.Map(app);
         ExecuteStreamEndpoint.Map(app);
+        ResponseBodyEndpoints.Map(app);
+        HistoryEndpoints.Map(app);
         AssertEndpoints.Map(app);
         TestingEndpoints.Map(app);
         FileEndpoints.Map(app);

@@ -5,7 +5,7 @@ import { useClipboard } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
   IconAlertCircle, IconArrowDown, IconArrowRight, IconArrowUp, IconBolt, IconCheck, IconCircleCheck, IconCircleCheckFilled, IconCircleMinus, IconCircleXFilled, IconCopy, IconDots, IconDownload, IconExternalLink,
-  IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSend, IconTrash, IconX,
+  IconHistory, IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSend, IconTrash, IconX,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
@@ -13,9 +13,14 @@ import type { AssertResult, AssertSummary, AuthExecuteResponse, AuthStatus, Auth
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useActiveEnv, useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
+import { useTabView } from './useTabView'
 import { COLLECTION_FILE } from '../shell/tapFiles'
 
 interface Props {
+  /** Tab the panel belongs to. Keys the sticky sub-tab selection, so flipping to Headers
+   *  and back to another tab doesn't land you on Body again. Note this is the *tab*, not
+   *  `requestPath` — a `.http` file's panel changes request as you send, but it is one tab. */
+  tabPath: string
   rendered: RenderedRequest | null
   execution: ExecutionResult | null
   error: string | null
@@ -35,6 +40,12 @@ interface Props {
   requestAuth?: string | null
   /** Called when the user clicks the close (×) button — parent should hide the pane. */
   onClose?: () => void
+  /** Set when the pane is showing a recorded exchange rather than a live one. Carries when it
+   *  was recorded, so nobody mistakes an entry from Tuesday for the response they just got. */
+  replayedAt?: string | null
+  /** Whether that recorded entry was redacted. Only meaningful alongside `replayedAt`; it is
+   *  what tells the reader whether `***` means "masked" or "that is what was sent". */
+  replayRedacted?: boolean
 }
 
 /**
@@ -51,43 +62,53 @@ interface Props {
  * 4xx yellow / 5xx red). The "Request" sub-tab shows what was sent on the wire (replaces
  * the old separate Preview pane).
  */
-export function ResponsePanel({ rendered, execution, error, busy, stopped, onStop, requestPath, requestName, requestAuth, onClose }: Props) {
+export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopped, onStop, requestPath, requestName, requestAuth, onClose, replayedAt, replayRedacted }: Props) {
   const sseEvents = execution?.sseEvents
   const hasSse = !!sseEvents && sseEvents.length > 0
   const wsFrames = execution?.wsFrames
   // WebSocket execution doesn't have a meaningful HTTP body, so default the active tab
   // to Frames for ws requests. SSE keeps its existing auto-switch behavior on first event.
   const isWs = execution?.protocol === 'websocket' || rendered?.protocol === 'websocket'
-  const [tab, setTab] = useState<string | null>(isWs ? 'frames' : 'body')
+  const [tab, setTab] = useTabView<string | null>(tabPath, 'responseTab', isWs ? 'frames' : 'body')
 
+  // The three auto-switches below react to something *arriving*. Each therefore starts from
+  // "whatever is already here has been seen": the panel now remounts onto a response the user
+  // may have been reading for a while, and re-firing would yank them off the tab they chose.
+  //
   // First time SSE frames appear, snap the user to the Events tab — they almost
   // certainly want to watch them stream in.
-  const lastSeenCountRef = useRef(0)
+  const lastSeenCountRef = useRef<number | null>(null)
   useEffect(() => {
     const count = sseEvents?.length ?? 0
-    if (count > 0 && lastSeenCountRef.current === 0) setTab('events')
+    const prev = lastSeenCountRef.current
     lastSeenCountRef.current = count
-  }, [sseEvents])
+    if (prev !== null && count > 0 && prev === 0) setTab('events')
+  }, [sseEvents, setTab])
 
   // Same idea for ws frames — flip to the Frames tab when the first one arrives.
-  const lastWsCountRef = useRef(0)
+  const lastWsCountRef = useRef<number | null>(null)
   useEffect(() => {
     const count = wsFrames?.length ?? 0
-    if (count > 0 && lastWsCountRef.current === 0) setTab('frames')
+    const prev = lastWsCountRef.current
     lastWsCountRef.current = count
-  }, [wsFrames])
+    if (prev !== null && count > 0 && prev === 0) setTab('frames')
+  }, [wsFrames, setTab])
 
   // When the server reports the request needed auth but didn't have a usable token —
   // flip to the Flow tab so the "Run auth" affordance is front-and-center. Tracked per
   // execution so manually navigating away doesn't snap the user back on every re-render.
-  const authNudgedRef = useRef<ExecutionResult | null>(null)
+  const authNudgedRef = useRef<ExecutionResult | null | undefined>(undefined)
   useEffect(() => {
     if (!execution) { authNudgedRef.current = null; return }
     if (authNudgedRef.current === execution) return
+    // `undefined` means this is the panel's first look — the execution was already on screen
+    // before the remount, so it isn't news either.
+    const remounted = authNudgedRef.current === undefined
     authNudgedRef.current = execution
+    if (remounted) return
     const src = execution.authStatus?.source
     if (src === 'missing' || src === 'expired') setTab('flow')
-  }, [execution])
+  }, [execution, setTab])
 
   const cookies = useMemo(() => parseSetCookies(execution?.responseHeaders), [execution?.responseHeaders])
 
@@ -111,7 +132,7 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
   // panel. Snap back to the natural default when that happens.
   useEffect(() => {
     if (tab && !availableTabs.has(tab)) setTab(isWs ? 'frames' : 'body')
-  }, [availableTabs, tab, isWs])
+  }, [availableTabs, tab, isWs, setTab])
 
   // While busy we still fall through to the tabs IF execution has started — otherwise
   // SSE frames accumulate invisibly until `done` fires (the entire reason the user
@@ -199,6 +220,7 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
           </Tabs.Tab>
         </Tabs.List>
         <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+          {replayedAt && <ReplayChip at={replayedAt} redacted={replayRedacted} />}
           {execution && <StatusStrip execution={execution} busy={busy} stopped={stopped} />}
           {busy && onStop && (
             <Tooltip label="Stop request" withArrow>
@@ -221,7 +243,7 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
       <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {!isWs && (
           <Tabs.Panel value="body" h="100%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <BodyView execution={execution} stopped={stopped} />
+            <BodyView execution={execution} stopped={stopped} requestName={requestName} />
           </Tabs.Panel>
         )}
         {hasSse && (
@@ -270,6 +292,34 @@ export function ResponsePanel({ rendered, execution, error, busy, stopped, onSto
 /** Skinny header with just a Close button — used by the busy / error states so they
  *  match the laid-out tab bar height and offer the same dismiss affordance. When the
  *  request is still in flight (`onStop`), it also exposes a Stop button. */
+/**
+ * Marks the pane as showing something recorded rather than something that just happened.
+ *
+ * <p>Without it a stored exchange is indistinguishable from a live one, which is the single
+ * most dangerous confusion this feature can cause — acting on a body from Tuesday as though the
+ * endpoint returned it a second ago. The redaction state rides along because it changes what the
+ * masks mean: <c>***</c> in a redacted entry hides a value, and in an unredacted one it is the
+ * value.</p>
+ */
+function ReplayChip({ at, redacted }: { at: string; redacted?: boolean }) {
+  const when = new Date(at)
+  const label = Number.isNaN(when.getTime()) ? at : when.toLocaleString()
+  return (
+    <Tooltip
+      label={redacted === false
+        ? `Recorded ${label} — stored unredacted and encrypted at rest.`
+        : `Recorded ${label} — secrets were masked before it was written.`}
+      withArrow
+      multiline
+      w={280}
+    >
+      <Badge size="sm" variant="light" color="grape" leftSection={<IconHistory size={11} />}>
+        From history
+      </Badge>
+    </Tooltip>
+  )
+}
+
 function CompactHeader({ children, onClose, onStop }: { children?: React.ReactNode; onClose?: () => void; onStop?: () => void }) {
   return (
     <Group
@@ -339,7 +389,9 @@ function StatusStrip({ execution, busy, stopped }: { execution: ExecutionResult;
 function ResultActionsMenu({ execution, requestName }: { execution: ExecutionResult; requestName?: string }) {
   const clipboard = useClipboard({ timeout: 1500 })
   const text = useMemo(() => resultToText(execution), [execution])
-  const downloadable = useMemo(() => isDownloadableImage(execution) || (text != null && text.length > 0), [execution, text])
+  const downloadable = useMemo(
+    () => !!execution.bodyId || isDownloadableImage(execution) || (text != null && text.length > 0),
+    [execution, text])
   const canCopy = text != null && text.length > 0
 
   function copy() {
@@ -371,7 +423,7 @@ function ResultActionsMenu({ execution, requestName }: { execution: ExecutionRes
           disabled={!downloadable}
           onClick={() => downloadResult(execution, requestName)}
         >
-          Download response
+          {execution.bodyId ? 'Download full response' : 'Download response'}
         </Menu.Item>
       </Menu.Dropdown>
     </Menu>
@@ -412,12 +464,18 @@ function isDownloadableImage(execution: ExecutionResult): boolean {
   return !!execution.contentType?.toLowerCase().startsWith('image/') && !!execution.responseBody?.startsWith('data:')
 }
 
-/** Save the response to disk. Image responses (stored as `data:` URLs) download as the
- *  original binary; everything else writes its text body with an extension guessed from
- *  the content type. Filename is `<request-name>_response_<timestamp>.<ext>`. */
+/** Save the response to disk. A body the server held back is streamed from it, so what
+ *  lands on disk is the whole response rather than the prefix the panel rendered. Image
+ *  responses (stored as `data:` URLs) download as the original binary; everything else
+ *  writes its text body with an extension guessed from the content type. Filename is
+ *  `<request-name>_response_<timestamp>.<ext>`. */
 function downloadResult(execution: ExecutionResult, requestName?: string): void {
   const ext = extForContentType(execution.contentType)
   const filename = buildDownloadName(requestName, ext)
+  if (execution.bodyId) {
+    downloadRetainedBody(execution, requestName)
+    return
+  }
   if (isDownloadableImage(execution)) {
     triggerDownload(execution.responseBody!, filename)
     return
@@ -429,6 +487,16 @@ function downloadResult(execution: ExecutionResult, requestName?: string): void 
   triggerDownload(url, filename)
   // Revoke after the click has had a chance to start the download.
   setTimeout(() => URL.revokeObjectURL(url), 10_000)
+}
+
+/** Stream the server's retained copy straight to disk. Deliberately an anchor to the API
+ *  rather than a fetch-then-Blob: the body is by definition larger than what we were willing
+ *  to hold in the page, and buffering it into memory to hand it back is how a download of a
+ *  200 MB response takes the tab down with it. */
+function downloadRetainedBody(execution: ExecutionResult, requestName?: string): void {
+  if (!execution.bodyId) return
+  const filename = buildDownloadName(requestName, extForContentType(execution.contentType))
+  triggerDownload(api.responseBodyUrl(execution.bodyId, filename), filename)
 }
 
 /** Compose the download filename: `<sanitized request name>_response_<timestamp>.<ext>`,
@@ -484,12 +552,41 @@ function extForContentType(ct: string | null): string {
     const sub = main.split('/')[1]!.replace(/^x-/, '')
     return sub === 'plain' || !sub ? 'txt' : sub
   }
-  return 'txt'
+  // No content type at all means a transcript we assembled ourselves (SSE / WebSocket
+  // frames), which is text. A content type we didn't recognize as text is binary — and
+  // since a retained body downloads verbatim, calling that file `.txt` mislabels it.
+  return main ? 'bin' : 'txt'
 }
 
 // ---- Body view (CodeMirror) ----------------------------------------------------------
 
-function BodyView({ execution, stopped }: { execution: ExecutionResult | null; stopped?: boolean }) {
+function BodyView({ execution, stopped, requestName }: {
+  execution: ExecutionResult | null
+  stopped?: boolean
+  requestName?: string
+}) {
+  // A longer prefix pulled from the server's retained copy, once the user asks for it.
+  // Keyed to the execution it came from so a new Send never shows the previous body.
+  const [expanded, setExpanded] = useState<{ source: ExecutionResult; text: string; bytes: number } | null>(null)
+  const [expanding, setExpanding] = useState(false)
+  const [expandError, setExpandError] = useState<string | null>(null)
+
+  useEffect(() => { setExpanded(null); setExpandError(null) }, [execution])
+
+  const shown = expanded?.source === execution ? expanded : null
+
+  const expandTo = useCallback(async (bodyId: string, max: number, source: ExecutionResult) => {
+    setExpanding(true); setExpandError(null)
+    try {
+      const more = await api.responseBodyText(bodyId, max)
+      setExpanded({ source, text: more.text ?? '', bytes: more.inlineBytes })
+    } catch (e) {
+      setExpandError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setExpanding(false)
+    }
+  }, [])
+
   if (!execution) {
     return <Center h="100%"><Text size="sm" c="dimmed">Nothing to show.</Text></Center>
   }
@@ -530,39 +627,137 @@ function BodyView({ execution, stopped }: { execution: ExecutionResult | null; s
     return <Center h="100%"><Text size="sm" c="dimmed">Empty body.</Text></Center>
   }
 
-  // Image preview — server hands us a `data:image/...;base64,...` URL.
+  // Image preview — server hands us a `data:image/...;base64,...` URL. A truncated one
+  // renders as a broken image, which is exactly when the download offer matters most, so
+  // the notice rides above it; there is nothing useful to "show all" of.
   if (execution.contentType?.toLowerCase().startsWith('image/') && execution.responseBody.startsWith('data:')) {
     return (
-      <Center h="100%" p="md" style={{ overflow: 'auto' }}>
-        <img
-          src={execution.responseBody}
-          alt={execution.contentType}
-          style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 1px 4px rgba(0,0,0,0.12)' }}
-        />
-      </Center>
+      <Stack h="100%" gap={0} style={{ minHeight: 0 }}>
+        <TruncationNotice execution={execution} requestName={requestName} expandable={false} busy={false} error={null} onShowAll={() => {}} />
+        <Center h="100%" p="md" style={{ overflow: 'auto', flex: 1, minHeight: 0 }}>
+          <img
+            src={execution.responseBody}
+            alt={execution.contentType}
+            style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', boxShadow: '0 1px 4px rgba(0,0,0,0.12)' }}
+          />
+        </Center>
+      </Stack>
     )
   }
 
-  // Binary placeholder (server returns "[binary N bytes — …]") — render plainly.
+  // Binary placeholder (server returns "[binary N bytes — …]") — render plainly. Same
+  // reasoning as the image case: no preview to expand, but the bytes are still downloadable.
   if (execution.responseBody.startsWith('[binary ')) {
     return (
-      <Center h="100%">
-        <Stack align="center" gap="xs" maw={320} ta="center">
-          <Text size="sm" c="dimmed" ff="var(--mono)">{execution.responseBody}</Text>
-          <Text size="xs" c="dimmed">No text preview available for this content type.</Text>
-        </Stack>
-      </Center>
+      <Stack h="100%" gap={0} style={{ minHeight: 0 }}>
+        <TruncationNotice execution={execution} requestName={requestName} expandable={false} busy={false} error={null} onShowAll={() => {}} />
+        <Center h="100%" style={{ flex: 1, minHeight: 0 }}>
+          <Stack align="center" gap="xs" maw={320} ta="center">
+            <Text size="sm" c="dimmed" ff="var(--mono)">{execution.responseBody}</Text>
+            <Text size="xs" c="dimmed">No text preview available for this content type.</Text>
+          </Stack>
+        </Center>
+      </Stack>
     )
   }
 
   return (
-    <ScrollArea h="100%" type="auto" scrollbarSize={8}>
-      <CodeBlock
-        value={execution.responseBody}
-        contentType={execution.contentType}
-        readOnly
+    <Stack h="100%" gap={0} style={{ minHeight: 0 }}>
+      <TruncationNotice
+        execution={execution}
+        requestName={requestName}
+        shownBytes={shown?.bytes}
+        busy={expanding}
+        error={expandError}
+        onShowAll={(bodyId, max) => void expandTo(bodyId, max, execution)}
       />
-    </ScrollArea>
+      <ScrollArea h="100%" type="auto" scrollbarSize={8} style={{ flex: 1, minHeight: 0 }}>
+        <CodeBlock
+          value={shown?.text ?? execution.responseBody}
+          contentType={execution.contentType}
+          readOnly
+        />
+      </ScrollArea>
+    </Stack>
+  )
+}
+
+/**
+ * The strip above a body that didn't fit. It exists because "…truncated" on its own is a
+ * dead end: the bytes were gone and the only way to see them was to send the request again,
+ * which for anything that charges money or changes state is not an option.
+ *
+ * Now the server keeps a longer copy (up to the workspace's `response.maxRetainedBytes`),
+ * so there are two honest offers to make — render more of it here, or hand the whole thing
+ * to disk. When even the retained copy is a prefix, say so rather than implying the download
+ * is complete.
+ */
+function TruncationNotice({ execution, requestName, shownBytes, expandable = true, busy, error, onShowAll }: {
+  execution: ExecutionResult
+  requestName?: string
+  shownBytes?: number
+  /** False for previews with nothing to expand — an image, a binary placeholder. The
+   *  download still applies: those are exactly the bodies you want whole. */
+  expandable?: boolean
+  busy: boolean
+  error: string | null
+  onShowAll: (bodyId: string, max: number) => void
+}) {
+  const inline = execution.responseBodyInlineBytes ?? 0
+  const total = execution.responseBodyBytes
+  const retained = Math.max(execution.retainedBytes ?? inline, inline)
+  const shown = shownBytes ?? inline
+
+  // `inline === 0` covers WebSocket results and errors, where the byte count describes
+  // something other than a body we cut short.
+  if (inline === 0 || total <= shown) return null
+
+  const bodyId = execution.bodyId
+  const canShowMore = expandable && !!bodyId && retained > shown
+  const droppedBeyondRetained = total > retained
+
+  return (
+    <Alert
+      color="yellow"
+      variant="light"
+      radius={0}
+      p="xs"
+      icon={<IconAlertCircle size={16} />}
+      styles={{ body: { minWidth: 0 } }}
+      style={{ flexShrink: 0, borderBottom: '1px solid var(--mantine-color-default-border)' }}
+    >
+      <Group justify="space-between" wrap="nowrap" gap="sm">
+        <Text size="xs" style={{ minWidth: 0 }}>
+          Showing the first {formatBytes(shown)} of {formatBytes(total)}.
+          {droppedBeyondRetained
+            ? ` ${formatBytes(retained)} was kept — raise response.maxRetainedBytes in the workspace to keep more.`
+            : ''}
+          {error ? ` ${error}` : ''}
+        </Text>
+        <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+          {canShowMore && (
+            <Button
+              size="compact-xs"
+              variant="light"
+              loading={busy}
+              onClick={() => onShowAll(bodyId!, retained)}
+            >
+              Show all ({formatBytes(retained)})
+            </Button>
+          )}
+          {bodyId && (
+            <Button
+              size="compact-xs"
+              variant="subtle"
+              leftSection={<IconDownload size={12} />}
+              onClick={() => downloadRetainedBody(execution, requestName)}
+            >
+              Download {droppedBeyondRetained ? formatBytes(retained) : 'full response'}
+            </Button>
+          )}
+        </Group>
+      </Group>
+    </Alert>
   )
 }
 

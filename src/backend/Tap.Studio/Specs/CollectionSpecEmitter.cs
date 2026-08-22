@@ -14,12 +14,13 @@ public static class CollectionSpecEmitter
     {
         var fm = new YamlMappingNode();
         fm.Set("kind", "collection");
-        fm.SetIfNotEmpty("id", spec.Id);
+        fm.Set("id", SpecIds.Ensure(spec.Id));
         fm.Set("name", spec.Name);
         fm.SetIfNotEmpty("baseUrl", spec.BaseUrl);
         fm.SetIfNotEmpty("defaultAuth", spec.DefaultAuth);
         fm.SetStringMap("defaultHeaders", spec.DefaultHeaders);
         fm.SetTransport(spec.Transport);
+        fm.SetHistory(spec.History);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
         fm.SetStringList("tags", spec.Tags);
 

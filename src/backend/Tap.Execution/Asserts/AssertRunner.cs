@@ -23,8 +23,9 @@ public static class AssertRunner
         IReadOnlyDictionary<string, string> responseHeaders,
         string? bodyText,
         long totalBytes,
-        double durationMs)
-        => Run(rendered.Assertions, rendered.Protocol, status, responseHeaders, bodyText, totalBytes, durationMs);
+        double durationMs,
+        long bodyCap = HttpExecutionHelpers.BodyCap)
+        => Run(rendered.Assertions, rendered.Protocol, status, responseHeaders, bodyText, totalBytes, durationMs, bodyCap);
 
     /// <summary>
     /// Overload for callers that assembled the assertion list themselves. A test run evaluates
@@ -32,6 +33,9 @@ public static class AssertRunner
     /// one snapshot, one contiguous index space, so a result row always points at the row above
     /// it in the editor.
     /// </summary>
+    /// <param name="bodyCap">The inline cap the body was captured under — the workspace's
+    /// <c>response.maxBytes</c>. Only used to decide whether <paramref name="bodyText"/> is
+    /// the whole response; a body assertion refuses to match a prefix.</param>
     public static (IReadOnlyList<AssertResultDto> Results, AssertSummaryDto? Summary) Run(
         IReadOnlyList<ResolvedAssert> assertions,
         RequestProtocol protocol,
@@ -39,7 +43,8 @@ public static class AssertRunner
         IReadOnlyDictionary<string, string> responseHeaders,
         string? bodyText,
         long totalBytes,
-        double durationMs)
+        double durationMs,
+        long bodyCap = HttpExecutionHelpers.BodyCap)
     {
         if (assertions.Count == 0) return ([], null);
 
@@ -53,7 +58,7 @@ public static class AssertRunner
                 // TryDecodeBody appends a "…truncated" marker, but the assertion layer needs the
                 // fact, not the marker — matching a prefix would report a pass the full response
                 // might not have earned.
-                BodyTruncated = totalBytes > HttpExecutionHelpers.BodyCap,
+                BodyTruncated = totalBytes > bodyCap,
                 DurationMs = durationMs,
             });
 

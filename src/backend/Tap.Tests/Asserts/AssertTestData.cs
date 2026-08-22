@@ -24,11 +24,18 @@ internal static class AssertTestData
     public static RequestFile ParseRequest(string frontmatterFragment)
         => (RequestFile)FileParser.Parse(RequestPath, RequestSource(frontmatterFragment));
 
+    /// <summary>A fixed id for the round-trip fixtures. The emitter mints one when a spec has
+    /// none (see <c>SpecIdTests</c>), which is right for a real save and wrong here: two emits of
+    /// the same assertions would differ by a fresh GUID and the fixed-point check would be
+    /// measuring identity rather than the assertion grammar it exists to pin down.</summary>
+    public const string RequestId = "0192aaaa-bbbb-7ccc-8ddd-eeeeffff0000";
+
     /// <summary>Runs a set of assertions through the real emitter and returns the file source.</summary>
     public static string Emit(IReadOnlyList<AssertSpec> assertions)
         => RequestSpecEmitter.ToFileSource(new RequestSpecDto
         {
             Path = RequestPath,
+            Id = RequestId,
             Name = "Sample",
             Method = "GET",
             Url = "https://example.test/",

@@ -13,11 +13,46 @@
   opacity: 1;
 }
 
-/* Keep a placeholder so the tab width doesn't shift when the close icon appears. */
+/* Keep a placeholder so the tab width doesn't shift when the close icon appears. The
+   unsaved-changes dot is positioned against this slot, hence `relative`. */
 .tab .closeSlot {
+  position: relative;
   width: 16px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+/* Unsaved-changes marker — same orange dot the editor header shows. Also used bare in the
+   overflow menu, so the shape lives here and the tab-strip positioning below. */
+.dirtyDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--mantine-color-orange-6);
+  flex-shrink: 0;
+}
+
+/*
+ * Inside a tab the dot overlays the close button's slot and holds it until the pointer
+ * arrives, at which point the X takes over — the same trade VS Code makes, and it keeps the
+ * tab from growing a second affordance. Declared after the `.close` rules above so it wins
+ * the equal-specificity tie against `.tab[data-active='true'] .close`.
+ */
+.tab .dirtyDot {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  pointer-events: none;
+  transition: opacity 80ms ease;
+}
+
+.tab[data-dirty='true'] .close,
+.tab[data-dirty='true']:hover .dirtyDot {
+  opacity: 0;
+}
+
+.tab[data-dirty='true']:hover .close {
+  opacity: 1;
 }

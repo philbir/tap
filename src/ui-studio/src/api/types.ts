@@ -120,9 +120,31 @@ export interface HttpHeaderSpec {
   value: string
 }
 
+/** What every spec PUT answers with — the stable id the file was stored under, freshly minted
+ *  when the client sent none. A just-created request needs it before the watcher-driven reload
+ *  lands, or a Send fired in between goes unrecorded by request history. */
+export interface SavedSpec {
+  id: string
+}
+
 export interface RequestTransportSettings {
   ignoreTlsErrors?: boolean
   timeoutMs?: number
+}
+
+/**
+ * The `history:` block, at whichever scope declared it. Every field is optional and means
+ * "inherit" — the editors only send a key the user actually set, so a collection's policy keeps
+ * reaching the requests under it instead of being copied into each one on the next save.
+ */
+export interface HistoryOptions {
+  enabled?: boolean | null
+  maxEntries?: number | null
+  /** Store the entry unredacted and encrypt it at rest. The two always travel together. */
+  encrypt?: boolean | null
+  maxBodyBytes?: number | null
+  /** How long a deleted request's history survives. `workspace.tap` only. */
+  orphanRetentionDays?: number | null
 }
 
 export interface TlsCertificate {
@@ -442,6 +464,12 @@ export interface RequestDetail extends RequestSummary {
   protocol: RequestProtocol
   transport: RequestTransportSettings | null
   assertions: AssertSpec[]
+  /** The request's own `history:` keys, or null when it declares none. */
+  history: HistoryOptions | null
+  /** The same block after the workspace → collection → request merge — what recording this
+   *  request will actually do. Shown behind the unset fields so "why is this being recorded?"
+   *  is answerable without opening two other files. */
+  effectiveHistory: HistoryOptions | null
 }
 
 export interface RequestSpec {
@@ -461,6 +489,8 @@ export interface RequestSpec {
   /** Omitted when `http` (default). `websocket` triggers ws scheme normalization + ws transport. */
   protocol?: RequestProtocol
   transport?: RequestTransportSettings
+  /** Omitted when the request declares nothing, so saving doesn't pin what it inherits. */
+  history?: HistoryOptions
   /** Omitted when empty so dirty-tracking stays quiet on requests that declare none. */
   assertions?: AssertSpec[]
 }
@@ -515,6 +545,20 @@ export interface WorkspaceSpec {
   /** Workspace-level tag dictionary. */
   tags?: string[]
   body?: string
+  /** Response caps. Omit (or leave both members null) to keep Tap's defaults. */
+  response?: ResponseLimits
+  /** Workspace-wide history defaults. Omit to leave `workspace.tap` silent. */
+  history?: HistoryOptions
+}
+
+/** How much of a response body Tap delivers inline, and how much it holds back so the
+ *  panel can still offer "Show all" and a complete download. Byte counts; null on either
+ *  member means "leave it at the default" and nothing is written to `workspace.tap`. */
+export interface ResponseLimits {
+  /** Bytes shown in the body pane and evaluated by assertions. Default 2 MiB. */
+  maxBytes?: number | null
+  /** Bytes retained for "Show all" / download. Default 64 MiB. */
+  maxRetainedBytes?: number | null
 }
 
 export interface AuthSummary {
@@ -942,6 +986,10 @@ export interface CollectionDetail {
   defaultStage: string | null
   /** The collection's `agent:` option — whether agent surfaces (MCP tools, `call`) may use it. */
   agentEnabled: boolean
+  /** The collection's own `history:` keys, or null when it declares none. */
+  history: HistoryOptions | null
+  /** The workspace-level defaults this collection inherits, for the "inherited" hints. */
+  inheritedHistory: HistoryOptions | null
 }
 
 export interface CollectionSpec {
@@ -960,6 +1008,8 @@ export interface CollectionSpec {
   defaultStage?: string
   /** Only the opt-out travels: `false` emits `agent: false`, undefined leaves the file silent (enabled). */
   agentEnabled?: boolean
+  /** Omitted when the collection declares nothing. */
+  history?: HistoryOptions
   body?: string
 }
 
@@ -1234,6 +1284,10 @@ export interface WorkspaceDetail {
   tags: string[]
   body: string
   source: string
+  /** Response caps as they stand in `workspace.tap`, or null when it leaves them alone. */
+  response: ResponseLimits | null
+  /** Workspace-wide history defaults, or null when the manifest is silent (which means off). */
+  history: HistoryOptions | null
 }
 
 export interface RenderedRequest {
@@ -1266,7 +1320,19 @@ export interface ExecutionResult {
   responseHeaders: Record<string, string>
   responseBody: string | null
   contentType: string | null
+  /** What the upstream sent, whether or not we kept all of it. */
   responseBodyBytes: number
+  /** How many bytes of the body `responseBody` actually carries. Below `responseBodyBytes`
+   *  when the workspace's `response.maxBytes` cut it short. Zero for protocols with no HTTP
+   *  body (WebSocket) — the panel reads the pair together, so zero reads as "nothing to
+   *  expand" rather than "everything was truncated". */
+  responseBodyInlineBytes?: number
+  /** Handle for the copy the server held back, or absent when the whole body rode inline.
+   *  Backs "Show all" and the full download. */
+  bodyId?: string
+  /** How much of the body that retained copy holds — the ceiling on what "Show all" can
+   *  return, and on what a download will contain. */
+  retainedBytes?: number
   durationMs: number
   variablesUsed: VariableTrace[]
   stage: string | null
@@ -1393,4 +1459,91 @@ export interface FileUploadResponse {
   name: string
   size: number
   contentType: string | null
+}
+
+// ---------------------------------------------------------------------------------------
+// Request history — `.tap-history/`, one folder per request id, one file per exchange.
+// ---------------------------------------------------------------------------------------
+
+/** A timeline / list row. Carries everything a row needs and no bodies. */
+export interface HistorySummary {
+  id: string
+  requestId: string
+  at: string
+  requestPath: string | null
+  requestName: string | null
+  collection: string | null
+  env: string | null
+  stage: string | null
+  method: string
+  url: string
+  status: number | null
+  statusText: string | null
+  durationMs: number
+  bodyBytes: number
+  ok: boolean
+  assertSummary: AssertSummary | null
+  error: string | null
+  encrypted: boolean
+  /** Encrypted, and this machine has no key for it. The row still renders — "there are entries
+   *  here you can't open" beats an empty list. */
+  locked: boolean
+  /** The request this belongs to no longer exists. Not an error: it re-links by itself if a
+   *  file with that id comes back. */
+  orphaned: boolean
+}
+
+/** One recorded exchange in full. */
+export interface HistoryEntry {
+  v: number
+  id: string
+  at: string
+  requestId: string
+  requestPath: string | null
+  requestName: string | null
+  collection: string | null
+  env: string | null
+  stage: string | null
+  source: string
+  /** False means the file held real credentials and was encrypted at rest. */
+  redacted: boolean
+  request: HistoryEntryRequest
+  response: HistoryEntryResponse | null
+  durationMs: number
+  variablesUsed: HistoryVariable[]
+  assertions: AssertResult[]
+  assertSummary: AssertSummary | null
+  error: string | null
+}
+
+export interface HistoryEntryRequest {
+  method: string
+  url: string
+  headers: Record<string, string>
+  body: string | null
+  protocol: string
+}
+
+export interface HistoryEntryResponse {
+  status: number
+  statusText: string | null
+  headers: Record<string, string>
+  contentType: string | null
+  body: string | null
+  bodyBytes: number
+  /** The stored body is a prefix — the response outgrew `history.maxBodyBytes`. */
+  bodyTruncated: boolean
+}
+
+/** Which provider/name pairs a render touched. Never carries a value. */
+export interface HistoryVariable {
+  provider: string
+  name: string
+  secret: boolean
+}
+
+/** Where history lives and whether encrypted entries are readable on this machine. */
+export interface HistoryStatus {
+  directory: string
+  hasEncryptionKey: boolean
 }

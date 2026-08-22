@@ -1,7 +1,9 @@
 using System.Diagnostics;
 using System.Text;
 using Tap.Studio.Contracts;
+using Tap.Studio.History;
 using Tap.Workspace.Model;
+using Tap.Workspace.Rendering;
 using Tap.Execution.Asserts;
 using Tap.Execution.Http;
 
@@ -20,11 +22,17 @@ public static class ExecuteEndpoint
 {
     public static void Map(IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/execute", async (ExecuteRequestDto body, WorkspaceService svc, CancellationToken ct) =>
+        app.MapPost("/api/execute", async (
+            ExecuteRequestDto body, WorkspaceService svc, ResponseBodyStore bodies,
+            HistoryRecorder history, CancellationToken ct) =>
         {
+            // Hoisted out of the try so the network-failure path below can still record what it
+            // tried to send. A refused connection or a timeout is often the exchange someone most
+            // wants to look at afterwards, and it is the one that leaves no response at all.
+            ResolvedRequest? rendered = null;
             try
             {
-                var rendered = await svc.RenderAsync(
+                rendered = await svc.RenderAsync(
                     body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec, draftSource: body.Source).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
                 rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
@@ -71,6 +79,16 @@ public static class ExecuteEndpoint
                     var (wsAsserts, wsAssertSummary) = AssertRunner.Run(
                         rendered, captureStatus, capturedHeaders, summary.ToString(), bytes, swWs.Elapsed.TotalMilliseconds);
 
+                    // A socket's "body" is its frame transcript — the same text the assertions
+                    // just read, which is the only rendering of a WebSocket exchange that means
+                    // anything after the fact.
+                    history.TryRecord(
+                        svc.Current, rendered,
+                        new HistoryResponse(
+                            captureStatus, captureStatusText, capturedHeaders, "text/plain",
+                            summary.ToString(), bytes, BodyTruncated: false),
+                        swWs.Elapsed.TotalMilliseconds, wsAsserts, wsAssertSummary, error: null);
+
                     return Results.Ok(new ExecutionResultDto(
                         Status: captureStatus,
                         StatusText: captureStatusText,
@@ -100,30 +118,32 @@ public static class ExecuteEndpoint
                 var sw = Stopwatch.StartNew();
                 using var resp = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
                     httpClient, req, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
-                var stream = await resp.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+                using var stream = await resp.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
 
-                using var ms = new MemoryStream();
-                var buf = new byte[64 * 1024];
-                long total = 0;
-                int read;
-                while ((read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), timeout.Token).ConfigureAwait(false)) > 0)
-                {
-                    total += read;
-                    if (ms.Length < HttpExecutionHelpers.BodyCap)
-                    {
-                        var slack = HttpExecutionHelpers.BodyCap - (int)ms.Length;
-                        ms.Write(buf, 0, Math.Min(read, slack));
-                    }
-                }
+                var limits = svc.Current.ResponseLimits;
+                var contentType = resp.Content.Headers.ContentType?.ToString();
+                await using var spool = bodies.CreateSpool(limits.EffectiveMaxBytes);
+                var captured = await ResponseCapture.ReadAsync(
+                    stream, limits.EffectiveMaxBytes, spool, limits.EffectiveMaxRetainedBytes, timeout.Token)
+                    .ConfigureAwait(false);
+                await spool.FlushAsync(timeout.Token).ConfigureAwait(false);
                 sw.Stop();
 
-                var responseBytes = ms.ToArray();
-                var contentType = resp.Content.Headers.ContentType?.ToString();
-                var bodyText = HttpExecutionHelpers.TryDecodeBody(responseBytes, contentType, total);
+                var total = captured.TotalBytes;
+                var retained = bodies.Publish(spool, contentType, total);
+                var bodyText = HttpExecutionHelpers.TryDecodeBody(captured.Inline, contentType, total);
                 var responseHeaders = HttpExecutionHelpers.FlattenHeaders(resp);
 
                 var (assertions, assertSummary) = AssertRunner.Run(
-                    rendered, (int)resp.StatusCode, responseHeaders, bodyText, total, sw.Elapsed.TotalMilliseconds);
+                    rendered, (int)resp.StatusCode, responseHeaders, bodyText, total, sw.Elapsed.TotalMilliseconds,
+                    limits.EffectiveMaxBytes);
+
+                history.TryRecord(
+                    svc.Current, rendered,
+                    new HistoryResponse(
+                        (int)resp.StatusCode, resp.ReasonPhrase, responseHeaders, contentType,
+                        bodyText, total, BodyTruncated: total > captured.Inline.LongLength),
+                    sw.Elapsed.TotalMilliseconds, assertions, assertSummary, error: null);
 
                 return Results.Ok(new ExecutionResultDto(
                     Status: (int)resp.StatusCode,
@@ -144,7 +164,10 @@ public static class ExecuteEndpoint
                     Error: null,
                     Protocol: rendered.Protocol.ToWire(),
                     Assertions: assertions,
-                    AssertSummary: assertSummary));
+                    AssertSummary: assertSummary,
+                    ResponseBodyInlineBytes: captured.Inline.LongLength,
+                    BodyId: retained?.Id,
+                    RetainedBytes: retained?.RetainedBytes ?? captured.Inline.LongLength));
             }
             catch (WorkspaceParseException ex)
             {
@@ -154,6 +177,13 @@ public static class ExecuteEndpoint
             {
                 // Network failure / timeout — surface as a non-200 result so the UI can render it
                 // in the same response panel rather than as an error toast.
+                var failure = HttpTransport.DescribeException(ex);
+                if (rendered is not null)
+                {
+                    var (notRun, notRunSummary) = AssertRunner.NotRun(
+                        rendered, "The request did not complete, so this assertion was not evaluated.");
+                    history.TryRecord(svc.Current, rendered, response: null, durationMs: 0, notRun, notRunSummary, failure);
+                }
                 return Results.Ok(new ExecutionResultDto(
                     Status: 0,
                     StatusText: ex.GetType().Name,
@@ -168,7 +198,7 @@ public static class ExecuteEndpoint
                     DurationMs: 0,
                     VariablesUsed: [],
                     Stage: null,
-                    Error: HttpTransport.DescribeException(ex),
+                    Error: failure,
                     Protocol: "http",
                     Assertions: [],
                     AssertSummary: null));

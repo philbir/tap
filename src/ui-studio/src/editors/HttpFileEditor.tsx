@@ -12,6 +12,8 @@ import { CollectionLinkChip } from './CollectionLinkChip'
 import { EditorShell } from './EditorShell'
 import { ResponsePanel } from './ResponsePanel'
 import { SourceCodeEditor } from './SourceCodeEditor'
+import { restoreDraft, usePublishDraft } from './useDraft'
+import { useTabView } from './useTabView'
 import { useExecution } from './useExecution'
 
 interface Props {
@@ -58,17 +60,18 @@ export function HttpFileEditor({ path }: Props) {
   const [fileError, setFileError] = useState<WorkspaceErrorDto | null>(null)
   const [parsed, setParsed] = useState<HttpRequestSummary[] | null>(null)
   const [warnings, setWarnings] = useState<WorkspaceErrorDto[]>([])
-  /** Which request the response pane belongs to — a file holds several. */
-  const [sentPath, setSentPath] = useState<string | null>(null)
   const [reveal, setReveal] = useState<{ line: number; nonce: number } | null>(null)
   const revealNonce = useRef(0)
   /** Stage override for this session; `null` means "the collection's default". */
-  const [stage, setStage] = useState<string | null>(null)
+  const [stage, setStage] = useTabView<string | null>(path, 'stage', null)
 
-  const { rendered, execution, error: sendError, sending, stopped, send, stop, clear } = useExecution()
+  // Keyed by tab path: the response (and a stream still arriving) survives a trip to another
+  // tab. `sentPath` names which of the file's requests produced what is on screen.
+  const { rendered, execution, error: sendError, sending, stopped, sentPath, send, stop, clear } = useExecution(path)
 
   const fileName = path.split('/').pop() ?? path
   const dirty = source !== null && draft !== source
+  usePublishDraft(path, draft, dirty, source !== null)
 
   // The owning collection is purely positional — every request lives under
   // `collections/<slug>/…`, so a .http file's collection is whatever sits at the same slug.
@@ -80,7 +83,16 @@ export function HttpFileEditor({ path }: Props) {
     return collections.find((c) => c.slug === parts[1]) ?? null
   }, [collections, path])
 
-  useEffect(() => { setStage(null) }, [linkedCollection?.slug])
+  // Drop the override only on an actual move between collections. The slug resolves from
+  // null on the first render pass, and treating that as a move would undo the stage the tab
+  // is being restored with.
+  const lastSlugRef = useRef<string | null | undefined>(undefined)
+  useEffect(() => {
+    const slug = linkedCollection?.slug ?? null
+    const previous = lastSlugRef.current
+    lastSlugRef.current = slug
+    if (previous !== undefined && previous !== slug) setStage(null)
+  }, [linkedCollection?.slug, setStage])
   const effectiveStage = stage ?? linkedCollection?.defaultStage ?? null
 
   // Scoped to the file, not to one request inside it: the server attributes a collection by
@@ -97,13 +109,12 @@ export function HttpFileEditor({ path }: Props) {
     let cancelled = false
     setSource(null); setLoadError(null); setFileError(null); setParsed(null); setWarnings([])
     api.source(path)
-      .then((s) => { if (!cancelled) { setSource(s); setDraft(s) } })
+      // The draft survives a tab switch and the re-fetch a `generation` bump forces —
+      // `source` is re-baselined to disk either way, so `dirty` stays honest.
+      .then((s) => { if (!cancelled) { setSource(s); setDraft(restoreDraft(path, s)) } })
       .catch((e: unknown) => { if (!cancelled) setLoadError(e instanceof Error ? e.message : String(e)) })
     return () => { cancelled = true }
   }, [path, generation])
-
-  // Drop any response when the editor switches files — it belongs to the old one.
-  useEffect(() => { clear(); setSentPath(null) }, [path, clear])
 
   // Re-parse the draft server-side as it changes. Debounced while typing; immediate for text
   // that just arrived from disk, so opening a file doesn't blink through an empty list.
@@ -165,7 +176,8 @@ export function HttpFileEditor({ path }: Props) {
   }, [path, draft])
 
   function sendRequest(request: HttpRequestSummary) {
-    setSentPath(request.path)
+    // `send` records `request.path` as the execution's `sentPath` — the file holds several
+    // requests and the panel has to name the one it is showing.
     send({
       path: request.path,
       env: activeEnv,
@@ -203,6 +215,7 @@ export function HttpFileEditor({ path }: Props) {
       bottomPane={
         (execution || rendered || sendError || sending) ? (
           <ResponsePanel
+            tabPath={path}
             rendered={rendered}
             execution={execution}
             error={sendError}
@@ -211,7 +224,7 @@ export function HttpFileEditor({ path }: Props) {
             onStop={sending ? stop : undefined}
             requestPath={sentPath ?? path}
             requestName={sentRequest?.name ?? fileName}
-            onClose={() => { clear(); setSentPath(null) }}
+            onClose={clear}
           />
         ) : undefined
       }

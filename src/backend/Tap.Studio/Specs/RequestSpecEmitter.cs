@@ -30,7 +30,7 @@ public static class RequestSpecEmitter
     {
         var fm = new YamlMappingNode();
         fm.Set("kind", "request");
-        fm.SetIfNotEmpty("id", spec.Id);
+        fm.Set("id", SpecIds.Ensure(spec.Id));
         fm.Set("name", spec.Name);
         fm.SetIfNotEmpty("auth", spec.Auth);
         // Default protocol (http) is the absence of the field — keeps existing files
@@ -40,6 +40,7 @@ public static class RequestSpecEmitter
             fm.Set("protocol", spec.Protocol.ToLowerInvariant());
         }
         fm.SetTransport(spec.Transport);
+        fm.SetHistory(spec.History);
         fm.SetVarMap("vars", spec.Vars, spec.Secrets);
         // Mapped through the model so a client can't save an assertion the parser would
         // reject — the PUT fails with E_ASSERT_INVALID instead of writing an unloadable file.

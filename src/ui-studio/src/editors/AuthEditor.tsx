@@ -21,6 +21,8 @@ import { EditorShell, TabDot } from './EditorShell'
 import { KvTable } from './KvTable'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
+import { restoreDraft, usePublishDraft } from './useDraft'
+import { useTabView } from './useTabView'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
 import { COLLECTION_FILE } from '../shell/tapFiles'
@@ -64,7 +66,7 @@ export function AuthEditor({ path }: Props) {
 
   const [spec, setSpec] = useState<AuthSpec | null>(null)
   const [savedSpec, setSavedSpec] = useState<AuthSpec | null>(null)
-  const [tab, setTab] = useState<string | null>('config')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'config')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
 
@@ -75,13 +77,16 @@ export function AuthEditor({ path }: Props) {
       if (cancelled) return
       setDetail(d)
       const initial = specFromDetail(d, path)
-      setSpec(initial)
+      // Keeps unsaved edits across a tab switch and across the re-fetch a `generation`
+      // bump forces; `savedSpec` stays whatever is actually on disk.
+      setSpec(restoreDraft(path, initial))
       setSavedSpec(initial)
     }).catch((e: Error) => !cancelled && setError(e.message))
     return () => { cancelled = true }
   }, [path, generation])
 
   const dirty = useMemo(() => JSON.stringify(spec) !== JSON.stringify(savedSpec), [spec, savedSpec])
+  usePublishDraft(path, spec, dirty)
 
   function update<K extends keyof AuthSpec>(key: K, value: AuthSpec[K]) {
     setSpec((cur) => cur ? { ...cur, [key]: value } : cur)

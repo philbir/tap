@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError } from '../api/client'
 import { useTapStore } from '../store'
+import { restoreDraft, usePublishDraft } from './useDraft'
 
 /**
  * Shared spec-editor lifecycle. Every Mantine editor (`RequestEditor`, `AuthEditor`,
@@ -10,7 +11,10 @@ import { useTapStore } from '../store'
  * that loop so editor code can focus on kind-specific fields and layout.
  *
  * Keying the effect on `key + generation` mirrors the previous behavior: the workspace
- * file-system watcher bumps `generation`, which forces a re-fetch.
+ * file-system watcher bumps `generation`, which forces a re-fetch. Unsaved edits survive
+ * both that re-fetch and a tab switch: `key` doubles as the draft key (it is the tab path
+ * for every editor built on this hook), so the fresh fetch only ever re-baselines
+ * `savedSpec` while `spec` keeps the draft. See `useDraft`.
  *
  * The hook does NOT compare deeply — `JSON.stringify` is the same equality check the editors
  * already used, and it's good enough for the typed spec shapes we hand in. Callers that need
@@ -40,7 +44,9 @@ export interface UseSpecEditorArgs<TDetail, TSpec> {
   key: string | null
   fetchDetail: (key: string) => Promise<TDetail>
   specFromDetail: (detail: TDetail) => TSpec
-  saveSpec: (spec: TSpec) => Promise<void>
+  /** Persists the spec. The return value is ignored here — the spec PUTs answer with the id
+   *  the file was stored under, which the kinds built on this hook don't need to react to. */
+  saveSpec: (spec: TSpec) => Promise<unknown>
 }
 
 export function useSpecEditor<TDetail, TSpec>({
@@ -69,7 +75,7 @@ export function useSpecEditor<TDetail, TSpec>({
       if (cancelled) return
       setDetail(d)
       const initial = specFromDetail(d)
-      setSpec(initial)
+      setSpec(restoreDraft(key, initial))
       setSavedSpec(initial)
     }).catch((e: Error) => { if (!cancelled) setError(e.message) })
     return () => { cancelled = true }
@@ -82,6 +88,8 @@ export function useSpecEditor<TDetail, TSpec>({
     () => JSON.stringify(spec) !== JSON.stringify(savedSpec),
     [spec, savedSpec],
   )
+
+  usePublishDraft(key ?? '', spec, dirty)
 
   function update<K extends keyof TSpec>(k: K, value: TSpec[K]) {
     setSpec((cur) => (cur ? { ...cur, [k]: value } : cur))

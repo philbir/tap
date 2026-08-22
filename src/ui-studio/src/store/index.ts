@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { api, subscribeWorkspaceChanges } from '../api/client'
@@ -6,6 +7,22 @@ import type {
   WorkspaceFileKind, WorkspaceInfo,
 } from '../api/types'
 import { toCanonicalPath } from '../shell/tapFiles'
+
+/** Per-tab state that outlives the editor's mount. See `TapStore.tabState`. */
+export interface TabState {
+  /**
+   * The editor's unsaved value, in whatever shape that editor works in. Present exactly
+   * while the tab has unsaved changes — saving or discarding drops it — so it doubles as
+   * the dirty flag the tab strip marks up.
+   */
+  draft?: unknown
+  /**
+   * View state by slot name: which sub-tab is open, the stage override, and so on. Losing
+   * these on a tab switch is small but constant friction — you come back to the request you
+   * were reading and it has snapped from Body back to Params.
+   */
+  view?: Record<string, unknown>
+}
 
 /** One open file in the tab bar. */
 export interface OpenTab {
@@ -61,6 +78,23 @@ export interface TapStore {
    *  doesn't smuggle one workspace's env into another. */
   activeEnvByRoot: Record<string, string | null>
 
+  // -- UI state (in-memory) --------------------------------------------------
+  /**
+   * Everything about a tab that has to outlive its editor, keyed by tab path.
+   *
+   * Only the active tab's editor is mounted, so without this a tab switch unmounted the form
+   * and took its in-progress state with it; the same re-seed happens on every `generation`
+   * bump (the file watcher, or saving any *other* file). Editors hand this over on the way
+   * out and pick it back up on the way in.
+   *
+   * Deliberately NOT persisted: an auth profile's draft can hold a client secret, and the
+   * persisted slice goes to localStorage. Tab state survives a tab switch, not a page
+   * reload. Responses are the third member of this family and live in their own registry
+   * (`editors/useExecution`) — a streaming body writes far too often to belong in a store
+   * every component subscribes to.
+   */
+  tabState: Record<string, TabState>
+
   // -- Actions ---------------------------------------------------------------
   reload: () => Promise<void>
   setActiveEnv: (path: string | null) => void
@@ -73,6 +107,12 @@ export interface TapStore {
    *  in the tab strip and active state. Used by the git-diff editor to switch
    *  Working ↔ Staged without leaving an orphan tab behind. */
   renameTab: (oldPath: string, newPath: string, newLabel: string) => void
+  /** Store (or replace) a tab's unsaved editor state. */
+  setDraft: (path: string, value: unknown) => void
+  /** Drop a tab's unsaved editor state — it was saved, or discarded. */
+  clearDraft: (path: string) => void
+  /** Remember one slot of a tab's view state (an open sub-tab, a stage override, …). */
+  setTabView: (path: string, slot: string, value: unknown) => void
   activateWorkspace: (path: string) => Promise<void>
   addAndActivateWorkspace: (path: string) => Promise<void>
 }
@@ -83,6 +123,13 @@ interface PersistedSlice {
   tabs: OpenTab[]
   activeTab: string | null
   activeEnvByRoot: Record<string, string | null>
+}
+
+/** A copy of `tabState` without the entry for one tab path. */
+function withoutTab(tabState: Record<string, TabState>, path: string): Record<string, TabState> {
+  const next = { ...tabState }
+  delete next[path]
+  return next
 }
 
 export const useTapStore = create<TapStore>()(
@@ -102,6 +149,7 @@ export const useTapStore = create<TapStore>()(
       tabs: [],
       activeTab: null,
       activeEnvByRoot: {},
+      tabState: {},
 
       reload: async () => {
         try {
@@ -144,6 +192,10 @@ export const useTapStore = create<TapStore>()(
               const path = heal(tab.path)
               return path === tab.path ? tab : { ...tab, path }
             })
+            // Tab state is keyed by tab path, so it follows its tab through the same rename.
+            const healedTabState = Object.fromEntries(
+              Object.entries(state.tabState).map(([path, st]) => [heal(path), st]),
+            )
             return {
               info: w,
               tree: t,
@@ -157,6 +209,7 @@ export const useTapStore = create<TapStore>()(
               loadError: null,
               tabs: healedTabs,
               activeTab: heal(state.activeTab),
+              tabState: healedTabState,
               activeEnvByRoot: { ...state.activeEnvByRoot, [w.root]: nextActiveEnv },
             }
           })
@@ -183,16 +236,21 @@ export const useTapStore = create<TapStore>()(
         const nextActive = state.activeTab !== path
           ? state.activeTab
           : (next.length === 0 ? null : next[Math.min(idx, next.length - 1)].path)
-        return { tabs: next, activeTab: nextActive }
+        return { tabs: next, activeTab: nextActive, tabState: withoutTab(state.tabState, path) }
       }),
 
       closeOtherTabs: (path) => set((state) => {
         const keep = state.tabs.find((t) => t.path === path)
         if (!keep) return {}
-        return { tabs: [keep], activeTab: path }
+        const kept = state.tabState[path]
+        return {
+          tabs: [keep],
+          activeTab: path,
+          tabState: kept === undefined ? {} : { [path]: kept },
+        }
       }),
 
-      closeAllTabs: () => set({ tabs: [], activeTab: null }),
+      closeAllTabs: () => set({ tabs: [], activeTab: null, tabState: {} }),
 
       selectTab: (path) => set({ activeTab: path }),
 
@@ -213,14 +271,43 @@ export const useTapStore = create<TapStore>()(
               ? { ...t, path: newPath, label: newLabel }
               : t)
         const activeTab = state.activeTab === oldPath ? newPath : state.activeTab
-        return { tabs, activeTab }
+        // The editor remounts under the new path (App keys it on the tab path), so unsaved
+        // work has to move with the tab or it would be orphaned under the old key.
+        const carried = state.tabState[oldPath]
+        const tabState = carried === undefined
+          ? state.tabState
+          : { ...withoutTab(state.tabState, oldPath), [newPath]: carried }
+        return { tabs, activeTab, tabState }
+      }),
+
+      setDraft: (path, value) => set((state) => {
+        const current = state.tabState[path]
+        if (current?.draft === value) return {}
+        return { tabState: { ...state.tabState, [path]: { ...current, draft: value } } }
+      }),
+
+      clearDraft: (path) => set((state) => {
+        const current = state.tabState[path]
+        if (current?.draft === undefined) return {}
+        return { tabState: { ...state.tabState, [path]: { ...current, draft: undefined } } }
+      }),
+
+      setTabView: (path, slot, value) => set((state) => {
+        const current = state.tabState[path]
+        if (current?.view?.[slot] === value) return {}
+        return {
+          tabState: {
+            ...state.tabState,
+            [path]: { ...current, view: { ...current?.view, [slot]: value } },
+          },
+        }
       }),
 
       activateWorkspace: async (path) => {
         await api.activateWorkspace(path)
         // The open tabs reference paths in the OLD workspace; clearing avoids 404 loops on
         // refetch. activeEnvByRoot is preserved so jumping back keeps your selection.
-        set({ tabs: [], activeTab: null })
+        set({ tabs: [], activeTab: null, tabState: {} })
         await get().reload()
       },
 
@@ -254,6 +341,20 @@ export const useActiveEnv = (): string | null => useTapStore((s) => {
   const root = s.info?.root
   return root ? (s.activeEnvByRoot[root] ?? null) : null
 })
+
+/**
+ * Tab paths that currently hold unsaved edits. Selected as a stable joined string rather
+ * than `tabState` itself: a draft is rewritten on every keystroke, and subscribers (the tab
+ * strip) only care when the *set* of dirty tabs changes.
+ */
+export const useDirtyTabPaths = (): ReadonlySet<string> => {
+  const joined = useTapStore((s) => Object.entries(s.tabState)
+    .filter(([, st]) => st.draft !== undefined)
+    .map(([path]) => path)
+    .sort()
+    .join('\n'))
+  return useMemo(() => new Set(joined ? joined.split('\n') : []), [joined])
+}
 
 /** Has a usable workspace been loaded (info + at least one known workspace marked active)? */
 export const useHasActiveWorkspace = (): boolean => useTapStore(

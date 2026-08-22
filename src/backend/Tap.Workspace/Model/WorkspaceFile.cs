@@ -47,6 +47,16 @@ public sealed record WorkspaceManifestFile : WorkspaceFile
 
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
         new Dictionary<string, VarSpec>();
+
+    /// <summary>Caps on how much of a response body is delivered inline and how much is
+    /// retained for a later "show all" / download. Workspace-wide — a response limit is a
+    /// property of the machine doing the reading, not of one request.</summary>
+    public ResponseLimits Response { get; init; } = new();
+
+    /// <summary>Workspace-wide default for recording exchanges to <c>.tap-history/</c>.
+    /// Weakest tier — a collection or a request overrides it per key. This is also the only
+    /// scope that can set <see cref="HistoryOptions.OrphanRetentionDays"/>.</summary>
+    public HistoryOptions History { get; init; } = new();
 }
 
 public sealed record AuthFile : WorkspaceFile
@@ -137,6 +147,10 @@ public sealed record CollectionFile : WorkspaceFile
     /// <summary>Whether agents may use this collection — see <see cref="CollectionAgentOptions"/>.</summary>
     public CollectionAgentOptions Agent { get; init; } = new();
 
+    /// <summary>Recording policy inherited by every request in this collection. Overrides the
+    /// workspace manifest per key; a request overrides it in turn.</summary>
+    public HistoryOptions History { get; init; } = new();
+
     public CollectionStage? FindStage(string? name)
         => string.IsNullOrEmpty(name) ? null : Stages.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 }
@@ -202,6 +216,10 @@ public sealed record RequestFile : WorkspaceFile
 
     /// <summary>Request-specific transport overrides. Unset fields inherit from the collection.</summary>
     public RequestTransportSettings Transport { get; init; } = new();
+
+    /// <summary>Recording policy for this request alone. Strongest tier — unset fields inherit
+    /// from the collection, then the workspace manifest.</summary>
+    public HistoryOptions History { get; init; } = new();
 
     /// <summary>The single fenced <c>http</c> block carried by the body, verbatim (interpolations un-expanded).</summary>
     public string HttpBlock { get; init; } = string.Empty;

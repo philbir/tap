@@ -23,6 +23,7 @@ import { KvTable, type KvRow } from './KvTable'
 import { SourceTab } from './SourceTab'
 import { TestRunPanel } from './TestRunPanel'
 import { matchRefOptionGrouped, requestSelectGroups, resolveRef } from './testingOptions'
+import { useTabView } from './useTabView'
 import { useSpecEditor } from './useSpecEditor'
 import { useTestRun } from './useTestRun'
 import { flatVarsToRows, rowsToFlatVars } from './varRows'
@@ -47,7 +48,7 @@ export function FlowEditor({ path }: Props) {
   const activeEnv = useActiveEnv()
   const tagSuggestions = useTagDictionary()
 
-  const [tab, setTab] = useState<string | null>('steps')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'steps')
   const [requests, setRequests] = useState<RequestSummary[]>([])
   const [varsOpened, varsCtl] = useDisclosure(false)
 

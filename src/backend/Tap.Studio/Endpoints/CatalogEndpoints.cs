@@ -46,7 +46,11 @@ public static class CatalogEndpoints
                 Source: svc.ReadSource(a.RelativePath)));
         });
 
-        auths.MapPut("/spec", (AuthSpecDto spec, WorkspaceService svc) => SaveSpec(svc, spec.Path, AuthSpecEmitter.ToFileSource(spec)));
+        auths.MapPut("/spec", (AuthSpecDto spec, WorkspaceService svc) =>
+        {
+            var id = SpecIds.Ensure(spec.Id);
+            return SaveSpec(svc, spec.Path, AuthSpecEmitter.ToFileSource(spec with { Id = id }), id);
+        });
 
         // ----- Environments -----
         var envs = app.MapGroup("/api/environments");
@@ -71,7 +75,11 @@ public static class CatalogEndpoints
                 StrictVariables: e.StrictVariables));
         });
 
-        envs.MapPut("/spec", (EnvSpecDto spec, WorkspaceService svc) => SaveSpec(svc, spec.Path, EnvSpecEmitter.ToFileSource(spec)));
+        envs.MapPut("/spec", (EnvSpecDto spec, WorkspaceService svc) =>
+        {
+            var id = SpecIds.Ensure(spec.Id);
+            return SaveSpec(svc, spec.Path, EnvSpecEmitter.ToFileSource(spec with { Id = id }), id);
+        });
 
         // ----- Workspace manifest -----
         app.MapGet("/api/workspace/manifest", (WorkspaceService svc, IEnumerable<IVariableProviderFactory> factories) =>
@@ -87,7 +95,11 @@ public static class CatalogEndpoints
                 Vars: m.Vars,
                 Tags: m.Tags,
                 Body: m.Body,
-                Source: svc.ReadSource(m.RelativePath)));
+                Source: svc.ReadSource(m.RelativePath),
+                Response: m.Response.IsEmpty
+                    ? null
+                    : new ResponseLimitsDto(m.Response.MaxBytes, m.Response.MaxRetainedBytes),
+                History: HistoryOptionsMapper.ToDto(m.History)));
         });
 
         app.MapPut("/api/workspace/manifest/spec", (
@@ -121,13 +133,19 @@ public static class CatalogEndpoints
                 spec = spec with { VariableProviders = restored };
             }
 
-            return SaveSpec(svc, WorkspaceLoader.ManifestFileName, WorkspaceSpecEmitter.ToFileSource(spec));
+            var id = SpecIds.Ensure(spec.Id);
+            return SaveSpec(svc, WorkspaceLoader.ManifestFileName,
+                WorkspaceSpecEmitter.ToFileSource(spec with { Id = id }), id);
         });
     }
 
-    private static IResult SaveSpec(WorkspaceService svc, string path, string content)
+    /// <summary>Writes a spec and hands back the id it was stored under. The id matters to the
+    /// client: a file created without one gets a fresh id here, and a Send fired before the
+    /// watcher-driven reload lands would otherwise carry <c>id: null</c> and go unrecorded by
+    /// request history.</summary>
+    private static IResult SaveSpec(WorkspaceService svc, string path, string content, string id)
     {
-        try { svc.Save(path, content); return Results.NoContent(); }
+        try { svc.Save(path, content); return Results.Ok(new SavedSpecDto(id)); }
         catch (WorkspaceParseException ex)
         { return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line)); }
     }

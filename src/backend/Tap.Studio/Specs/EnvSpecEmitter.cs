@@ -9,7 +9,7 @@ public static class EnvSpecEmitter
     {
         var fm = new YamlMappingNode();
         fm.Set("kind", "env");
-        fm.SetIfNotEmpty("id", spec.Id);
+        fm.Set("id", SpecIds.Ensure(spec.Id));
         fm.Set("name", spec.Name);
         fm.SetStringList("tags", spec.Tags);
         fm.SetIfNotEmpty("defaultVariableProvider", spec.DefaultVariableProvider);

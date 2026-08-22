@@ -53,7 +53,10 @@ public static class TestingEndpoints
         });
 
         g.MapPut("/spec", (FlowSpecDto spec, WorkspaceService svc) =>
-            Save(svc, spec.Path, () => FlowSpecEmitter.ToFileSource(spec)));
+        {
+            var id = SpecIds.Ensure(spec.Id);
+            return Save(svc, spec.Path, () => FlowSpecEmitter.ToFileSource(spec with { Id = id }), id);
+        });
     }
 
     private static void MapTestSets(IEndpointRouteBuilder app)
@@ -82,7 +85,10 @@ public static class TestingEndpoints
         });
 
         g.MapPut("/spec", (TestSetSpecDto spec, WorkspaceService svc) =>
-            Save(svc, spec.Path, () => TestSetSpecEmitter.ToFileSource(spec)));
+        {
+            var id = SpecIds.Ensure(spec.Id);
+            return Save(svc, spec.Path, () => TestSetSpecEmitter.ToFileSource(spec with { Id = id }), id);
+        });
     }
 
     private static void MapRun(IEndpointRouteBuilder app)
@@ -131,7 +137,7 @@ public static class TestingEndpoints
         });
     }
 
-    private static IResult Save(WorkspaceService svc, string path, Func<string> emit)
+    private static IResult Save(WorkspaceService svc, string path, Func<string> emit, string id)
     {
         try
         {
@@ -139,7 +145,7 @@ public static class TestingEndpoints
             // A create-then-open client refetches the moment this returns; the watcher's
             // debounced reload would lose that race and the GET would 404.
             svc.ReloadNow();
-            return Results.NoContent();
+            return Results.Ok(new SavedSpecDto(id));
         }
         catch (WorkspaceParseException ex)
         {

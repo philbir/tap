@@ -7,8 +7,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, api } from '../api/client'
 import type { EncryptionKeyStatus, ProviderSummary } from '../api/types'
-import { useTapStore } from '../store'
+import { providerTabPath, useTapStore } from '../store'
 import { EditorShell } from './EditorShell'
+import { restoreDraft, usePublishDraft } from './useDraft'
 import { ProviderTypeIcon } from './providerMeta'
 
 /**
@@ -43,6 +44,8 @@ export function ProviderEditor({ name }: { name: string }) {
   const activeEnv = useTapStore((s) => s.activeEnvByRoot[s.info?.root ?? ''] ?? null)
   const generation = useTapStore((s) => s.generation)
 
+  const tabPath = useMemo(() => providerTabPath(name), [name])
+
   const [provider, setProvider] = useState<ProviderSummary | null>(null)
   const [rows, setRows] = useState<Row[]>([])
   const [savedRows, setSavedRows] = useState<Row[]>([])
@@ -68,7 +71,10 @@ export function ProviderEditor({ name }: { name: string }) {
         value: v.isSecret ? null : (v.value ?? ''),
         secret: v.isSecret,
       }))
-      setRows(loaded)
+      // A user-driven Refresh pulls the provider's current values and means it — but a
+      // reload triggered by the tab remounting, or by a `generation` bump, must not throw
+      // away edits that were never saved.
+      setRows(refresh ? loaded : restoreDraft(tabPath, loaded))
       setSavedRows(loaded)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
@@ -90,6 +96,7 @@ export function ProviderEditor({ name }: { name: string }) {
   const readOnly = provider !== null && provider.mode !== 'readwrite'
 
   const dirty = useMemo(() => serialize(rows) !== serialize(savedRows), [rows, savedRows])
+  usePublishDraft(tabPath, rows, dirty, !loading)
 
   const update = (id: string, patch: Partial<Row>) =>
     setRows((cur) => cur.map((r) => (r.id === id ? { ...r, ...patch } : r)))

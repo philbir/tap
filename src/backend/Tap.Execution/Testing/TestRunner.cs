@@ -400,7 +400,13 @@ public sealed class TestRunner(RequestPipeline pipeline)
             using var response = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
                 client, message, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
 
-            var (bytes, total) = await ReadBodyAsync(response, timeout.Token).ConfigureAwait(false);
+            // A run keeps only what it will report — there is no "show the rest" affordance
+            // in a test result, so the retain sink stays null and the cap is the workspace's.
+            var bodyCap = pipeline.Workspace.ResponseLimits.EffectiveMaxBytes;
+            using var bodyStream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            var captured = await ResponseCapture.ReadAsync(
+                bodyStream, bodyCap, retain: null, maxRetained: bodyCap, timeout.Token).ConfigureAwait(false);
+            var (bytes, total) = (captured.Inline, captured.TotalBytes);
             clock.Stop();
 
             var contentType = response.Content.Headers.ContentType?.ToString();
@@ -423,14 +429,14 @@ public sealed class TestRunner(RequestPipeline pipeline)
             }
 
             var (results, summary) = AssertRunner.Run(
-                assertions, rendered.Protocol, status, headers, bodyText, total, elapsed);
+                assertions, rendered.Protocol, status, headers, bodyText, total, elapsed, bodyCap);
 
             var snapshot = new ResponseSnapshot
             {
                 Status = status,
                 Headers = headers.Select(h => new KeyValuePair<string, string>(h.Key, h.Value)).ToArray(),
                 BodyText = bodyText,
-                BodyTruncated = total > HttpExecutionHelpers.BodyCap,
+                BodyTruncated = total > bodyCap,
                 DurationMs = elapsed,
             };
 
@@ -473,26 +479,6 @@ public sealed class TestRunner(RequestPipeline pipeline)
                 Failed(stepIndex, name, requestFile.RelativePath, rendered, clock.Elapsed.TotalMilliseconds, Describe(ex)),
                 []);
         }
-    }
-
-    private static async Task<(byte[] Bytes, long Total)> ReadBodyAsync(
-        HttpResponseMessage response, CancellationToken ct)
-    {
-        var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[64 * 1024];
-        long total = 0;
-        int read;
-        while ((read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), ct).ConfigureAwait(false)) > 0)
-        {
-            total += read;
-            if (buffer.Length < HttpExecutionHelpers.BodyCap)
-            {
-                var slack = HttpExecutionHelpers.BodyCap - (int)buffer.Length;
-                buffer.Write(chunk, 0, Math.Min(read, slack));
-            }
-        }
-        return (buffer.ToArray(), total);
     }
 
     // -------------------------------------------------------------------------------------

@@ -87,7 +87,10 @@ public static class CollectionEndpoints
                         DefaultAuth: s.DefaultAuth?.RelativePath,
                         Vars: s.Vars)).ToArray(),
                     DefaultStage: c.DefaultStage,
-                    AgentEnabled: c.Agent.Enabled));
+                    AgentEnabled: c.Agent.Enabled,
+                    History: HistoryOptionsMapper.ToDto(c.History),
+                    InheritedHistory: HistoryOptionsMapper.Effective(
+                        HistoryOptions.Resolve(ws.HistoryDefaults, collection: null, request: null))));
             }
 
             var dirAbs = Path.Combine(ws.TapDirectory, CollectionsRoot, slug);
@@ -107,7 +110,10 @@ public static class CollectionEndpoints
                 Source: string.Empty,
                 Stages: Array.Empty<CollectionStageDto>(),
                 DefaultStage: null,
-                AgentEnabled: true));
+                AgentEnabled: true,
+                History: null,
+                InheritedHistory: HistoryOptionsMapper.Effective(
+                    HistoryOptions.Resolve(ws.HistoryDefaults, collection: null, request: null))));
         });
 
         g.MapPut("/spec", (CollectionSpecDto spec, WorkspaceService svc) =>
@@ -121,9 +127,10 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
             Directory.CreateDirectory(dirAbs);
 
-            var content = CollectionSpecEmitter.ToFileSource(spec);
+            var id = SpecIds.Ensure(spec.Id);
+            var content = CollectionSpecEmitter.ToFileSource(spec with { Id = id });
             var relPath = $"{CollectionsRoot}/{spec.Slug}/{KindResolver.CollectionFileName}";
-            try { svc.Save(relPath, content); return Results.NoContent(); }
+            try { svc.Save(relPath, content); return Results.Ok(new SavedSpecDto(id)); }
             catch (WorkspaceParseException ex)
             {
                 return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line));

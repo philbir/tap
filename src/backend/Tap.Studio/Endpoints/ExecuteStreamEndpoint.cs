@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Text.Json;
 using Tap.Studio.Contracts;
+using Tap.Studio.History;
 using Tap.Workspace.Model;
 using Tap.Execution.Asserts;
 using Tap.Execution.Http;
@@ -29,7 +30,9 @@ public static class ExecuteStreamEndpoint
 {
     public static void Map(IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/execute/stream", async (HttpContext ctx, ExecuteRequestDto body, WorkspaceService svc) =>
+        app.MapPost("/api/execute/stream", async (
+            HttpContext ctx, ExecuteRequestDto body, WorkspaceService svc, ResponseBodyStore bodies,
+            HistoryRecorder history) =>
         {
             var resp = ctx.Response;
             resp.Headers.ContentType = "text/event-stream";
@@ -48,6 +51,11 @@ public static class ExecuteStreamEndpoint
             var assertStatus = 0;
             IReadOnlyDictionary<string, string> assertHeaders = new Dictionary<string, string>();
             string? assertBody = null;
+            // Kept alongside the assertion inputs because request history wants the same
+            // snapshot the evaluator got, plus the two fields a verdict doesn't care about.
+            string? assertStatusText = null;
+            string? assertContentType = null;
+            var limits = svc.Current.ResponseLimits;
 
             try
             {
@@ -93,6 +101,10 @@ public static class ExecuteStreamEndpoint
                     sw.Stop();
                     var (wsAsserts, wsSummary) = AssertRunner.Run(
                         rendered, 0, assertHeaders, null, totalBytes, sw.Elapsed.TotalMilliseconds);
+                    history.TryRecord(
+                        svc.Current, rendered,
+                        new HistoryResponse(0, null, assertHeaders, null, null, totalBytes, BodyTruncated: false),
+                        sw.Elapsed.TotalMilliseconds, wsAsserts, wsSummary, error: null);
                     await WriteEventAsync(resp, "done",
                         new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, null, wsAsserts, wsSummary), ct);
                     return;
@@ -108,6 +120,8 @@ public static class ExecuteStreamEndpoint
                 var responseHeaders = HttpExecutionHelpers.FlattenHeaders(httpResp);
                 assertStatus = (int)httpResp.StatusCode;
                 assertHeaders = responseHeaders;
+                assertStatusText = httpResp.ReasonPhrase;
+                assertContentType = contentType;
 
                 var meta = new ExecuteStreamMetaDto(
                     Method: rendered.Method,
@@ -132,32 +146,44 @@ public static class ExecuteStreamEndpoint
                     // A stream has no "final body", but its assertions still need something to
                     // read. The captured frame text — what the SSE tab shows — is that something.
                     var captured = new StringBuilder();
-                    totalBytes = await PumpSseFramesAsync(stream, resp, sw, captured, timeout.Token).ConfigureAwait(false);
+                    totalBytes = await PumpSseFramesAsync(
+                        stream, resp, sw, captured, limits.EffectiveMaxBytes, timeout.Token).ConfigureAwait(false);
                     assertBody = captured.ToString();
                 }
                 else
                 {
-                    using var ms = new MemoryStream();
-                    var buf = new byte[64 * 1024];
-                    int read;
-                    while ((read = await stream.ReadAsync(buf.AsMemory(0, buf.Length), timeout.Token).ConfigureAwait(false)) > 0)
-                    {
-                        totalBytes += read;
-                        if (ms.Length < HttpExecutionHelpers.BodyCap)
-                        {
-                            var slack = HttpExecutionHelpers.BodyCap - (int)ms.Length;
-                            ms.Write(buf, 0, Math.Min(read, slack));
-                        }
-                    }
-                    var bytes = ms.ToArray();
-                    var text = HttpExecutionHelpers.TryDecodeBody(bytes, contentType, totalBytes);
+                    // Everything past the inline cap streams into a spool file so the panel can
+                    // offer "show all" and a complete download without re-sending the request.
+                    await using var spool = bodies.CreateSpool(limits.EffectiveMaxBytes);
+                    var captured = await ResponseCapture.ReadAsync(
+                        stream, limits.EffectiveMaxBytes, spool, limits.EffectiveMaxRetainedBytes, timeout.Token)
+                        .ConfigureAwait(false);
+                    await spool.FlushAsync(timeout.Token).ConfigureAwait(false);
+
+                    totalBytes = captured.TotalBytes;
+                    var retained = bodies.Publish(spool, contentType, totalBytes);
+                    var text = HttpExecutionHelpers.TryDecodeBody(captured.Inline, contentType, totalBytes);
                     assertBody = text;
-                    await WriteEventAsync(resp, "body", new ExecuteStreamBodyDto(text, totalBytes), ct);
+                    await WriteEventAsync(resp, "body", new ExecuteStreamBodyDto(
+                        text,
+                        totalBytes,
+                        captured.Inline.LongLength,
+                        retained?.Id,
+                        retained?.RetainedBytes ?? captured.Inline.LongLength), ct);
                 }
 
                 sw.Stop();
                 var (assertions, assertSummary) = AssertRunner.Run(
-                    rendered, assertStatus, assertHeaders, assertBody, totalBytes, sw.Elapsed.TotalMilliseconds);
+                    rendered, assertStatus, assertHeaders, assertBody, totalBytes, sw.Elapsed.TotalMilliseconds,
+                    limits.EffectiveMaxBytes);
+                // For an SSE response `assertBody` is the frame transcript rather than a body —
+                // which is the right thing to keep, since it is what the exchange actually was.
+                history.TryRecord(
+                    svc.Current, rendered,
+                    new HistoryResponse(
+                        assertStatus, assertStatusText, assertHeaders, assertContentType,
+                        assertBody, totalBytes, BodyTruncated: totalBytes > (assertBody?.Length ?? 0)),
+                    sw.Elapsed.TotalMilliseconds, assertions, assertSummary, error: null);
                 await WriteEventAsync(resp, "done",
                     new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, null, assertions, assertSummary), ct);
             }
@@ -171,6 +197,12 @@ public static class ExecuteStreamEndpoint
                 var message = HttpTransport.DescribeException(ex);
                 var (assertions, assertSummary) = AssertRunner.NotRun(
                     rendered, "The request did not complete, so this assertion was not evaluated.");
+                if (rendered is not null)
+                {
+                    history.TryRecord(
+                        svc.Current, rendered, response: null,
+                        sw.Elapsed.TotalMilliseconds, assertions, assertSummary, message);
+                }
                 await WriteEventAsync(resp, "error", new ExecuteStreamErrorDto(message), ct);
                 await WriteEventAsync(resp, "done",
                     new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, message, assertions, assertSummary), ct);
@@ -183,10 +215,11 @@ public static class ExecuteStreamEndpoint
     /// as a single <c>event: sse</c> entry containing the parsed event-name / data / id
     /// trio. Blank lines separate frames per the SSE spec.
     /// </summary>
-    /// <param name="captured">Accumulates the raw stream text (capped at the same 2 MiB the
-    /// one-shot body path uses) so assertions have a body to read once the stream ends.</param>
+    /// <param name="captured">Accumulates the raw stream text (capped at the same
+    /// <c>response.maxBytes</c> the one-shot body path uses) so assertions have a body to read
+    /// once the stream ends.</param>
     private static async Task<long> PumpSseFramesAsync(
-        Stream upstream, HttpResponse downstream, Stopwatch sw, StringBuilder captured, CancellationToken ct)
+        Stream upstream, HttpResponse downstream, Stopwatch sw, StringBuilder captured, long captureCap, CancellationToken ct)
     {
         using var reader = new StreamReader(upstream, Encoding.UTF8);
         long bytes = 0;
@@ -200,7 +233,7 @@ public static class ExecuteStreamEndpoint
             var line = await reader.ReadLineAsync(ct).ConfigureAwait(false);
             if (line is null) break;
             bytes += line.Length + 1; // +1 for newline
-            if (captured.Length < HttpExecutionHelpers.BodyCap) captured.Append(line).Append('\n');
+            if (captured.Length < captureCap) captured.Append(line).Append('\n');
 
             if (string.IsNullOrEmpty(line))
             {

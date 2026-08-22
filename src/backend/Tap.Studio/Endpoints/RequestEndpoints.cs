@@ -54,7 +54,12 @@ public static class RequestEndpoints
                 Source: svc.ReadSource(req.RelativePath),
                 Protocol: req.Protocol.ToWire(),
                 Transport: ToDto(req.Transport),
-                Assertions: AssertSpecMapper.ToDto(req.Assertions));
+                Assertions: AssertSpecMapper.ToDto(req.Assertions),
+                History: HistoryOptionsMapper.ToDto(req.History),
+                EffectiveHistory: HistoryOptionsMapper.Effective(HistoryOptions.Resolve(
+                    svc.Current.HistoryDefaults,
+                    CollectionLocator.ForRequest(svc.Current, req)?.History,
+                    req.History)));
             return Results.Ok(dto);
         });
 
@@ -65,12 +70,16 @@ public static class RequestEndpoints
         {
             try
             {
-                svc.Save(spec.Path, RequestSpecEmitter.ToFileSource(spec));
+                // Assigned here rather than only inside the emitter so the id can travel back on
+                // the response: a request created and Sent in the same breath must already know
+                // its own id, or history has nothing to file the exchange under.
+                var id = SpecIds.Ensure(spec.Id);
+                svc.Save(spec.Path, RequestSpecEmitter.ToFileSource(spec with { Id = id }));
                 // A create-then-open client (sidebar "New request", the create dialog, duplicate)
                 // refetches the request the moment this returns — the watcher's debounced reload
                 // would lose that race and the GET would 404.
                 svc.ReloadNow();
-                return Results.NoContent();
+                return Results.Ok(new SavedSpecDto(id));
             }
             catch (WorkspaceParseException ex)
             {

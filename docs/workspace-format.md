@@ -190,6 +190,8 @@ The single file at the workspace root. Created on `tap init`.
 | `variableProviders` | array of provider configs | no | Registers the named variable providers available in this workspace. See below and §12. |
 | `defaultVariableProvider` | string | no | Provider that bare `{{name}}` tokens hit first after the cascade (and that receives un-targeted variable writes). An active env's own `defaultVariableProvider` overrides it. Legacy key `defaultProvider` is also read. |
 | `vars` | map<string, var-spec> | no | Workspace-level variables (lowest precedence). Same var-spec shape as §5.1. |
+| `response` | map | no | Response body caps — see below. |
+| `history` | bool \| map | no | Whether exchanges are recorded to `.tap-history/` — see §4.3. Weakest tier; a collection or request overrides it per key. |
 
 Each `variableProviders:` entry declares `name` (the `{{name:…}}` prefix), `type` (one of
 the built-in types — §12.1), and optionally `settings`. Settings may sit under an explicit
@@ -198,6 +200,20 @@ bag either way. Provider names must match `[A-Za-z][A-Za-z0-9_-]*` — anything 
 rejected with `E_PROVIDER_CONFIG_INVALID` (file-backed providers combine the name into a
 path, so separators or `..` would escape the workspace). The legacy `providers:` key is
 still honored so older workspaces keep loading.
+
+`response:` caps how much of a response body Tap keeps, and takes two optional sizes:
+
+| Key | Default | Meaning |
+|---|---|---|
+| `maxBytes` | `2mb` | How much of the body is delivered inline — the Studio's body pane, a test run's captured body, the CLI's `--json` document — and evaluated by body assertions. Past it the body on screen is a prefix and body assertions report "not evaluated" rather than matching one. |
+| `maxRetainedBytes` | `64mb` | How much the Studio holds back on disk so the truncation banner can offer **Show all** and a complete **Download**, without re-sending the request. Never delivered unless asked for. Raised to `maxBytes` if set below it; both are clamped to 1 GB. |
+
+Sizes are a plain byte count or a number with a `kb` / `mb` / `gb` suffix (case-insensitive,
+1024-based; `2mb`, `2 MB` and `2m` are the same). Anything else is rejected with
+`E_UNKNOWN_FIELD` rather than falling back to the default — a typo'd cap that reads as "no
+cap configured" is the surprise the field exists to remove. The retained copy lives in a temp
+directory for the last few responses and is deleted when the Studio exits; it is a
+convenience for the response you are looking at, not history.
 
 Providers can also be registered at **system scope** (the host's settings store) — those are
 available to every workspace, and a workspace provider with the same name shadows the system
@@ -227,6 +243,9 @@ variableProviders:
   settings:
     vaultName: acme-prod
     tenantId: 00000000-0000-0000-0000-000000000000
+response:
+  maxBytes: 8mb          # show more of a big report inline
+  maxRetainedBytes: 256mb # …and keep enough of it to download whole
 vars:
   app.userAgent: tap/0.5
 ---
@@ -237,6 +256,59 @@ API workspace for the billing service. Owned by @platform. Production access
 runs through `prod.env.tap` and requires Azure Key Vault membership in the
 `billing-eng` group.
 ```
+
+### 4.3 `history:` — recording what you actually ran
+
+`history:` turns on a durable record of the exchanges Tap runs. It is declarable at three
+scopes — `workspace.tap`, `_collection.tap`, and a single `*.req.tap` — and merged **per key**,
+nearest wins:
+
+```yaml
+history: true              # shorthand for { enabled: true }
+
+history:                   # or the long form; every key is optional
+  enabled: true
+  maxEntries: 25           # per request, oldest pruned
+  encrypt: false
+  maxBodyBytes: 256kb      # same size grammar as `response:`
+  orphanRetentionDays: 30  # workspace.tap only
+```
+
+| Key | Default | Meaning |
+|---|---|---|
+| `enabled` | `false` | Record exchanges for this scope. Off unless something says otherwise — recording every response a workspace produces is a decision about someone's disk. |
+| `maxEntries` | `25` | How many entries survive per request. Clamped to 1000. |
+| `encrypt` | `false` | Encrypt each entry at rest, and store it **unredacted** — see below. |
+| `maxBodyBytes` | `256kb` | Response body kept per entry. Far below `response.maxBytes` on purpose: history grows unattended. Clamped to 64 MB. |
+| `orphanRetentionDays` | `30` | How long the history of a *deleted* request is kept. `workspace.tap` only — by the time a folder is orphaned, the collection and request that would configure it are what no longer exist. Rejected elsewhere with `E_UNKNOWN_FIELD`. |
+
+A nearer scope overrides only the keys it names, so a collection can switch recording on for
+everything under it while one noisy request sets `history: { enabled: false }` or a smaller
+`maxEntries` without restating the rest.
+
+**Where it goes.** One folder, `.tap-history/` at the workspace root, with a folder per request
+id and one file per exchange named by UTC timestamp. The folder writes its own `.gitignore`
+containing `*` on first use, so recorded traffic never reaches a commit because somebody forgot
+a line in the repo's ignore file.
+
+**Secrets.** An entry is *either* redacted and plaintext *or* unredacted and encrypted; there is
+no third combination. With `encrypt: false` (the default), credential headers are masked by name
+and every resolved secret is replaced by value wherever it landed — URL, body, response, and
+assertion output — by the same redactor the CLI's `--json` and the MCP results use. With
+`encrypt: true` the entry keeps what actually went on the wire and the whole document is sealed
+in the AES-256-GCM envelope (§12.5) under the machine key. **If that key cannot be obtained, the
+entry is not written at all** — never downgraded to plaintext, because encryption is what
+licenses storing the secrets in the first place.
+
+**Identity.** History is keyed by the request's `id:` (§3.1), so renaming or moving a request
+keeps its history attached. A request with no id is not recorded; the Studio assigns one when it
+saves, so in practice this only affects files it has never written. History whose request has
+been deleted becomes an *orphan*: it stays readable (each entry records the request's name and
+path as of recording), is marked as such in the timeline, is swept after
+`orphanRetentionDays`, and re-links by itself if a file with that id comes back.
+
+Today only the Studio's interactive **Send** records. `tap-studio send`, the MCP tools, and test
+runs do not.
 
 ---
 
@@ -253,6 +325,7 @@ A single executable request. The most-edited file kind.
 | `id` | uuid | no | |
 | `auth` | path \| id-ref | no | Overrides the containing collection's `defaultAuth`. To opt a request out of an inherited default entirely, point it at a profile with `type: none` (§8.1). |
 | `protocol` | enum: `http` \| `websocket` | no | Wire protocol. Default `http`. `websocket` drives baseUrl scheme normalization (http→ws, https→wss) and switches the executor to a WebSocket transport. See §5.4. |
+| `history` | bool \| map | no | Recording policy for this request. Overrides its collection and the manifest per key — see §4.3. |
 | `transport` | mapping | no | `ignoreTlsErrors: <bool>` and/or `timeoutMs: <int ≥ 0>`. Each unset key falls back to the collection's `transport` (§6.1). |
 | `vars` | map<string, var-spec> | no | Request-scoped variables (highest precedence except for explicit per-run overrides). |
 | `tags` | string[] | no | |
@@ -451,9 +524,11 @@ either way — the difference is only indentation, and it is invisible in an edi
   request itself (§3), so `equals: '{{user.email}}'` compares against the very value the
   request was built with. When an expected value resolves through something marked secret,
   the reported expectation is masked as `***`.
-- **Truncated bodies.** Response capture stops at 2 MiB. Past that, body/`jsonpath`/
-  `xpath`/`regex` assertions fail with *body truncated* rather than matching a prefix and
-  claiming a pass the full response might not have earned.
+- **Truncated bodies.** Response capture stops at the workspace's `response.maxBytes`
+  (§4.1, 2 MiB by default). Past that, body/`jsonpath`/`xpath`/`regex` assertions fail with
+  *body truncated* rather than matching a prefix and claiming a pass the full response might
+  not have earned. Raising the cap is what makes them evaluate; the separately retained copy
+  behind **Show all** / **Download** is for reading, not for asserting against.
 - **Streams.** For `text/event-stream`, status/header/duration assertions behave normally
   and body-family assertions run against the captured stream text once it ends.
 - **WebSocket** requests (§5.4) parse and keep their assertions but report them as skipped —
@@ -482,6 +557,7 @@ A top-level group of requests, owning the base URL, optional named stages, defau
 | `stages` | sequence of stage | no | Named per-stage overrides (e.g. `dev`/`staging`/`prod`). Each stage requires a `name` (unique within the collection, case-insensitive) and may override `baseUrl`, `defaultAuth`, and `vars`. |
 | `defaultStage` | string | no | Stage to preselect when no explicit stage is passed. Must name a defined stage — anything else is a parse error. |
 | `tags` | string[] | no | |
+| `history` | bool \| map | no | Recording policy inherited by every request in this collection. Overrides the manifest per key; a request overrides it in turn — see §4.3. |
 | `agent` | bool \| mapping | no | Agent-surface policy. `agent: false` (or `agent: { enabled: false }`) fences the collection off from AI agents: its requests disappear from agent discovery, and the MCP tools and `tap-studio call` refuse to describe, send, or call into it (`E_AGENT_ACCESS_DISABLED`). The Studio UI, `send`, and `test` are unaffected — this is policy for agents, not a sandbox. Absent means enabled. The mapping form is reserved for finer-grained controls later. |
 
 ### 6.2 Example
@@ -1384,7 +1460,9 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 
 ## 15. Versioning, IDs, and stability
 
-- A new file with no `id:` gets a UUIDv7 assigned by the writer on first save.
+- A new file with no `id:` gets a UUIDv7 assigned by the writer on first save. The Studio does
+  this for every kind it writes, so a file it created can be referenced by id, and its recorded
+  history (§4.3) survives a rename.
 - The id is the durable identity. Renaming the file preserves the id.
 - Cross-file `id:` references resolve through the workspace index; if an id has no owner, references to it produce `E_DANGLING_REF`.
 - The format version is implicit in this document. Files do not carry a version field in v0; a future breaking change will introduce a `tapFormat: "1.x"` field in `workspace.tap`.

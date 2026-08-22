@@ -1,4 +1,5 @@
 import { ActionIcon, Box, Group, Menu, ScrollArea, Text, UnstyledButton } from '@mantine/core'
+import { modals } from '@mantine/modals'
 import {
   IconArrowsSplit2,
   IconBrandGit,
@@ -8,10 +9,10 @@ import {
   IconFolder, IconFolders, IconLayoutDashboard, IconLock, IconSend, IconServer, IconSettings, IconWorld, IconX,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import type { WorkspaceFileKind } from '../api/types'
-import { useTapStore } from '../store'
+import { useDirtyTabPaths, useTapStore } from '../store'
 import classes from './TabBar.module.css'
 
 const KIND_ICON: Record<WorkspaceFileKind, TablerIcon> = {
@@ -42,14 +43,41 @@ const KIND_COLOR: Partial<Record<WorkspaceFileKind, string>> = {
 const TAB_HEIGHT = 36
 const TAB_LABEL_MAX = 180
 
-/** Horizontal tab bar — one tab per open file. Middle-click closes. */
+/**
+ * Horizontal tab bar — one tab per open file. Middle-click closes.
+ *
+ * A tab with unsaved edits (one holding a draft in the store) swaps its close button for a
+ * dot until you hover it, and closing it asks first — the draft only lives in memory, so
+ * closing the tab is what actually throws the edits away.
+ */
 export function TabBar() {
   const tabs = useTapStore((s) => s.tabs)
   const active = useTapStore((s) => s.activeTab)
   const onSelect = useTapStore((s) => s.selectTab)
-  const onClose = useTapStore((s) => s.closeTab)
-  const onCloseOthers = useTapStore((s) => s.closeOtherTabs)
-  const onCloseAll = useTapStore((s) => s.closeAllTabs)
+  const closeTab = useTapStore((s) => s.closeTab)
+  const closeOthers = useTapStore((s) => s.closeOtherTabs)
+  const closeAll = useTapStore((s) => s.closeAllTabs)
+  const dirtyPaths = useDirtyTabPaths()
+
+  // Every close route funnels through these so the confirm can't be sidestepped by the
+  // context menu, the overflow menu, or a middle-click.
+  const onClose = useCallback((path: string) => {
+    if (!dirtyPaths.has(path)) { closeTab(path); return }
+    const tab = tabs.find((t) => t.path === path)
+    confirmDiscard(`${tab?.label ?? path} has unsaved changes.`, () => closeTab(path))
+  }, [tabs, dirtyPaths, closeTab])
+
+  const onCloseOthers = useCallback((path: string) => {
+    const affected = tabs.filter((t) => t.path !== path && dirtyPaths.has(t.path)).length
+    if (affected === 0) { closeOthers(path); return }
+    confirmDiscard(unsavedSummary(affected), () => closeOthers(path))
+  }, [tabs, dirtyPaths, closeOthers])
+
+  const onCloseAll = useCallback(() => {
+    const affected = tabs.filter((t) => dirtyPaths.has(t.path)).length
+    if (affected === 0) { closeAll(); return }
+    confirmDiscard(unsavedSummary(affected), closeAll)
+  }, [tabs, dirtyPaths, closeAll])
 
   const viewportRef = useRef<HTMLDivElement>(null)
   const activeRef = useRef<HTMLButtonElement>(null)
@@ -97,6 +125,7 @@ export function TabBar() {
         <Group gap={0} wrap="nowrap" style={{ height: TAB_HEIGHT }}>
           {tabs.map((t) => {
             const isActive = t.path === active
+            const isDirty = dirtyPaths.has(t.path)
             const KindIcon = KIND_ICON[t.kind] ?? IconLayoutDashboard
             const color = KIND_COLOR[t.kind] ?? 'var(--mantine-color-dimmed)'
             return (
@@ -111,6 +140,7 @@ export function TabBar() {
                 }}
                 className={classes.tab}
                 data-active={isActive}
+                data-dirty={isDirty}
                 style={{
                   height: TAB_HEIGHT,
                   flex: '0 0 auto',
@@ -137,7 +167,10 @@ export function TabBar() {
                   >
                     {t.label}
                   </Box>
+                  {/* The dot and the close button share one slot: the dot holds it while the
+                      tab has unsaved edits, and hovering the tab trades it for the X. */}
                   <span className={classes.closeSlot}>
+                    {isDirty && <span className={classes.dirtyDot} title="Unsaved changes" />}
                     <ActionIcon
                       component="div"
                       role="button"
@@ -145,7 +178,7 @@ export function TabBar() {
                       variant="subtle"
                       color="gray"
                       onClick={(e) => { e.stopPropagation(); onClose(t.path) }}
-                      aria-label="Close tab"
+                      aria-label={isDirty ? 'Close tab (unsaved changes)' : 'Close tab'}
                       className={classes.close}
                     >
                       <IconX size={11} />
@@ -160,6 +193,7 @@ export function TabBar() {
       <TabsOverflowMenu
         tabs={tabs}
         active={active}
+        dirtyPaths={dirtyPaths}
         onSelect={onSelect}
         onClose={onClose}
         onCloseAll={onCloseAll}
@@ -179,16 +213,33 @@ export function TabBar() {
   )
 }
 
+/** "3 tabs have unsaved changes." — the plural half of the confirm prompt. */
+function unsavedSummary(count: number): string {
+  return count === 1 ? '1 tab has unsaved changes.' : `${count} tabs have unsaved changes.`
+}
+
+/** Closing a tab is what actually discards its draft, so ask before doing it. */
+function confirmDiscard(message: string, onConfirm: () => void) {
+  modals.openConfirmModal({
+    title: 'Discard unsaved changes?',
+    children: <Text size="sm">{message} Closing will discard them.</Text>,
+    labels: { confirm: 'Discard', cancel: 'Keep editing' },
+    confirmProps: { color: 'red' },
+    onConfirm,
+  })
+}
+
 interface TabsOverflowMenuProps {
   tabs: ReturnType<typeof useTapStore.getState>['tabs']
   active: string | null
+  dirtyPaths: ReadonlySet<string>
   onSelect: (path: string) => void
   onClose: (path: string) => void
   onCloseAll: () => void
 }
 
 /** Right-aligned chevron menu — lists every open tab and offers "Close all". */
-function TabsOverflowMenu({ tabs, active, onSelect, onClose, onCloseAll }: TabsOverflowMenuProps) {
+function TabsOverflowMenu({ tabs, active, dirtyPaths, onSelect, onClose, onCloseAll }: TabsOverflowMenuProps) {
   return (
     <Menu position="bottom-end" shadow="md" width={360} withinPortal>
       <Menu.Target>
@@ -217,6 +268,7 @@ function TabsOverflowMenu({ tabs, active, onSelect, onClose, onCloseAll }: TabsO
         <ScrollArea.Autosize mah={320} type="auto" scrollbars="y" style={{ overflowX: 'hidden' }}>
           {tabs.map((t) => {
             const isActive = t.path === active
+            const isDirty = dirtyPaths.has(t.path)
             const KindIcon = KIND_ICON[t.kind] ?? IconLayoutDashboard
             const color = KIND_COLOR[t.kind] ?? 'var(--mantine-color-dimmed)'
             return (
@@ -225,20 +277,23 @@ function TabsOverflowMenu({ tabs, active, onSelect, onClose, onCloseAll }: TabsO
                 onClick={() => onSelect(t.path)}
                 leftSection={<KindIcon size={14} color={color} />}
                 rightSection={
-                  <ActionIcon
-                    component="div"
-                    role="button"
-                    size="xs"
-                    variant="subtle"
-                    color="gray"
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      onClose(t.path)
-                    }}
-                    aria-label={`Close ${t.label}`}
-                  >
-                    <IconX size={12} />
-                  </ActionIcon>
+                  <Group gap={6} wrap="nowrap">
+                    {isDirty && <span className={classes.dirtyDot} title="Unsaved changes" />}
+                    <ActionIcon
+                      component="div"
+                      role="button"
+                      size="xs"
+                      variant="subtle"
+                      color="gray"
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        onClose(t.path)
+                      }}
+                      aria-label={`Close ${t.label}`}
+                    >
+                      <IconX size={12} />
+                    </ActionIcon>
+                  </Group>
                 }
                 style={{
                   background: isActive ? 'var(--mantine-color-default-hover)' : undefined,

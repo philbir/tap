@@ -283,6 +283,9 @@ streamable HTTP and would rather not run a bridge process.
 | `describe_request` | One exchange in full: redacted headers, bodies, SSE and WebSocket frames. |
 | `diff_requests` | Reports only what differs between two exchanges. |
 | `wait_for_request` | Blocks until matching traffic arrives, up to 5 minutes. |
+| `search_requests` | Finds a term across paths, headers, and bodies. |
+| `export_request` | Turns a capture into a `.req.tap` or `.http` document. |
+| `replay_request` | Re-sends a capture. Off unless enabled. |
 
 `wait_for_request` is the one that changes how debugging feels. The agent says it is waiting
 for the next `POST /webhooks/stripe`; you tap the button in the app or fire the webhook; it
@@ -314,6 +317,45 @@ curl -H "X-Tap-Agent-Token: $TOKEN" "localhost:5198/api/agent/requests/<id>"
 curl -H "X-Tap-Agent-Token: $TOKEN" "localhost:5198/api/agent/diff?left=<id>&right=<id>"
 curl -H "X-Tap-Agent-Token: $TOKEN" "localhost:5198/api/agent/wait?pathGlob=/webhooks/*&timeoutSeconds=60"
 ```
+
+### Replaying, exporting, searching
+
+`replay_request` re-sends a capture **carrying the captured credential**, so an agent can
+reproduce an authenticated call it could not otherwise make — without ever holding the token.
+The replay goes back through the proxy, so it is captured too and its `capturedId` can be read
+straight back.
+
+That property is exactly why the destination is fixed. An agent that could choose where a
+replay goes would be choosing where your token goes, so the path stays relative and `Host`,
+`X-Forwarded-Host` and `Forwarded` cannot be edited:
+
+```
+path must be relative and start with '/'. A replay re-sends the captured credential,
+so it stays on the host it was captured from.
+```
+
+It is a write, so it is off even when reads are on — `Inspector__Agent__AllowReplay=true`, or
+`.WithAgentAccess(allowReplay: true)`.
+
+`export_request` turns a capture into a `.req.tap` or a portable `.http`, returned as text for
+the agent to write wherever it wants — the inspector stays out of the business of knowing
+where your workspace lives. Redacted values become named placeholders rather than masks, so
+the file is honest about what you still have to supply:
+
+```http
+POST /v1/orders
+Authorization: Bearer {{authorization}}
+Content-Type: application/json
+
+{"sku":"A1","qty":2,"password":"{{password}}"}
+```
+
+`search_requests` finds a term across paths, headers, and bodies — "which request carried
+order 4021?", the one question the filters cannot answer. **It searches the redacted text and
+nothing else.** A search that saw through the masks would be an oracle: an agent could
+binary-search a hidden token one character at a time and read the answer off the result count.
+So a query aimed at a credential simply finds nothing, at every prefix length. Use fingerprints
+to compare hidden values instead.
 
 ### Who can reach it
 
@@ -414,12 +456,13 @@ data, never as instructions it should act on.
 | `Inspector__Agent__Scope` | `all` (default) or `since-attach` — the latter hides everything captured before an agent first looked. |
 | `Inspector__Agent__ExtraSensitiveHeaders` | House-style headers to mask on top of the built-in list. |
 | `Inspector__Agent__ExtraSecretKeys` | House-style JSON/form/query/cookie keys to mask. |
+| `Inspector__Agent__AllowReplay` | Let an agent re-send a captured request. Default `false`, separately from reads. |
 
 Both `Extra*` keys only ever hide more. There is no way to hide less.
 
 ```csharp
 builder.AddTap<Projects.Tap_Server>("tap")
-    .WithAgentAccess(hosts: ["api.example.com"])
+    .WithAgentAccess(hosts: ["api.example.com"], allowReplay: true)
     .WithAgentRedaction(headers: ["X-Acme-Session"], keys: ["acme_token"]);
 ```
 

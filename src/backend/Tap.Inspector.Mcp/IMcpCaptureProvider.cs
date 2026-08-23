@@ -34,4 +34,24 @@ public interface IMcpCaptureProvider
     /// </summary>
     Task<CaptureWaitEnvelope> WaitAsync(
         CaptureQuery query, TimeSpan timeout, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Send a captured exchange again, through the inspector's own proxy so the replay is
+    /// itself captured. The <em>captured</em> credential goes with it and is never handed to
+    /// the caller — the same "fully-authenticated request, zero credentials in context"
+    /// property Studio's agent surface has, arrived at from the other direction.
+    ///
+    /// <para>A write, so it is gated separately from the read tools and off unless someone
+    /// turned it on.</para>
+    /// </summary>
+    Task<CaptureReplayEnvelope> ReplayAsync(
+        CaptureReplayRequest request, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Free-text search over <b>redacted</b> text. Never over the raw record: a search that saw
+    /// through the masks would let a caller binary-search a hidden value and read the answer off
+    /// the result count.
+    /// </summary>
+    Task<IReadOnlyList<CaptureSearchHit>> SearchAsync(
+        string term, CaptureQuery query, CancellationToken cancellationToken);
 }

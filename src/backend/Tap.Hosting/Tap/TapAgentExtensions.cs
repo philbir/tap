@@ -27,13 +27,19 @@ public static class TapAgentExtensions
     /// <param name="sinceAttach">Only show traffic captured after the agent connects, rather
     /// than the whole ring. Off by default: the request you need to debug is usually the one
     /// that already happened.</param>
+    /// <param name="allowReplay">Also let an agent re-send a captured request. Off by default:
+    /// reading traffic and acting on it are separate decisions. A replay carries the captured
+    /// credential to the host it came from and nowhere else — the destination is not editable —
+    /// so an agent can reproduce an authenticated call without ever holding the credential.</param>
     public static TapHandle WithAgentAccess(
         this TapHandle tap,
         string[]? hosts = null,
-        bool sinceAttach = false)
+        bool sinceAttach = false,
+        bool allowReplay = false)
     {
         tap.WithEnvironment("Inspector__Agent__Enabled", "true");
         tap.WithEnvironment("Inspector__Agent__Scope", sinceAttach ? "since-attach" : "all");
+        if (allowReplay) tap.WithEnvironment("Inspector__Agent__AllowReplay", "true");
 
         if (hosts is { Length: > 0 })
         {

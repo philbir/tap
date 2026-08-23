@@ -113,6 +113,69 @@ public sealed class TapInspectorTools(IMcpCaptureProvider provider)
             : CaptureJson.Diff(CaptureDiff.Compare(left!, right!));
     }
 
+    [McpServerTool(Name = "search_requests")]
+    [Description(
+        "Find captured exchanges containing a piece of text — an order id, an error string, a " +
+        "correlation id — across paths, headers, and bodies. Returns each match with where it " +
+        "was and a short excerpt. IMPORTANT: this searches the REDACTED text, so a term aimed " +
+        "at a masked credential finds nothing by design; use the fingerprints in " +
+        "describe_request to compare hidden values instead.")]
+    public async Task<string> SearchRequests(
+        [Description("Text to look for. Case-insensitive.")] string term,
+        [Description("Only this host.")] string? host = null,
+        [Description("Glob over the path, e.g. /api/*.")] string? pathGlob = null,
+        [Description("How many matches to return, newest first. Default 10.")] int limit = 10,
+        CancellationToken cancellationToken = default)
+    {
+        var hits = await provider.SearchAsync(
+            term,
+            new CaptureQuery { Host = host, PathGlob = pathGlob, Limit = Math.Clamp(limit, 1, 50) },
+            cancellationToken);
+
+        return CaptureJson.Search(hits);
+    }
+
+    [McpServerTool(Name = "export_request")]
+    [Description(
+        "Turn a captured exchange into a request file you can keep — a Tap '.req.tap' or a " +
+        "portable '.http'. Returns the document text plus a suggested filename; write it " +
+        "wherever you want it. Redacted values become {{placeholders}} rather than masks, and " +
+        "are listed so you know what to supply — a file containing [redacted:…] would be a " +
+        "request that cannot work.")]
+    public async Task<string> ExportRequest(
+        [Description("Id of the request to export, from list_requests.")] string id,
+        [Description("'tap' for a .req.tap (default), or 'http' for a portable .http file.")] string format = "tap",
+        CancellationToken cancellationToken = default)
+    {
+        var detail = await provider.GetAsync(
+            id, new CaptureDetailOptions { IncludeFrames = false }, cancellationToken);
+
+        return detail is null
+            ? CaptureJson.Error($"No captured request with id '{id}'.")
+            : CaptureJson.Export(CaptureExport.Export(detail, format));
+    }
+
+    [McpServerTool(Name = "replay_request")]
+    [Description(
+        "Send a captured request again, optionally with an edited path, body, or headers. The " +
+        "captured credential goes with it and is never shown to you, so this reproduces an " +
+        "authenticated call you could not otherwise make. The destination is fixed to the host " +
+        "the request came from — a relative path only, and Host cannot be edited. The replay is " +
+        "itself captured, so the returned capturedId can be read straight back with " +
+        "describe_request. Off unless the inspector enables it; a refusal explains why.")]
+    public async Task<string> ReplayRequest(
+        [Description("Id of the request to replay, from list_requests.")] string id,
+        [Description("Optional replacement path, relative and starting with '/'.")] string? path = null,
+        [Description("Optional replacement body.")] string? body = null,
+        [Description("Optional Content-Type for a replacement body.")] string? contentType = null,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await provider.ReplayAsync(
+            new CaptureReplayRequest(id, path, body, contentType), cancellationToken);
+
+        return CaptureJson.Replay(result);
+    }
+
     [McpServerTool(Name = "wait_for_request")]
     [Description(
         "Block until a matching request arrives, then return its summary. Use this to watch " +

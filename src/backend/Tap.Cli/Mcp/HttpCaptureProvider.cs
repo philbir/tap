@@ -73,6 +73,28 @@ public sealed class HttpCaptureProvider(HttpClient http) : IMcpCaptureProvider
         return envelope ?? CaptureWaitEnvelope.TimedOut(timeout);
     }
 
+    public async Task<CaptureReplayEnvelope> ReplayAsync(
+        CaptureReplayRequest request, CancellationToken cancellationToken)
+    {
+        using var response = await http.PostAsJsonAsync(
+            "api/agent/replay", request, ReadOptions, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<CaptureReplayEnvelope>(ReadOptions, cancellationToken)
+            ?? CaptureReplayEnvelope.Refused("The inspector returned nothing.");
+    }
+
+    public async Task<IReadOnlyList<CaptureSearchHit>> SearchAsync(
+        string term, CaptureQuery query, CancellationToken cancellationToken)
+    {
+        var url = $"api/agent/search?term={Uri.EscapeDataString(term)}&limit={query.Limit}"
+            + Param("host", query.Host)
+            + Param("pathGlob", query.PathGlob);
+
+        var envelope = await GetAsync<CaptureSearchEnvelope>(url, cancellationToken);
+        return envelope?.Hits ?? [];
+    }
+
     private async Task<T?> GetAsync<T>(string url, CancellationToken cancellationToken)
     {
         using var response = await http.GetAsync(url, cancellationToken);

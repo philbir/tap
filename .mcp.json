@@ -11,6 +11,11 @@
     "tap-studio": {
       "command": "dotnet",
       "args": ["run", "--project", "src/backend/Tap.Studio.Cli", "--", "mcp", "--workspace", "samples/sample-workspace"]
+    },
+    "//3": "The other product's agent surface: `tap mcp` reads a running inspector's captured traffic, redacted. It takes no arguments — it finds the inspector via the handle at ~/.tap/inspector/<uiPort>.json and authenticates with that run's token. Tools do nothing until an inspector is running with Inspector__Agent__Enabled=true (or .WithAgentAccess() in an AppHost).",
+    "tap-inspector": {
+      "command": "dotnet",
+      "args": ["run", "--project", "src/backend/Tap.Cli", "--", "mcp"]
     }
   }
 }

@@ -33,6 +33,13 @@ public sealed class InspectorAgentOptions
 
     public string[] ExtraSecretKeys { get; init; } = [];
 
+    /// <summary>
+    /// Lets an agent re-send a captured request. A write, so it is off even when reads are on:
+    /// enabling the agent surface is a decision about what may be <em>seen</em>, and this is a
+    /// decision about what may be <em>done</em>.
+    /// </summary>
+    public bool AllowReplay { get; init; }
+
     public static InspectorAgentOptions Disabled { get; } = new();
 
     public static InspectorAgentOptions FromConfiguration(IConfiguration config)
@@ -45,6 +52,7 @@ public sealed class InspectorAgentOptions
             AllowHosts = Split(section["AllowHosts"]),
             ExtraSensitiveHeaders = Split(section["ExtraSensitiveHeaders"]),
             ExtraSecretKeys = Split(section["ExtraSecretKeys"]),
+            AllowReplay = section.GetValue("AllowReplay", false),
         };
     }
 

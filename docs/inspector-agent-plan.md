@@ -357,7 +357,7 @@ Ships the whole mobile/webhook loop. Verified end to end: traffic through the pr
 - `diff_requests`
 - `Scope=since-attach` as an opt-in (default stays `all`)
 
-### P3 — write tools and the bridge to Studio
+### P3 — write tools and the bridge to Studio — ✅ DELIVERED
 - `replay_request` behind an explicit gate
 - `export_to_workspace` → `.req.tap` / `.http`
 - `tap-inspector` skill; `agent init --env` parity with `tap-studio`
@@ -401,6 +401,31 @@ during `Build()`, before Kestrel bound the port. A process that failed to bind �
 another inspector already owned it — still published a handle for that port, so the next
 `tap mcp` would have sent a live token to a server that never issued it. The handle is now
 written on `ApplicationStarted`, and a handle whose pid is gone is ignored on read.
+
+## Delivered in P3
+
+| | |
+|---|---|
+| `Tap.Core/Capture/` | `CaptureReplay`, `CaptureExport`, `CaptureSearch` |
+| `Tap.Server/Agent/` | `CaptureReplayer`, `/api/agent/replay`, `/…/export`, `/api/agent/search` |
+| `Tap.Inspector.Mcp` | `replay_request`, `export_request`, `search_requests` |
+| `.claude/skills/tap-inspector/` | the skill |
+| `.mcp.json` | `tap-inspector` registered for this repo |
+
+**`search_requests` earned its place after all.** The plan argued for dropping it as an
+exfiltration oracle. Matching against the redacted projection closes that completely — a probe
+finds nothing at every prefix length, verified — and it answers "which request carried order
+4021?", which no filter does.
+
+**`export_to_workspace` became `export_request`.** It returns the document text instead of
+writing into a workspace: the two product families share nothing at runtime, and an agent
+already has a way to write a file. Keeps the inspector out of knowing where a workspace lives.
+
+**`agent init` parity is deliberately NOT done.** Studio's installer is 350 lines of shipped,
+documented behaviour across four environment config formats; parameterising it for a second
+product is a change to Studio's surface that deserves its own review rather than being a side
+effect of this. The gap is also small, because `tap mcp` takes no arguments — registration is
+three lines of JSON, documented in the skill.
 
 ## Decisions
 

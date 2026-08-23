@@ -112,6 +112,51 @@ internal static class AgentEndpoints
                 : Results.Json(CaptureDiff.Compare(a!, b!), CaptureJson.Options);
         });
 
+        ep.MapGet("/api/agent/search", async (
+            string term,
+            IMcpCaptureProvider provider,
+            CancellationToken ct,
+            string? host = null,
+            string? pathGlob = null,
+            int limit = 10) =>
+        {
+            var hits = await provider.SearchAsync(
+                term,
+                new CaptureQuery { Host = host, PathGlob = pathGlob, Limit = Math.Clamp(limit, 1, 50) },
+                ct);
+
+            return Results.Json(
+                new CaptureSearchEnvelope(CaptureTrust.Notice, hits.Count, hits), CaptureJson.Options);
+        });
+
+        ep.MapGet("/api/agent/requests/{id}/export", async (
+            string id,
+            IMcpCaptureProvider provider,
+            CancellationToken ct,
+            string format = "tap") =>
+        {
+            var detail = await provider.GetAsync(
+                id, new CaptureDetailOptions { IncludeFrames = false }, ct);
+
+            return detail is null
+                ? Results.Json(
+                    new CaptureErrorEnvelope($"No captured request with id '{id}'."),
+                    CaptureJson.Options,
+                    statusCode: StatusCodes.Status404NotFound)
+                : Results.Json(CaptureExport.Export(detail, format), CaptureJson.Options);
+        });
+
+        // The one route here that does something. POST, and gated again inside the provider on
+        // Inspector:Agent:AllowReplay — reading traffic and re-sending it are separate decisions.
+        ep.MapPost("/api/agent/replay", async (
+            CaptureReplayRequest body,
+            IMcpCaptureProvider provider,
+            CancellationToken ct) =>
+        {
+            var result = await provider.ReplayAsync(body, ct);
+            return Results.Json(result, CaptureJson.Options);
+        });
+
         // Long-poll. Deliberately a GET with no side effects: it changes nothing, it just
         // declines to answer until something happens.
         ep.MapGet("/api/agent/wait", async (

@@ -84,6 +84,10 @@ public sealed record CaptureErrorEnvelope(string Error, string? Hint = null);
 [JsonSerializable(typeof(CaptureWaitEnvelope))]
 [JsonSerializable(typeof(CaptureErrorEnvelope))]
 [JsonSerializable(typeof(CaptureDiffEnvelope))]
+[JsonSerializable(typeof(CaptureReplayRequest))]
+[JsonSerializable(typeof(CaptureReplayEnvelope))]
+[JsonSerializable(typeof(CaptureExportEnvelope))]
+[JsonSerializable(typeof(CaptureSearchEnvelope))]
 [JsonSerializable(typeof(CapturedRequestSummary))]
 [JsonSerializable(typeof(CapturedRequestDetail))]
 public sealed partial class CaptureJsonContext : JsonSerializerContext;
@@ -123,4 +127,12 @@ public static class CaptureJson
         => JsonSerializer.Serialize(new CaptureErrorEnvelope(error, hint), Options);
 
     public static string Diff(CaptureDiffEnvelope diff) => JsonSerializer.Serialize(diff, Options);
+
+    public static string Replay(CaptureReplayEnvelope replay) => JsonSerializer.Serialize(replay, Options);
+
+    public static string Export(CaptureExportEnvelope export) => JsonSerializer.Serialize(export, Options);
+
+    public static string Search(IReadOnlyList<CaptureSearchHit> hits)
+        => JsonSerializer.Serialize(
+            new CaptureSearchEnvelope(CaptureTrust.Notice, hits.Count, hits), Options);
 }

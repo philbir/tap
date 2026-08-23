@@ -164,7 +164,13 @@ public static class TapInspectorHost
             new StoreCaptureProvider(
                 sp.GetRequiredService<IRequestStore>(),
                 agentOptions,
-                sp.GetRequiredService<AgentActivity>()));
+                sp.GetRequiredService<AgentActivity>(),
+                agentOptions.AllowReplay
+                    ? new CaptureReplayer(
+                        sp.GetRequiredService<IHttpClientFactory>(),
+                        sp.GetRequiredService<IRequestStore>(),
+                        options.ProxyPort)
+                    : null));
 
         if (agentOptions.Enabled)
         {

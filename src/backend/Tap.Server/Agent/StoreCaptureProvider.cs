@@ -19,7 +19,10 @@ namespace Tap.Server.Agent;
 /// working.</para>
 /// </summary>
 public sealed class StoreCaptureProvider(
-    IRequestStore store, InspectorAgentOptions options, AgentActivity activity)
+    IRequestStore store,
+    InspectorAgentOptions options,
+    AgentActivity activity,
+    CaptureReplayer? replayer = null)
     : IMcpCaptureProvider
 {
     private readonly CaptureRedactor _redactor = new(options.ToRedactionOptions());
@@ -130,5 +133,59 @@ public sealed class StoreCaptureProvider(
         return unsettled is not null
             ? CaptureWaitEnvelope.Found(unsettled)
             : CaptureWaitEnvelope.TimedOut(timeout);
+    }
+
+    public async Task<CaptureReplayEnvelope> ReplayAsync(
+        CaptureReplayRequest request, CancellationToken cancellationToken)
+    {
+        Attach();
+
+        if (!options.AllowReplay || replayer is null)
+        {
+            return CaptureReplayEnvelope.Refused(
+                "Replay is off. Reading captured traffic and re-sending it are separate " +
+                "decisions: set Inspector__Agent__AllowReplay=true, or call " +
+                ".WithAgentAccess(allowReplay: true) on the tap in your AppHost.");
+        }
+
+        if (!Guid.TryParse(request.Id, out var recordId))
+        {
+            return CaptureReplayEnvelope.Refused($"'{request.Id}' is not a request id.");
+        }
+
+        var record = store.GetAll().FirstOrDefault(r => r.Id == recordId);
+        if (record is null || !options.AllowsHost(record.Host))
+        {
+            return CaptureReplayEnvelope.Refused($"No captured request with id '{request.Id}'.");
+        }
+
+        return await replayer.ReplayAsync(record, request, cancellationToken);
+    }
+
+    public Task<IReadOnlyList<CaptureSearchHit>> SearchAsync(
+        string term, CaptureQuery query, CancellationToken cancellationToken)
+    {
+        var floor = Attach();
+        var hits = new List<CaptureSearchHit>();
+
+        if (string.IsNullOrWhiteSpace(term)) return Task.FromResult<IReadOnlyList<CaptureSearchHit>>(hits);
+
+        // Details, not summaries: the term is usually in a body. Every one of them is redacted
+        // first, which is what keeps the search from being an oracle over hidden values.
+        var detailOptions = new CaptureDetailOptions { IncludeFrames = false };
+
+        foreach (var record in store.GetAll().OrderByDescending(r => r.Sequence))
+        {
+            if (!options.AllowsHost(record.Host)) continue;
+            if (record.Sequence <= floor) continue;
+
+            var detail = CaptureProjection.Describe(record, _redactor, detailOptions);
+            if (!query.Matches(detail.Summary)) continue;
+
+            if (CaptureSearch.Find(detail, term) is { } hit) hits.Add(hit);
+            if (hits.Count >= query.Limit) break;
+        }
+
+        return Task.FromResult<IReadOnlyList<CaptureSearchHit>>(hits);
     }
 }

@@ -103,7 +103,13 @@ from the UI are the same computation. Two consequences to respect when editing:
   The handle is published on `ApplicationStarted`, never before — writing it at build time made a
   bind failure advertise a port the process never owned. `/api/agent-status` is deliberately
   *outside* the gate: it feeds the UI's agent chip, and hiding the visibility of access behind the
-  accessor's own credential would be backwards.
+  accessor's own credential would be backwards. Writes are gated again: `replay_request` needs
+  `Inspector:Agent:AllowReplay` on top of `Enabled`, and its destination is not editable
+  (relative path only, `Host`/`X-Forwarded-Host`/`Forwarded` refused) because a replay carries
+  the captured credential. `search_requests` matches the **redacted** projection only — matching
+  raw would make it an oracle over masked values. The `tap-inspector` skill lives in
+  `.claude/skills/`; `tap mcp` needs no arguments, so registration is three lines of JSON and
+  there is deliberately no `tap agent init`.
 
 The rest of the repo:
 

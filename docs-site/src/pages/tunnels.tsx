@@ -60,6 +60,9 @@ const docs: DocSection[] = [
         <CodeBlock title="Aspire: standalone inspector" code={commands.standalone} />
         <CodeBlock title="Aspire: quick public tunnel" code={commands.quick} />
         <CodeBlock title="Aspire: Tailscale Serve" code={commands.tailscaleServe} />
+        <CodeBlock title="CLI: hand the traffic to an agent" code={commands.cliAgent} />
+        <CodeBlock title="Aspire: agent access" code={commands.agentAspire} />
+        <CodeBlock title="Register the MCP server" code={commands.agentMcpConfig} />
       </div>
     ),
   },

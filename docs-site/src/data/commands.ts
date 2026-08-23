@@ -30,6 +30,19 @@ tap run http://localhost:3000 --tailscale --docker`,
   --auth-oidc-authority "https://issuer.example.com" \\
   --auth-oidc-client-id "$OIDC_CLIENT_ID" \\
   --auth-oidc-client-secret "$OIDC_CLIENT_SECRET"`,
+  cliAgent: `# Off by default. Turn it on, then point an agent at it.
+Inspector__Agent__Enabled=true tap run http://localhost:3000
+
+tap mcp   # finds the inspector and authenticates itself`,
+  agentAspire: `var tap = builder.AddTap<Projects.Tap_Server>("tap")
+    .WithAgentAccess(allowReplay: true);
+
+api.WithTap(tap);`,
+  agentMcpConfig: `{
+  "mcpServers": {
+    "tap-inspector": { "command": "tap", "args": ["mcp"] }
+  }
+}`,
   standalone: `using Aspire.Hosting;
 
 var builder = DistributedApplication.CreateBuilder(args);

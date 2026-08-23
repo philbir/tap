@@ -40,6 +40,11 @@ export const tunnelFeatures: Feature[] = [
     text: "Keep the UI local, default Tailscale to tailnet-only Serve, put auth on public proxy traffic, and combine header, CIDR, country, and OIDC checks.",
     glyph: "S",
   },
+  {
+    title: "Hand the traffic to your agent",
+    text: "Opt in with .WithAgentAccess() and a coding agent can list, diff, search, replay, and wait for captured requests over MCP — reading a redacted view where credentials are described rather than shown. A JWT keeps its claims and loses its signature, cookies are masked one at a time, and matching fingerprints let it tell two tokens apart without seeing either. There is no way for it to ask for the real value; you still see everything in the inspector.",
+    glyph: "G",
+  },
 ];
 
 export const studioFeatures: Feature[] = [

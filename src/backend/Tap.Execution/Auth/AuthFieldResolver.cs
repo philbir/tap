@@ -8,12 +8,11 @@ namespace Tap.Execution.Auth;
 /// <summary>
 /// Expands <c>{{var}}</c> + <c>{{provider:name}}</c> references inside auth-profile fields.
 /// An auth profile isn't bound to a request, so the cascade here is the renderer's minus the
-/// request layer: workspace &lt; collection &lt; stage &lt; env. The collection/stage layers
-/// are only populated for a profile that lives under <c>collections/&lt;slug&gt;/</c> — that's
-/// the whole point of putting one there, so its endpoints and client ids can come from the
-/// collection's (or the active stage's) variables. Workspace-scoped profiles under
-/// <c>auth/</c> see workspace &lt; env exactly as before. The provider registry is consulted
-/// for anything not in the cascade.
+/// request layer: workspace &lt; collection &lt; env. The collection layer is only populated
+/// for a profile that lives under <c>collections/&lt;slug&gt;/</c> — that's the whole point of
+/// putting one there, so its endpoints and client ids can come from the collection's (or the
+/// active environment's) variables. Workspace-scoped profiles under <c>auth/</c> see
+/// workspace &lt; env. The provider registry is consulted for anything not in the cascade.
 ///
 /// Without this pass, a tokenUrl like <c>http://{{DEMO_API_URL}}/connect/token</c> would
 /// be sent verbatim and the runner would 500 with an invalid-URI.
@@ -39,12 +38,11 @@ public sealed class AuthFieldResolver
     {
         _registry = registry;
 
-        // workspace < collection < stage < env. Skipped nulls so an unset value doesn't
+        // workspace < collection < env. Skipped nulls so an unset value doesn't
         // write the literal "null".
         var cascade = new Dictionary<string, string>(StringComparer.Ordinal);
         if (workspace.Manifest is not null) Merge(cascade, workspace.Manifest.Vars);
         if (context.Collection is not null) Merge(cascade, context.Collection.Vars);
-        if (context.Stage is not null) Merge(cascade, context.Stage.Vars);
         if (context.Env is not null) Merge(cascade, context.Env.Vars);
         _cascade = cascade;
         _declared = new HashSet<string>(cascade.Keys, StringComparer.Ordinal);

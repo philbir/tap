@@ -5,7 +5,7 @@ namespace Tap.Workspace.Model;
 /// (<c>*.req.tap</c>, <c>*.auth.tap</c>, <c>*.env.tap</c>, <c>*.flow.tap</c>, <c>*.test.tap</c>,
 /// <c>_collection.tap</c>, <c>workspace.tap</c>); the <c>kind:</c> frontmatter field must agree with the
 /// suffix or parsing fails with <see cref="WorkspaceErrorCode.E_KIND_MISMATCH"/>. Collections own
-/// a baseUrl, optional stages, and default headers/auth — they replace the older <c>api</c> kind
+/// a baseUrl and default headers/auth — they replace the older <c>api</c> kind
 /// that used to live in a separate <c>apis/</c> directory.
 /// </summary>
 public enum WorkspaceKind

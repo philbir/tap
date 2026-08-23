@@ -46,8 +46,10 @@ tap-studio send "Get order"                # or by name, like any other request
 Targets are named by workspace-relative path, frontmatter `name:`, or filename stem.
 `describe` tells you what a request will send (method, URL template, headers, referenced
 `{{variables}}`), which auth profile it rides on (name + type only — fields are never
-shown), and its assertions. Override variables per run with `--var name=value`, pick an
-environment with `--env <name>`, a collection stage with `--stage <name>`.
+shown), and its assertions. Override variables per run with `--var name=value`, and pick an
+environment with `--env <name>` — either a global one or one assigned to the request's
+collection (`describe` lists which apply). An environment can move the base URL, so it is
+the switch between dev / uat / prod.
 
 ## Ad-hoc requests: `call`
 

@@ -108,7 +108,6 @@ public sealed class HistoryRecorder(IHistoryStores stores, ILogger<HistoryRecord
             RequestName = file?.Name,
             Collection = CollectionSlug(rendered.Metadata.SourceRequestPath),
             Env = rendered.Metadata.EnvPath,
-            Stage = rendered.Metadata.StageName,
             Redacted = redact,
             Request = new HistoryRequest(
                 rendered.Method, requestUrl, requestHeaders, requestBody, rendered.Protocol.ToString().ToLowerInvariant()),

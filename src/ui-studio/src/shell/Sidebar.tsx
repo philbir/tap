@@ -11,7 +11,7 @@ import {
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
+import type { HistorySummary, TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { DuplicateRequestDialog } from './DuplicateRequestDialog'
@@ -54,6 +54,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   const closeTab = useTapStore((s) => s.closeTab)
   const openTab = useTapStore((s) => s.openTab)
   const renameTab = useTapStore((s) => s.renameTab)
+  const setTabView = useTapStore((s) => s.setTabView)
   const hasGit = useTapStore((s) =>
     s.knownWorkspaces.some((w) => w.isActive && w.git !== null))
   const filterTabs = useMemo(
@@ -99,8 +100,10 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   const requestsLookup = useMemo(() => collectRequestRows(requestsView, onOpenFile), [requestsView, onOpenFile])
 
   /** Opens a request by its workspace-relative path — what the history timeline has to work
-   *  with, since an entry records where the request lived, not the tree node it came from. */
-  const openRequestByPath = useCallback((path: string) => {
+   *  with, since an entry records where the request lived, not the tree node it came from.
+   *  Reports whether it landed: a path with no node behind it (the file moved, or this is
+   *  another workspace) opens nothing, and callers shouldn't then act as if it had. */
+  const openRequestByPath = useCallback((path: string): boolean => {
     const find = (nodes: TreeNode[]): TreeNode | null => {
       for (const n of nodes) {
         if (n.path === path && n.kind !== 'directory') return n
@@ -110,8 +113,25 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
       return null
     }
     const node = find(tree)
-    if (node) onOpenFile(node)
+    if (!node) return false
+    onOpenFile(node)
+    return true
   }, [tree, onOpenFile])
+
+  /**
+   * Follows a timeline row all the way to what it names: the request's tab, its History tab,
+   * and that entry open in the response pane.
+   *
+   * <p>The selection travels as tab view state rather than as a call into the editor, because
+   * the editor for that tab isn't mounted yet — only the active tab's is. The editor picks the
+   * entry up when it mounts, which also means the choice survives a trip to another tab.</p>
+   */
+  const openHistoryEntry = useCallback((row: HistorySummary) => {
+    if (!row.requestPath) return
+    if (!openRequestByPath(row.requestPath)) return
+    setTabView(row.requestPath, 'tab', 'history')
+    setTabView(row.requestPath, 'historyEntry', row.id)
+  }, [openRequestByPath, setTabView])
   const requestsPaths = requestsLookup.paths
   const requestsActivePath = useMemo(
     () => activePath ? requestsLookup.realToDisplay.get(activePath) ?? null : null,
@@ -356,7 +376,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         // Its own branch rather than a row source for the shared tree: a timeline is grouped by
         // day and filtered by outcome, which the explorer's search box can't express.
         <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <HistoryView onOpenRequest={openRequestByPath} />
+          <HistoryView onOpenEntry={openHistoryEntry} />
         </Box>
       ) : (
       <>

@@ -74,8 +74,7 @@ public sealed class DescribeCommand : Command<DescribeCommand.Settings>
 
         if (d.Collection is not null)
         {
-            var stages = d.Stages.Count > 0 ? $" · stages: {string.Join(", ", d.Stages)}" : string.Empty;
-            console.MarkupLine($"  [dim]collection:[/] {Markup.Escape(d.Collection)}{Markup.Escape(stages)}");
+            console.MarkupLine($"  [dim]collection:[/] {Markup.Escape(d.Collection)}");
         }
         console.MarkupLine(d.Auth is null
             ? "  [dim]auth:[/] none"

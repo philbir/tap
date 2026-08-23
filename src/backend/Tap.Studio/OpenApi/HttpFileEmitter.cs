@@ -78,7 +78,7 @@ public static class HttpFileEmitter
 
         // The portable fallback for tools that have no idea this file sits in a Tap collection.
         // Inside Tap the collection's baseUrl wins — a file variable is the weakest scope in the
-        // cascade — so the same file follows the selected stage here and still runs elsewhere.
+        // cascade — so the same file follows the selected environment here and still runs elsewhere.
         if (options.PortableBaseUrl is { Length: > 0 } baseUrl)
         {
             sb.Append('\n');

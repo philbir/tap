@@ -171,7 +171,7 @@ public sealed record AuthDetailDto(
     /// <summary>Slug of the collection that owns this profile (it lives under
     /// <c>collections/&lt;slug&gt;/</c>), or null for a workspace-scoped profile under
     /// <c>auth/</c>. A collection-scoped profile resolves its fields against that
-    /// collection's variables and stages.</summary>
+    /// collection's variables and its active environment.</summary>
     string? Collection,
     IReadOnlyDictionary<string, string?> Fields,
     IReadOnlyDictionary<string, string> Headers,
@@ -191,6 +191,9 @@ public sealed record EnvDetailDto(
     IReadOnlyList<string> Tags,
     string Body,
     string Source,
+    /// <summary>The collections this env is assigned to, each with its own overrides. Empty =
+    /// global (selectable everywhere, overriding nothing).</summary>
+    IReadOnlyList<EnvCollectionDto> Collections,
     /// <summary>Provider bare tokens hit first while this env is active (may be an alias).
     /// Null = inherit the workspace/system default.</summary>
     string? DefaultVariableProvider,
@@ -208,25 +211,15 @@ public sealed record CollectionSummaryDto(
     string? Id,
     bool Exists,
     string BaseUrl,
-    /// <summary>Stage names defined on this collection — full stage detail lives on
-    /// CollectionDetailDto.Stages. Empty when the collection has none.</summary>
-    IReadOnlyList<string> StageNames,
-    string? DefaultStage);
-
-/// <summary>One named stage inside a collection. Stage fields override the parent
-/// collection's defaults; variables here override workspace + collection scopes but are
-/// still overridden by env / request scopes.</summary>
-public sealed record CollectionStageDto(
-    string Name,
-    string? BaseUrl,
-    string? DefaultAuth,
-    IReadOnlyDictionary<string, VarSpec> Vars);
+    /// <summary>Paths of the environments scoped to this collection, in listing order. The
+    /// baseUrl chip offers these alongside the global ones. Empty when no env names it.</summary>
+    IReadOnlyList<string> EnvPaths);
 
 /// <summary>Detail view of a collection. <see cref="Slug"/> is the directory name under
 /// <c>collections/</c>; the metadata file lives at
-/// <c>collections/&lt;slug&gt;/_collection.tap</c>. Collections own the baseUrl, optional
-/// stages, default auth/headers, plus their own vars / tags / markdown body — what used
-/// to live on a separate <c>api</c> file.</summary>
+/// <c>collections/&lt;slug&gt;/_collection.tap</c>. Collections own the baseUrl, default
+/// auth/headers, plus their own vars / tags / markdown body — what used to live on a
+/// separate <c>api</c> file. Per-target overrides live on scoped environments.</summary>
 public sealed record CollectionDetailDto(
     string Slug,
     string Name,
@@ -240,8 +233,9 @@ public sealed record CollectionDetailDto(
     IReadOnlyList<string> Tags,
     string Body,
     string Source,
-    IReadOnlyList<CollectionStageDto> Stages,
-    string? DefaultStage,
+    /// <summary>Paths of the environments scoped to this collection — the ones that may
+    /// override its baseUrl and defaultAuth.</summary>
+    IReadOnlyList<string> EnvPaths,
     /// <summary>The collection's <c>agent:</c> option — whether agent surfaces may use it.</summary>
     bool AgentEnabled,
     /// <summary>The collection's own <c>history:</c> keys, or null when it declares none.</summary>
@@ -267,22 +261,10 @@ public sealed record CollectionSpecDto
     /// <summary>Variable names marked secret. Same encoding as <see cref="EnvSpecDto.Secrets"/>.</summary>
     public IReadOnlyList<string>? Secrets { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
-    public IReadOnlyList<CollectionStageSpecDto>? Stages { get; init; }
-    public string? DefaultStage { get; init; }
     /// <summary>The <c>agent:</c> option. Null or true emits nothing (enabled is the
     /// default); false emits <c>agent: false</c>.</summary>
     public bool? AgentEnabled { get; init; }
     public string? Body { get; init; }
-}
-
-public sealed record CollectionStageSpecDto
-{
-    public required string Name { get; init; }
-    public string? BaseUrl { get; init; }
-    public string? DefaultAuth { get; init; }
-    public IReadOnlyDictionary<string, string>? Vars { get; init; }
-    /// <summary>Names of stage-scoped variables marked secret.</summary>
-    public IReadOnlyList<string>? Secrets { get; init; }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -583,16 +565,13 @@ public sealed record OidcDiscoveryDto(
     IReadOnlyList<string> GrantTypesSupported,
     IReadOnlyList<string> CodeChallengeMethodsSupported);
 
-/// <summary>Body for <c>POST /api/auth/execute</c>. <see cref="RequestPath"/> +
-/// <see cref="Stage"/> carry the caller's editing context so a collection-scoped profile
-/// expands against the right stage's variables (and caches its token there); both are
-/// ignored for a workspace-scoped profile. <see cref="Env"/> is the workspace-relative path
-/// of the selected environment — it applies to every profile, and omitting it falls back to
-/// the workspace's <c>defaultEnv</c>.</summary>
+/// <summary>Body for <c>POST /api/auth/execute</c>. <see cref="Env"/> is the
+/// workspace-relative path of the selected environment — the profile expands against its
+/// variables and caches its token there. Omitting it falls back to the workspace's
+/// <c>defaultEnv</c>. Nothing else is needed: the profile's own location decides whether it
+/// also sees a collection's variables.</summary>
 public sealed record AuthExecuteRequestDto(string Path, bool ForceReauthenticate)
 {
-    public string? RequestPath { get; init; }
-    public string? Stage { get; init; }
     public string? Env { get; init; }
 }
 
@@ -625,7 +604,25 @@ public sealed record AuthExecuteResponseDto(
 /// or null for a workspace-scoped one under <c>auth/</c>.</summary>
 public sealed record AuthSummaryDto(string Path, string Name, string? Id, string Type, string? Collection);
 
-public sealed record EnvSummaryDto(string Path, string Name, string? Id);
+/// <summary>Listing row for an environment. <see cref="Collections"/> is empty for a global
+/// env — offered everywhere — and otherwise names the collections it is assigned to, which is
+/// what the request editor filters its picker on.</summary>
+public sealed record EnvSummaryDto(
+    string Path,
+    string Name,
+    string? Id,
+    IReadOnlyList<EnvCollectionDto> Collections);
+
+/// <summary>One collection an environment is assigned to, with what it overrides there.
+/// Carried on the summary so the baseUrl chip can show where each choice points without a
+/// second round trip.</summary>
+public sealed record EnvCollectionDto(
+    string Collection,
+    /// <summary>Base URL override as written, or null to inherit the collection's.</summary>
+    string? BaseUrl,
+    /// <summary>Default-auth override — a path relative to the env file, or <c>id:…</c> —
+    /// or null to inherit the collection's.</summary>
+    string? DefaultAuth);
 
 public sealed record SaveFileDto(string Content);
 
@@ -747,6 +744,10 @@ public sealed record EnvSpecDto
     public IReadOnlyList<string>? Tags { get; init; }
     public string? Body { get; init; }
 
+    /// <summary>Collections to assign this env to, each with its own overrides. Null or empty
+    /// emits nothing and the env stays global.</summary>
+    public IReadOnlyList<EnvCollectionDto>? Collections { get; init; }
+
     /// <summary>Provider bare tokens hit first while this env is active. May name a
     /// provider directly or via <see cref="ProviderAliases"/>. Null/empty = inherit.</summary>
     public string? DefaultVariableProvider { get; init; }
@@ -851,8 +852,7 @@ public sealed record EvaluateAssertsRequestDto(
     IReadOnlyList<AssertSpecDto> Assertions,
     AssertResponseSnapshotDto Response,
     string? Path,
-    string? Env,
-    string? Stage);
+    string? Env);
 
 /// <summary>The captured response an <see cref="EvaluateAssertsRequestDto"/> is checked against.</summary>
 public sealed record AssertResponseSnapshotDto(
@@ -1044,10 +1044,10 @@ public sealed record AiToolCallDto(string Name, string? Summary, bool? Success);
 // -----------------------------------------------------------------------------------------
 
 /// <summary>Context for resolving variables in the editor. All fields optional:
-/// <c>RequestPath</c> drives the request-editor case (workspace → collection → stage → env → request);
-/// <c>CollectionPath</c> drives the collection-editor case (workspace → collection → stage); <c>EnvPath</c> and
-/// <c>Stage</c> override the active env / collection default stage.</summary>
-public sealed record VariableContextDto(string? RequestPath, string? CollectionPath, string? EnvPath, string? Stage);
+/// <c>RequestPath</c> drives the request-editor case (workspace → collection → env → request);
+/// <c>CollectionPath</c> drives the collection-editor case (workspace → collection);
+/// <c>EnvPath</c> overrides the active environment.</summary>
+public sealed record VariableContextDto(string? RequestPath, string? CollectionPath, string? EnvPath);
 
 public sealed record VariableViewDto(
     IReadOnlyList<VariableSetDto> Sets,
@@ -1258,8 +1258,7 @@ public sealed record SaveSystemSettingsDto(
 public sealed record RenderRequestDto(
     string Path,
     string? Env,
-    IReadOnlyDictionary<string, string>? Overrides,
-    string? Stage);
+    IReadOnlyDictionary<string, string>? Overrides);
 
 public sealed record RenderedRequestDto(
     string Method,
@@ -1267,7 +1266,9 @@ public sealed record RenderedRequestDto(
     IReadOnlyDictionary<string, string> Headers,
     string? Body,
     IReadOnlyList<VariableTraceDto> VariablesUsed,
-    string? Stage,
+    /// <summary>Path of the environment that actually applied, or null when none did — a
+    /// scoped env out of range for this request's collection drops out of the render.</summary>
+    string? Env,
     string Protocol);
 
 public sealed record VariableTraceDto(string VariableProvider, string Name, bool Resolved, bool IsSecret, double DurationMs);
@@ -1283,7 +1284,6 @@ public sealed record ExecuteRequestDto(
     string Path,
     string? Env,
     IReadOnlyDictionary<string, string>? Overrides,
-    string? Stage,
     RequestSpecDto? Spec = null,
     string? Source = null);
 
@@ -1300,7 +1300,8 @@ public sealed record ExecutionResultDto(
     long ResponseBodyBytes,
     double DurationMs,
     IReadOnlyList<VariableTraceDto> VariablesUsed,
-    string? Stage,
+    /// <summary>Path of the environment the request actually resolved under, or null.</summary>
+    string? Env,
     string? Error,
     string Protocol,
     /// <summary>One entry per declared assertion, in file order. Empty when the request
@@ -1399,7 +1400,8 @@ public sealed record ExecuteStreamDoneDto(
     double DurationMs,
     long ResponseBodyBytes,
     IReadOnlyList<VariableTraceDto> VariablesUsed,
-    string? Stage,
+    /// <summary>Path of the environment the request actually resolved under, or null.</summary>
+    string? Env,
     string? Error,
     /// <summary>Assertion results, evaluated server-side once the body is complete. Rides on
     /// <c>done</c> rather than its own event so the UI paints the verdict in the same frame
@@ -1409,7 +1411,7 @@ public sealed record ExecuteStreamDoneDto(
 
 public sealed record ExecuteStreamErrorDto(string Message);
 
-public sealed record GraphQLSchemaRequestDto(string Path, string? Env, string? Stage, string Mode);
+public sealed record GraphQLSchemaRequestDto(string Path, string? Env, string Mode);
 
 public sealed record GraphQLSchemaResponseDto(string? Schema, string? Error);
 
@@ -1460,10 +1462,6 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(TestRunStartDto))]
 [JsonSerializable(typeof(TestRunStepEventDto))]
 [JsonSerializable(typeof(TestRunResultDto))]
-[JsonSerializable(typeof(CollectionStageDto))]
-[JsonSerializable(typeof(IReadOnlyList<CollectionStageDto>))]
-[JsonSerializable(typeof(CollectionStageSpecDto))]
-[JsonSerializable(typeof(IReadOnlyList<CollectionStageSpecDto>))]
 [JsonSerializable(typeof(KnownWorkspaceDto))]
 [JsonSerializable(typeof(GitInfoDto))]
 [JsonSerializable(typeof(GitRemoteDto))]
@@ -1473,6 +1471,8 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(IReadOnlyList<GitFileChangeDto>))]
 [JsonSerializable(typeof(GitBranchDto))]
 [JsonSerializable(typeof(IReadOnlyList<GitBranchDto>))]
+[JsonSerializable(typeof(EnvCollectionDto))]
+[JsonSerializable(typeof(IReadOnlyList<EnvCollectionDto>))]
 [JsonSerializable(typeof(GitStagePathsDto))]
 [JsonSerializable(typeof(GitCommitRequestDto))]
 [JsonSerializable(typeof(GitCommitResultDto))]

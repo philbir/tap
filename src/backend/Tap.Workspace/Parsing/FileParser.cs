@@ -46,7 +46,7 @@ public static class FileParser
         {
             WorkspaceKind.Request => ParseRequest(common, split.Frontmatter, relativePath),
             WorkspaceKind.Auth => ParseAuth(common, split.Frontmatter, relativePath),
-            WorkspaceKind.Env => ParseEnv(common, split.Frontmatter),
+            WorkspaceKind.Env => ParseEnv(common, split.Frontmatter, relativePath),
             WorkspaceKind.Collection => ParseCollection(common, split.Frontmatter, relativePath),
             WorkspaceKind.Workspace => ParseWorkspace(common, split.Frontmatter),
             WorkspaceKind.Flow => ParseFlow(common, split.Frontmatter, relativePath),
@@ -105,41 +105,32 @@ public static class FileParser
         };
     }
 
-    private static IReadOnlyList<CollectionStage> ParseStages(YamlMappingNode fm, string relativePath)
+    /// <summary>
+    /// Rejects the pre-0.8.0 <c>stages:</c> / <c>defaultStage:</c> keys. Stages and environments
+    /// answered the same question — "the same requests, pointed somewhere else" — so stages were
+    /// removed, and an environment's assignment to a collection grew the two fields a stage had
+    /// that an env lacked (<c>baseUrl</c>, <c>defaultAuth</c>). Failing loudly is the point:
+    /// silently dropping the block would leave a workspace sending prod traffic at a dev host
+    /// with nothing on screen to say why.
+    /// </summary>
+    private static void RejectStages(YamlMappingNode fm, string relativePath)
     {
-        if (!fm.Children.TryGetValue(new YamlScalarNode("stages"), out var node) || node is not YamlSequenceNode seq)
-            return [];
+        var key = fm.Children.ContainsKey(new YamlScalarNode("stages")) ? "stages"
+            : fm.Children.ContainsKey(new YamlScalarNode("defaultStage")) ? "defaultStage"
+            : null;
+        if (key is null) return;
 
-        var list = new List<CollectionStage>(seq.Children.Count);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var entry in seq.Children)
-        {
-            if (entry is not YamlMappingNode stageMap) continue;
-
-            var stageName = stageMap.String("name") ?? throw new WorkspaceParseException(new WorkspaceError(
-                WorkspaceErrorCode.E_UNKNOWN_FIELD,
-                "Each entry under 'stages:' requires a 'name'.",
-                relativePath));
-
-            if (!seen.Add(stageName))
-            {
-                throw new WorkspaceParseException(new WorkspaceError(
-                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
-                    $"Duplicate stage name '{stageName}'. Stage names must be unique within a collection.",
-                    relativePath));
-            }
-
-            list.Add(new CollectionStage
-            {
-                Name = stageName,
-                BaseUrl = stageMap.String("baseUrl"),
-                DefaultAuth = stageMap.Ref("defaultAuth"),
-                Vars = stageMap.VarSpecMap("vars"),
-            });
-        }
-
-        return list;
+        throw new WorkspaceParseException(new WorkspaceError(
+            WorkspaceErrorCode.E_UNKNOWN_FIELD,
+            $"'{key}:' was removed — collection stages are now environments. Move each stage into "
+            + "its own '*.env.tap' file whose 'collections:' entry names this collection and "
+            + "carries the stage's baseUrl and defaultAuth, with the stage's vars at the "
+            + "environment's top level:\n"
+            + "  collections:\n"
+            + "  - collection: <slug>\n"
+            + "    baseUrl: <the stage's baseUrl>\n"
+            + $"Then delete '{key}:' from this file.",
+            relativePath));
     }
 
     private static AuthFile ParseAuth(Common c, YamlMappingNode fm, string relativePath)
@@ -182,7 +173,84 @@ public static class FileParser
         };
     }
 
-    private static EnvFile ParseEnv(Common c, YamlMappingNode fm)
+    /// <summary>
+    /// Parses an env's <c>collections:</c> assignments. Two spellings, because most assignments
+    /// carry no overrides and a list of bare slugs is the honest way to write that:
+    ///
+    /// <code>
+    /// collections:
+    /// - billing                                  # bare — variables only
+    /// - collection: orders                       # with overrides
+    ///   baseUrl: https://orders-uat.acme.test
+    ///   defaultAuth: ../../auth/uat.auth.tap
+    /// </code>
+    /// </summary>
+    private static IReadOnlyList<EnvCollectionBinding> ParseEnvCollections(
+        YamlMappingNode fm, string relativePath)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("collections"), out var node)) return [];
+
+        if (node is not YamlSequenceNode seq)
+        {
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                "'collections:' must be a list of collection slugs, optionally as mappings "
+                + "carrying 'baseUrl' / 'defaultAuth' for that collection.",
+                relativePath));
+        }
+
+        var list = new List<EnvCollectionBinding>(seq.Children.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in seq.Children)
+        {
+            var binding = entry switch
+            {
+                YamlScalarNode { Value: { Length: > 0 } slug } => new EnvCollectionBinding { Collection = slug },
+                YamlMappingNode map => new EnvCollectionBinding
+                {
+                    Collection = map.String("collection") ?? throw new WorkspaceParseException(new WorkspaceError(
+                        WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                        "Each mapping under 'collections:' requires a 'collection' slug.",
+                        relativePath)),
+                    BaseUrl = map.String("baseUrl"),
+                    DefaultAuth = map.Ref("defaultAuth"),
+                },
+                _ => throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    "Entries under 'collections:' must be a slug or a mapping with a 'collection' key.",
+                    relativePath)),
+            };
+
+            // A path here is the likely mistake — the field names collections the way the
+            // directory does, not the way a ref does.
+            if (binding.Collection.Contains('/') || binding.Collection.Contains('\\'))
+            {
+                var guess = binding.Collection.Split('/', '\\').LastOrDefault(x => x.Length > 0 && !x.Contains('.'))
+                            ?? binding.Collection;
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"'collections:' takes collection slugs, not paths — write '{guess}' "
+                    + "rather than a path to the collection file.",
+                    relativePath));
+            }
+
+            if (!seen.Add(binding.Collection))
+            {
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"Collection '{binding.Collection}' is assigned twice. One assignment per collection — "
+                    + "its baseUrl and defaultAuth belong on that single entry.",
+                    relativePath));
+            }
+
+            list.Add(binding);
+        }
+
+        return list;
+    }
+
+    private static EnvFile ParseEnv(Common c, YamlMappingNode fm, string relativePath)
     {
         return new EnvFile
         {
@@ -195,6 +263,9 @@ public static class FileParser
             // Env vars use the same VarSpec shape as workspace/collection/request vars
             // so the `secret: true` flag is uniformly available across every scope.
             Vars = fm.VarSpecMap("vars"),
+            // The assignments, each carrying the overrides for its own collection. An empty
+            // list is a global env — offered everywhere, overriding nothing.
+            Collections = ParseEnvCollections(fm, relativePath),
             // Per-env provider binding: the env can pick which provider bare tokens hit
             // (defaultVariableProvider), re-point stable alias prefixes at concrete
             // providers (providerAliases), and forbid fall-through past its default
@@ -207,15 +278,7 @@ public static class FileParser
 
     private static CollectionFile ParseCollection(Common c, YamlMappingNode fm, string relativePath)
     {
-        var stages = ParseStages(fm, relativePath);
-        var defaultStage = fm.String("defaultStage");
-        if (defaultStage is not null && !stages.Any(s => string.Equals(s.Name, defaultStage, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new WorkspaceParseException(new WorkspaceError(
-                WorkspaceErrorCode.E_UNKNOWN_FIELD,
-                $"'defaultStage: {defaultStage}' does not match any defined stage.",
-                relativePath));
-        }
+        RejectStages(fm, relativePath);
 
         return new CollectionFile
         {
@@ -230,8 +293,6 @@ public static class FileParser
             DefaultHeaders = fm.StringMap("defaultHeaders"),
             Transport = ParseTransport(fm, relativePath),
             Vars = fm.VarSpecMap("vars"),
-            Stages = stages,
-            DefaultStage = defaultStage,
             Agent = ParseAgent(fm, relativePath),
             History = ParseHistory(fm, relativePath),
         };

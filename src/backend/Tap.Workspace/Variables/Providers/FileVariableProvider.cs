@@ -29,7 +29,7 @@ namespace Tap.Workspace.Variables.Providers;
 /// stays out of the per-scope file cascade.</para>
 ///
 /// <para>This provider intentionally does NOT touch per-scope <c>vars:</c> blocks (in
-/// workspace/api/stage/env/request files). Those continue to be edited through the
+/// workspace/collection/env/request files). Those continue to be edited through the
 /// existing scope-specific file editors. The file provider is the durable place for
 /// "workspace-wide" variables that don't belong to one scope.</para>
 /// </summary>

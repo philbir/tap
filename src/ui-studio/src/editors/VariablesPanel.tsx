@@ -12,9 +12,9 @@ import { useTapStore } from '../store'
 import { useVariableView } from '../workspace/useVariables'
 import { ProviderTypeIcon } from './providerMeta'
 
-const SCOPE_ORDER: VariableScope[] = ['provider', 'portable', 'workspace', 'collection', 'stage', 'env', 'request']
+const SCOPE_ORDER: VariableScope[] = ['provider', 'portable', 'workspace', 'collection', 'env', 'request']
 
-// The first cascade stage is the configured-provider layer (system.json, azkv, file,
+// The first cascade tier is the configured-provider layer (system.json, azkv, file,
 // env, …). Providers can be declared at system OR workspace scope, so the tier is
 // labelled PROVIDERS and its detail view groups variables per provider with an origin
 // badge — a flat "SYSTEM" pile hid which vault a value came from.
@@ -23,7 +23,6 @@ const SCOPE_LABEL: Record<VariableScope, string> = {
   portable: 'FILE',
   workspace: 'WORKSPACE',
   collection: 'COLLECTION',
-  stage: 'STAGE',
   env: 'ENV',
   request: 'REQUEST',
 }
@@ -33,7 +32,6 @@ const SCOPE_COLOR: Record<VariableScope, string> = {
   portable: 'gray',
   workspace: 'tap',
   collection: 'indigo',
-  stage: 'cyan',
   env: 'grape',
   request: 'orange',
 }
@@ -45,7 +43,7 @@ interface Props {
 }
 
 /**
- * Modal that shows the scope cascade (WORKSPACE → API → STAGE → ENV → REQUEST →
+ * Modal that shows the scope cascade (WORKSPACE → COLLECTION → ENV → REQUEST →
  * Result) for the active editor context, plus a "Test it" pane that runs a template through
  * the server's `VariableCompiler` and displays the rendered output + replacement annotations.
  *

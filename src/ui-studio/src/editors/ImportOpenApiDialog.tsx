@@ -442,7 +442,7 @@ export function ImportOpenApiDialog({ open, onOpenChange, onImported, initialSlu
               <Select
                 label="Base URL"
                 description={doc.servers.length > 1
-                  ? 'The rest become stages you can switch between'
+                  ? 'The rest become environments scoped to this collection'
                   : 'From the document’s servers list'}
                 data={doc.servers.map((s) => ({
                   value: s.url,

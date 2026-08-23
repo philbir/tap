@@ -163,7 +163,7 @@ public static class AspireWorkspaceScaffold
     /// work here, because only Tap knows to prepend the collection's base URL — so the file
     /// declares <c>@baseUrl</c> and builds the request line from it. Visual Studio and REST
     /// Client resolve that declaration; Tap overrides it with the collection's (and the selected
-    /// stage's), because a portable variable is the weakest scope in the cascade.</para>
+    /// environment's), because a portable variable is the weakest scope in the cascade.</para>
     /// </summary>
     private static string StarterRequest(string api) =>
         // Not an interpolated string: the template is mostly {{double braces}}, which every
@@ -177,7 +177,7 @@ public static class AspireWorkspaceScaffold
         #
         # @baseUrl below is the fallback for those tools, which have no idea this file sits in
         # a Tap collection. Inside Tap the collection's baseUrl ({{aspire:%API%}}) wins, so the
-        # request keeps working whatever port Aspire allocates — and switching stage moves it.
+        # request keeps working whatever port Aspire allocates — and switching environment moves it.
         @baseUrl = http://localhost:5000
 
         ### Ping

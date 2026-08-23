@@ -7,7 +7,7 @@ namespace Tap.Workspace.Rendering;
 /// Builds the layered + merged variable view for a given editor context. There are two
 /// flavors of layer:
 /// <list type="bullet">
-///   <item><b>Cascade layers</b> — workspace/collection/stage/env/request file vars.
+///   <item><b>Cascade layers</b> — workspace/collection/env/request file vars.
 ///     These come out of the loaded workspace and override one another in scope order.</item>
 ///   <item><b>Provider layers</b> — one per registered <see cref="IVariableProvider"/> (env,
 ///     file, azkv, …). Asynchronously enumerated; the UI sees provider name and isSecret per
@@ -28,8 +28,7 @@ public static class VariableViewBuilder
         CancellationToken ct,
         string? requestPath = null,
         string? collectionPath = null,
-        string? envPath = null,
-        string? stageName = null)
+        string? envPath = null)
     {
         var sets = new List<VariableSet>();
 
@@ -97,12 +96,6 @@ public static class VariableViewBuilder
         {
             var label = collection.Name ?? Path.GetFileName(Path.GetDirectoryName(collection.RelativePath) ?? string.Empty);
             sets.Add(BuildSet(VariableScope.Collection, collection.RelativePath, label, collection.Vars));
-
-            var stage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
-            if (stage is not null)
-            {
-                sets.Add(BuildSet(VariableScope.Stage, collection.RelativePath + "#" + stage.Name, stage.Name, stage.Vars));
-            }
         }
 
         EnvFile? env = null;
@@ -114,6 +107,9 @@ public static class VariableViewBuilder
         {
             env = workspace.Resolve(defaultRef) as EnvFile;
         }
+        // Same scope test the renderer applies: an env confined to other collections does not
+        // contribute here either, or the panel would report a winner the send would never use.
+        if (env is not null && !env.AppliesTo(SlugOf(collection))) env = null;
         if (env is not null)
         {
             sets.Add(BuildSet(VariableScope.Env, env.RelativePath, env.Name ?? Path.GetFileNameWithoutExtension(env.RelativePath), env.Vars));
@@ -135,8 +131,8 @@ public static class VariableViewBuilder
         if (collection is not null && !sets.Any(s => s.Scope is not (VariableScope.Provider or VariableScope.Portable)
                                                   && s.Variables.Any(v => v.Name == WorkspaceRenderer.BaseUrlVariable)))
         {
-            var activeStage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
-            var template = !string.IsNullOrWhiteSpace(activeStage?.BaseUrl) ? activeStage!.BaseUrl : collection.BaseUrl;
+            var overridden = env?.BindingFor(SlugOf(collection))?.BaseUrl;
+            var template = !string.IsNullOrWhiteSpace(overridden) ? overridden : collection.BaseUrl;
             if (!string.IsNullOrWhiteSpace(template))
             {
                 sets.Add(new VariableSet(
@@ -178,7 +174,7 @@ public static class VariableViewBuilder
         }
 
         // Cascade layers override providers, most specific last (list order is already
-        // workspace → collection → stage → env → request).
+        // workspace → collection → env → request).
         foreach (var set in sets.Where(s => s.Scope != VariableScope.Provider))
         {
             foreach (var v in set.Variables) merged[v.Name] = v;
@@ -186,6 +182,9 @@ public static class VariableViewBuilder
 
         return new VariableView(sets, [.. merged.Values]);
     }
+
+    private static string? SlugOf(CollectionFile? collection)
+        => collection is null ? null : CollectionLocator.SlugForFile(collection.RelativePath);
 
     private static VariableSet BuildSet(VariableScope scope, string sourcePath, string label, IReadOnlyDictionary<string, VarSpec> vars)
     {
@@ -216,7 +215,6 @@ public enum VariableScope
     Portable,
     Workspace,
     Collection,
-    Stage,
     Env,
     Request,
 }

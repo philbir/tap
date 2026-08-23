@@ -1,21 +1,26 @@
 import {
-  ActionIcon, Badge, Box, Button, Checkbox, Code, Group, NumberInput, Paper, ScrollArea, Select, Stack, Switch, Tabs, TagsInput, Text, TextInput,
+  ActionIcon, Alert, Badge, Box, Button, Checkbox, Code, Group, NumberInput, Paper, Select, Stack,
+  Switch, Tabs, TagsInput, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
   IconApi, IconCode, IconFileCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRefresh, IconRocket,
-  IconShieldCheck, IconTrash, IconVariable, IconWorld,
+  IconShieldCheck, IconVariable, IconWorld, IconX,
 } from '@tabler/icons-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
+import { envBindingFor } from '../api/types'
 import type {
-  AuthSummary, CollectionDetail, CollectionSpec, CollectionStageSpec, CollectionSummary, OpenApiLink, VariableContext,
+  AuthSummary, CollectionDetail, CollectionSpec, CollectionSummary, EnvCollection, EnvSummary,
+  OpenApiLink, VariableContext,
 } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
+import { AdaptiveTabsList } from './AdaptiveTabsList'
 import { authSelectGroups } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
+import { saveEnvAssignment } from './envSpec'
 import { HistorySettings } from './HistorySettings'
 import { ImportOpenApiDialog } from './ImportOpenApiDialog'
 import { KvTable, type KvRow } from './KvTable'
@@ -26,7 +31,7 @@ import { restoreDraft, usePublishDraft } from './useDraft'
 import { useTabView } from './useTabView'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
-import { COLLECTION_FILE } from '../shell/tapFiles'
+import { COLLECTION_FILE, fileNameFor } from '../shell/tapFiles'
 
 interface Props {
   /** Workspace-relative path of the collection directory (e.g. `collections/demo`). */
@@ -34,17 +39,33 @@ interface Props {
 }
 
 /** Collection editor. The on-disk metadata file lives at `<path>/_collection.tap`; the
- *  collection owns the base URL, optional stages, default auth + headers, plus vars/tags.
- *  Requests living under the collection inherit all of it. */
+ *  collection owns the base URL, default auth + headers, plus vars/tags. Requests living
+ *  under the collection inherit all of it.
+ *
+ *  Per-target overrides — what `stages:` used to hold — are environments scoped to this
+ *  collection. They are separate files, so the Environments tab lists them rather than
+ *  editing them inline. */
 export function CollectionEditor({ path }: Props) {
   const generation = useTapStore((s) => s.generation)
   const reload = useTapStore((s) => s.reload)
   const auths = useTapStore((s) => s.auths)
   const collections = useTapStore((s) => s.collections)
+  const envs = useTapStore((s) => s.envs)
+  const openTab = useTapStore((s) => s.openTab)
   const tagSuggestions = useTagDictionary()
   const slug = useMemo(() => path.split('/').pop() ?? path, [path])
   // Auth refs in the collection file are relative to `collections/<slug>/_collection.tap`.
   const collectionFilePath = `${path}/${COLLECTION_FILE}`
+  // Split by whether the env holds an assignment to this collection. Assigned ones are what
+  // this tab edits; the rest — globals and other collections' — are what it can assign.
+  const assignedEnvs = useMemo(
+    () => envs.filter((e) => envBindingFor(e, slug) !== null),
+    [envs, slug],
+  )
+  const unassignedEnvs = useMemo(
+    () => envs.filter((e) => envBindingFor(e, slug) === null),
+    [envs, slug],
+  )
 
   const [detail, setDetail] = useState<CollectionDetail | null>(null)
   const [spec, setSpec] = useState<CollectionSpec | null>(null)
@@ -85,6 +106,18 @@ export function CollectionEditor({ path }: Props) {
     setSpec((cur) => cur ? { ...cur, [key]: value } : cur)
   }
 
+  /** Creates an env already assigned to this collection, beside the collection file — so
+   *  deleting the collection takes its environments with it, the way its stages went. */
+  async function createScopedEnv(name: string) {
+    const envPath = `${path}/${fileNameFor('env', nameToSlug(name))}`
+    await api.saveEnvSpec({
+      path: envPath, id: null, name,
+      collections: [{ collection: slug, baseUrl: null, defaultAuth: null }],
+    })
+    await reload()
+    openTab({ path: envPath, kind: 'env', label: name })
+  }
+
   async function save() {
     if (!spec) return
     setSaving(true); setError(null)
@@ -114,7 +147,6 @@ export function CollectionEditor({ path }: Props) {
   const varRows: KvRow[] = Object.entries(spec.vars ?? {}).map(([k, v]) => ({
     key: k, value: v, secret: secretSet.has(k),
   }))
-  const stages = spec.stages ?? []
 
   return (
     <>
@@ -127,26 +159,21 @@ export function CollectionEditor({ path }: Props) {
       onTitleChange={(n) => update('name', n)}
     >
       <Tabs value={tab} onChange={setTab}>
-        <Tabs.List mb="md">
-          <Tabs.Tab value="general" leftSection={<IconLayoutDashboard size={14} />}>General</Tabs.Tab>
-          <Tabs.Tab value="headers" leftSection={<IconList size={14} />}>
-            Headers <TabCount count={headerRows.length} />
-          </Tabs.Tab>
-          <Tabs.Tab value="transport" leftSection={<IconShieldCheck size={14} />}>Transport</Tabs.Tab>
-          <Tabs.Tab value="variables" leftSection={<IconVariable size={14} />}>
-            Variables <TabCount count={varRows.length} />
-          </Tabs.Tab>
-          <Tabs.Tab value="stages" leftSection={<IconRocket size={14} />}>
-            Stages <TabCount count={stages.length} />
-          </Tabs.Tab>
-          <Tabs.Tab value="docs" leftSection={<IconFileText size={14} />}>
-            Docs <TabDot active={!!spec.body && spec.body.trim().length > 0} />
-          </Tabs.Tab>
-          <Tabs.Tab value="openapi" leftSection={<IconApi size={14} />}>
-            OpenAPI <TabDot active={!!link} />
-          </Tabs.Tab>
-          <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
-        </Tabs.List>
+        {/* Ordered left-to-right by how often a section is touched: the tail (Docs, OpenAPI,
+            Source) is what AdaptiveTabsList strips down to icons first when space runs out. */}
+        <AdaptiveTabsList
+          mb="md"
+          tabs={[
+            { value: 'general', label: 'General', icon: <IconLayoutDashboard size={14} /> },
+            { value: 'headers', label: 'Headers', icon: <IconList size={14} />, adornment: <TabCount count={headerRows.length} /> },
+            { value: 'transport', label: 'Transport', icon: <IconShieldCheck size={14} /> },
+            { value: 'variables', label: 'Variables', icon: <IconVariable size={14} />, adornment: <TabCount count={varRows.length} /> },
+            { value: 'environments', label: 'Environments', icon: <IconRocket size={14} />, adornment: <TabCount count={assignedEnvs.length} /> },
+            { value: 'docs', label: 'Docs', icon: <IconFileText size={14} />, adornment: <TabDot active={!!spec.body && spec.body.trim().length > 0} /> },
+            { value: 'openapi', label: 'OpenAPI', icon: <IconApi size={14} />, adornment: <TabDot active={!!link} /> },
+            { value: 'source', label: 'Source', icon: <IconCode size={14} /> },
+          ]}
+        />
 
         <Tabs.Panel value="general">
           <Stack gap="md" maw={760}>
@@ -267,8 +294,8 @@ export function CollectionEditor({ path }: Props) {
         <Tabs.Panel value="variables">
           <Stack gap="md" maw={880}>
             <Text size="xs" c="dimmed">
-              Collection-scoped variables. Cascade tier between workspace and stage
-              (workspace &lt; <b>collection</b> &lt; stage &lt; env &lt; request).
+              Collection-scoped variables. Cascade tier between workspace and env
+              (workspace &lt; <b>collection</b> &lt; env &lt; request).
               Toggle the eye icon to mark a row as a secret.
             </Text>
             <KvTable
@@ -297,16 +324,17 @@ export function CollectionEditor({ path }: Props) {
           </Stack>
         </Tabs.Panel>
 
-        <Tabs.Panel value="stages">
-          <StagesEditor
-            stages={stages}
-            defaultStage={spec.defaultStage ?? null}
+        <Tabs.Panel value="environments">
+          <ScopedEnvironments
+            slug={slug}
+            collectionName={spec.name || slug}
+            assigned={assignedEnvs}
+            unassigned={unassignedEnvs}
             auths={auths}
             collections={collections}
-            collectionFilePath={collectionFilePath}
-            onChangeStages={(next) => update('stages', next.length > 0 ? next : undefined)}
-            onChangeDefault={(name) => update('defaultStage', name ?? undefined)}
-            onOpenVariables={varsCtl.open}
+            onOpen={(env) => openTab({ path: env.path, kind: 'env', label: env.name })}
+            onCreate={createScopedEnv}
+            onChanged={reload}
           />
         </Tabs.Panel>
 
@@ -454,19 +482,6 @@ function specFromDetail(d: CollectionDetail): CollectionSpec {
     vars: split.vars,
     secrets: split.secrets,
     tags: d.tags && d.tags.length > 0 ? d.tags : undefined,
-    stages: d.stages.length > 0
-      ? d.stages.map((s) => {
-          const stageSplit = splitVarSpec(s.vars)
-          return {
-            name: s.name,
-            baseUrl: s.baseUrl ?? undefined,
-            defaultAuth: s.defaultAuth ?? undefined,
-            vars: stageSplit.vars,
-            secrets: stageSplit.secrets,
-          }
-        })
-      : undefined,
-    defaultStage: d.defaultStage ?? undefined,
     // Only the opt-out is carried: undefined means enabled and keeps the emitted file
     // silent, mirroring what the server writes.
     agentEnabled: d.agentEnabled === false ? false : undefined,
@@ -475,182 +490,235 @@ function specFromDetail(d: CollectionDetail): CollectionSpec {
   }
 }
 
-// ---- Stages master/detail ------------------------------------------------------------
+// ---- Scoped environments -----------------------------------------------------------------
 
-interface StagesEditorProps {
-  stages: CollectionStageSpec[]
-  defaultStage: string | null
+/**
+ * The environments assigned to this collection — the replacement for the old `stages:` block.
+ *
+ * <p>They are separate files, so what this tab edits is the *assignment* each of them holds to
+ * this collection: whether it is offered here at all, and the base URL and default auth it
+ * points this collection at. Everything else about an environment — its variables, its provider
+ * bindings — stays in the environment's own editor, one click away.</p>
+ *
+ * <p>Each row saves on its own rather than through the collection's Save button, because each
+ * row is a different file. Assigning and unassigning write immediately; editing the overrides
+ * arms a per-row Save, so a half-typed URL is never written behind your back.</p>
+ */
+function ScopedEnvironments({ slug, collectionName, assigned, unassigned, auths, collections, onOpen, onCreate, onChanged }: {
+  slug: string
+  collectionName: string
+  /** Environments already assigned to this collection. */
+  assigned: EnvSummary[]
+  /** Everything else — global environments and ones assigned elsewhere — offered for assignment. */
+  unassigned: EnvSummary[]
   auths: AuthSummary[]
   collections: CollectionSummary[]
-  collectionFilePath: string
-  onChangeStages: (next: CollectionStageSpec[]) => void
-  onChangeDefault: (name: string | null) => void
-  onOpenVariables: () => void
-}
+  onOpen: (env: EnvSummary) => void
+  onCreate: (name: string) => Promise<void>
+  onChanged: () => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
-function StagesEditor({ stages, defaultStage, auths, collections, collectionFilePath, onChangeStages, onChangeDefault, onOpenVariables }: StagesEditorProps) {
-  const [selected, setSelected] = useState<number>(stages.length > 0 ? 0 : -1)
-  const safe = selected >= 0 && selected < stages.length ? selected : stages.length > 0 ? 0 : -1
-  const stage = safe >= 0 ? stages[safe] : null
-
-  function addStage() {
-    const existing = new Set(stages.map((s) => s.name.toLowerCase()))
-    let i = stages.length + 1
-    let name = `stage${i}`
-    while (existing.has(name.toLowerCase())) { i++; name = `stage${i}` }
-    const next = [...stages, { name }]
-    onChangeStages(next); setSelected(next.length - 1)
-  }
-
-  function removeStage(idx: number) {
-    const removed = stages[idx]?.name ?? ''
-    const next = stages.filter((_, i) => i !== idx)
-    onChangeStages(next)
-    if (defaultStage && removed.toLowerCase() === defaultStage.toLowerCase()) onChangeDefault(null)
-    setSelected(next.length === 0 ? -1 : Math.min(idx, next.length - 1))
-  }
-
-  function patchStage(idx: number, p: Partial<CollectionStageSpec>) {
-    const next = stages.map((s, i) => (i === idx ? trim({ ...s, ...p }) : s))
-    onChangeStages(next)
-  }
-
-  function trim(s: CollectionStageSpec): CollectionStageSpec {
-    return {
-      name: s.name,
-      baseUrl: s.baseUrl?.trim() ? s.baseUrl : undefined,
-      defaultAuth: s.defaultAuth?.trim() ? s.defaultAuth : undefined,
-      vars: s.vars && Object.keys(s.vars).length > 0 ? s.vars : undefined,
-      secrets: s.secrets && s.secrets.length > 0 ? s.secrets : undefined,
+  async function run(key: string, work: () => Promise<void>) {
+    setBusy(key); setError(null)
+    try {
+      await work()
+      await onChanged()
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setBusy(null)
     }
   }
 
-  if (stages.length === 0) {
-    return (
-      <Stack gap="md" maw={500}>
-        <Text size="sm" c="dimmed">
-          Stages are named environments (dev, staging, prod) within this collection. Each can
-          override the baseUrl, default auth, and variables. Vary headers per stage by
-          referencing stage-scoped vars in the collection's default headers.
-        </Text>
-        <Box>
-          <Button leftSection={<IconPlus size={14} />} onClick={addStage}>Add first stage</Button>
-        </Box>
-      </Stack>
-    )
+  async function create() {
+    const trimmed = name.trim()
+    if (!trimmed || busy !== null) return
+    setBusy('__create__'); setError(null)
+    try {
+      await onCreate(trimmed)
+      setName('')
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
   }
 
   return (
-    <Box style={{ display: 'grid', gridTemplateColumns: '220px 1fr', gap: 16, minHeight: 360 }}>
-      <Box style={{ border: '1px solid var(--mantine-color-default-border)', borderRadius: 6, overflow: 'hidden' }}>
-        <Group justify="space-between" px="sm" py="xs" style={{ borderBottom: '1px solid var(--mantine-color-default-border)' }}>
-          <Text size="xs" tt="uppercase" c="dimmed" lts={0.5}>Stages</Text>
-          <ActionIcon variant="subtle" size="sm" onClick={addStage} aria-label="Add stage" title="Add stage">
-            <IconPlus size={12} />
-          </ActionIcon>
-        </Group>
-        <ScrollArea h={320} type="hover" scrollbarSize={6}>
-          {stages.map((s, i) => {
-            const isDefault = defaultStage && s.name.toLowerCase() === defaultStage.toLowerCase()
-            const active = i === safe
-            return (
-              <Group
-                key={i}
-                gap="xs"
-                px="sm"
-                py={6}
-                style={{
-                  cursor: 'pointer',
-                  background: active ? 'var(--mantine-color-default-hover)' : undefined,
-                  borderLeft: `3px solid ${active ? 'var(--mantine-color-tap-filled)' : 'transparent'}`,
-                }}
-                onClick={() => setSelected(i)}
-              >
-                <Text size="sm" flex={1} truncate c={active ? 'tap' : undefined}>
-                  {s.name || `(stage ${i + 1})`}
-                </Text>
-                {isDefault && <Badge size="xs" variant="light" color="tap">default</Badge>}
-                <ActionIcon
-                  variant="subtle" color="red" size="sm"
-                  onClick={(e) => { e.stopPropagation(); removeStage(i) }}
-                  aria-label="Remove stage"
-                >
-                  <IconTrash size={12} />
-                </ActionIcon>
-              </Group>
-            )
-          })}
-        </ScrollArea>
-      </Box>
+    <Stack gap="md" maw={880}>
+      <Text size="xs" c="dimmed">
+        Environments offered in <Code fz="xs">{slug}</Code>&rsquo;s picker. Each may point this
+        collection at a different base URL and default auth — those settings belong to the
+        assignment, so the same environment can mean something different in another collection.
+      </Text>
 
-      <Box>
-        {stage && (
-          <Stack gap="md" maw={620}>
-            <TextInput
-              label="Name"
-              placeholder="dev, staging, prod…"
-              value={stage.name}
-              onChange={(e) => patchStage(safe, { name: e.currentTarget.value })}
+      {error && (
+        <Alert color="red" variant="light" withCloseButton onClose={() => setError(null)}>{error}</Alert>
+      )}
+
+      {assigned.length === 0 ? (
+        <Text size="sm" c="dimmed">
+          None assigned. Global environments still apply here — assign one below only when it
+          should override this collection&rsquo;s base URL or auth, or be offered here alone.
+        </Text>
+      ) : (
+        <Stack gap="sm">
+          {assigned.map((env) => (
+            <AssignmentRow
+              key={env.path}
+              env={env}
+              slug={slug}
+              collectionName={collectionName}
+              auths={auths}
+              collections={collections}
+              busy={busy === env.path}
+              onOpen={() => onOpen(env)}
+              onSave={(binding) => void run(env.path, () => saveEnvAssignment(env.path, slug, binding))}
             />
-            <Box>
-              <Text size="sm" fw={500} mb={4}>Base URL (override)</Text>
-              <VariableInput
-                value={stage.baseUrl ?? ''}
-                onChange={(v) => patchStage(safe, { baseUrl: v })}
-                placeholder="leave empty to inherit"
-                context={{ collectionPath: collectionFilePath, stage: stage.name }}
-                onOpenVariables={onOpenVariables}
-              />
-              <Text size="xs" c="dimmed" mt={4}>Inherits the collection's baseUrl when empty.</Text>
-            </Box>
-            <Select
-              label="Default Auth (override)"
-              data={[
-                { value: '', label: '(inherit from collection)' },
-                ...authSelectGroups({ auths, collections, fromPath: collectionFilePath }),
-              ]}
-              value={stage.defaultAuth ?? ''}
-              onChange={(v) => patchStage(safe, { defaultAuth: v && v !== '' ? v : undefined })}
-              allowDeselect={false}
-            />
-            <Box>
-              <Text size="sm" fw={500} mb={4}>Variables</Text>
-              <Text size="xs" c="dimmed" mb="xs">
-                Override collection/workspace defaults for this stage. Reference these in the
-                collection's default headers (e.g. <Code>{`X-Env: {{env}}`}</Code>) to vary
-                headers per stage.
-              </Text>
-              <KvTable
-                rows={(() => {
-                  const ss = new Set(stage.secrets ?? [])
-                  return Object.entries(stage.vars ?? {}).map(([k, v]) => ({ key: k, value: v, secret: ss.has(k) }))
-                })()}
-                onChange={(rows) => {
-                  const obj: Record<string, string> = {}
-                  const sec: string[] = []
-                  for (const r of rows) {
-                    if (!r.key) continue
-                    obj[r.key] = r.value
-                    if (r.secret) sec.push(r.key)
-                  }
-                  patchStage(safe, { vars: obj, secrets: sec })
-                }}
-                keyPlaceholder="var.name"
-                valuePlaceholder="value"
-                allowSecretToggle
-                variableContext={{ collectionPath: collectionFilePath, stage: stage.name }}
-                onOpenVariables={onOpenVariables}
-              />
-            </Box>
-            <Checkbox
-              label="Use this stage as the default"
-              description="Preselected in the request editor's stage switcher."
-              checked={defaultStage?.toLowerCase() === stage.name.toLowerCase()}
-              onChange={(e) => onChangeDefault(e.currentTarget.checked ? stage.name : null)}
-            />
-          </Stack>
-        )}
-      </Box>
-    </Box>
+          ))}
+        </Stack>
+      )}
+
+      <Select
+        label="Assign an existing environment"
+        description="Offers it here, where you can then override the base URL and auth."
+        placeholder={unassigned.length > 0 ? 'Pick an environment…' : 'All environments are assigned'}
+        data={unassigned.map((e) => ({
+          value: e.path,
+          label: e.collections.length === 0 ? `${e.name} (global)` : e.name,
+        }))}
+        value={null}
+        disabled={unassigned.length === 0 || busy !== null}
+        onChange={(envPath) => {
+          if (envPath) {
+            void run(envPath, () => saveEnvAssignment(envPath, slug, {
+              collection: slug, baseUrl: null, defaultAuth: null,
+            }))
+          }
+        }}
+        searchable
+      />
+
+      <Group gap="xs" align="flex-end">
+        <TextInput
+          label="Or create a new one"
+          placeholder="uat"
+          value={name}
+          onChange={(e) => setName(e.currentTarget.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void create() }}
+          w={260}
+        />
+        <Button
+          leftSection={<IconPlus size={14} />}
+          onClick={() => void create()}
+          loading={busy === '__create__'}
+          disabled={name.trim().length === 0}
+        >
+          Create
+        </Button>
+      </Group>
+    </Stack>
   )
+}
+
+/** One assigned environment, with the two overrides it holds for this collection. Dirty state
+ *  is local so typing doesn't write a file per keystroke; Save writes, Revert drops. */
+function AssignmentRow({ env, slug, collectionName, auths, collections, busy, onOpen, onSave }: {
+  env: EnvSummary
+  slug: string
+  collectionName: string
+  auths: AuthSummary[]
+  collections: CollectionSummary[]
+  busy: boolean
+  onOpen: () => void
+  onSave: (binding: EnvCollection | null) => void
+}) {
+  const saved = useMemo(
+    () => envBindingFor(env, slug) ?? { collection: slug, baseUrl: null, defaultAuth: null },
+    [env, slug],
+  )
+  const [draft, setDraft] = useState<EnvCollection>(saved)
+
+  // Re-baseline whenever the file changes underneath — a save here, or an edit in the
+  // environment's own tab. Keyed on the saved value, not the draft, so a reload triggered by
+  // some unrelated file doesn't wipe what is being typed.
+  const savedKey = `${saved.baseUrl ?? ''} ${saved.defaultAuth ?? ''}`
+  const lastSavedKey = useRef(savedKey)
+  useEffect(() => {
+    if (lastSavedKey.current !== savedKey) {
+      lastSavedKey.current = savedKey
+      setDraft(saved)
+    }
+  }, [savedKey, saved])
+
+  const dirty = (draft.baseUrl ?? '') !== (saved.baseUrl ?? '')
+    || (draft.defaultAuth ?? '') !== (saved.defaultAuth ?? '')
+
+  return (
+    <Paper withBorder p="md" radius="sm">
+      <Group justify="space-between" wrap="nowrap" mb="sm">
+        <Group gap={6} wrap="nowrap" style={{ minWidth: 0 }}>
+          <Text size="sm" fw={600} truncate>{env.name}</Text>
+          {env.collections.length > 1 && (
+            <Badge size="xs" variant="light" color="grape">
+              +{env.collections.length - 1} other {env.collections.length === 2 ? 'collection' : 'collections'}
+            </Badge>
+          )}
+        </Group>
+        <Group gap="xs" wrap="nowrap">
+          {dirty && (
+            <>
+              <Button size="compact-sm" variant="subtle" color="gray" onClick={() => setDraft(saved)}>
+                Revert
+              </Button>
+              <Button size="compact-sm" loading={busy} onClick={() => onSave(draft)}>Save</Button>
+            </>
+          )}
+          <Button size="compact-sm" variant="subtle" onClick={onOpen}>Open</Button>
+          <Tooltip label="Unassign — stops being offered in this collection" withArrow>
+            <ActionIcon
+              variant="subtle" color="red" size="sm" disabled={busy}
+              aria-label={`Unassign ${env.name}`}
+              onClick={() => onSave(null)}
+            >
+              <IconX size={14} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
+      </Group>
+
+      <Stack gap="sm">
+        <Box>
+          <Text size="sm" fw={500} mb={4}>Base URL</Text>
+          <VariableInput
+            value={draft.baseUrl ?? ''}
+            onChange={(v) => setDraft({ ...draft, baseUrl: v && v.length > 0 ? v : null })}
+            placeholder={`Inherit ${collectionName}'s base URL`}
+            context={{ envPath: env.path }}
+          />
+        </Box>
+        <Select
+          label="Default auth"
+          // Grouped against this collection — its own profiles are the relevant ones — while
+          // the ref is written relative to the environment file, which is where it lands.
+          data={authSelectGroups({ auths, collections, fromPath: env.path, forCollection: slug })}
+          placeholder={`Inherit ${collectionName}'s default auth`}
+          value={draft.defaultAuth ?? ''}
+          onChange={(v) => setDraft({ ...draft, defaultAuth: v && v.length > 0 ? v : null })}
+          searchable
+          clearable
+        />
+      </Stack>
+    </Paper>
+  )
+}
+
+
+/** Filename-safe slug for a new environment. Mirrors the header's create-env dialog. */
+function nameToSlug(name: string): string {
+  const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '')
+  return slug.length > 0 ? slug : 'env'
 }

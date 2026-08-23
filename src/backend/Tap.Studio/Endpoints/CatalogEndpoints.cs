@@ -56,7 +56,8 @@ public static class CatalogEndpoints
         var envs = app.MapGroup("/api/environments");
         envs.MapGet("/", (WorkspaceService svc) => Results.Ok(
             (IReadOnlyList<EnvSummaryDto>)svc.Current.Environments
-                .Select(e => new EnvSummaryDto(e.RelativePath, e.Name ?? Stem(e.RelativePath), e.Id))
+                .Select(e => new EnvSummaryDto(
+                    e.RelativePath, e.Name ?? Stem(e.RelativePath), e.Id, ToBindings(e)))
                 .ToArray()));
 
         envs.MapGet("/{*path}", (string path, WorkspaceService svc) =>
@@ -70,6 +71,7 @@ public static class CatalogEndpoints
                 Tags: e.Tags,
                 Body: e.Body,
                 Source: svc.ReadSource(e.RelativePath),
+                Collections: ToBindings(e),
                 DefaultVariableProvider: e.DefaultVariableProvider,
                 ProviderAliases: e.ProviderAliases,
                 StrictVariables: e.StrictVariables));
@@ -162,6 +164,13 @@ public static class CatalogEndpoints
             Settings: ProviderSettingsMask.Apply(descriptor, p.Settings),
             Origin: p.Origin == ProviderOrigin.System ? "system" : "workspace");
     }
+
+    /// <summary>Projects an env's collection assignments onto the wire. Refs travel as written
+    /// (relative to the env file) so a round-trip through the editor re-emits them unchanged.</summary>
+    private static IReadOnlyList<EnvCollectionDto> ToBindings(EnvFile env)
+        => env.Collections
+            .Select(b => new EnvCollectionDto(b.Collection, b.BaseUrl, b.DefaultAuth?.RelativePath ?? b.DefaultAuth?.Id))
+            .ToArray();
 
     private static string Stem(string path) => Path.GetFileNameWithoutExtension(path);
 }

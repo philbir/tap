@@ -4,7 +4,7 @@ import { useDisclosure } from '@mantine/hooks'
 import { IconBrandGit, IconCheck, IconChevronDown, IconDeviceDesktop, IconFolders, IconPencil, IconPlugConnected, IconPlus, IconStack2 } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
-import { MANIFEST_TAB_PATH, useActiveEnv, useTapStore } from '../store'
+import { MANIFEST_TAB_PATH, useActiveCollection, useEnvSelection, useTapStore } from '../store'
 import { DirectoryPicker } from './DirectoryPicker'
 import { fileNameFor } from './tapFiles'
 
@@ -20,6 +20,12 @@ interface Props {
  * App header — brand on the far left, then the workspace switcher (with an edit button
  * that opens the workspace manifest in a tab), then the environment switcher (with an
  * edit button that opens the active env file in a tab), then the theme toggle.
+ *
+ * <p>The environment switcher is context-aware, and it is the same control the base-URL chip
+ * on a request exposes. With a collection's file in front of you it lists that collection's
+ * environments and sets the one that collection runs under; with nothing collection-shaped
+ * open there is nothing to narrow by, so it lists every environment and sets the workspace
+ * default. See `useEnvSelection`.</p>
  */
 export function Header({ rightAction }: Props) {
   const [addOpened, addControls] = useDisclosure(false)
@@ -30,10 +36,15 @@ export function Header({ rightAction }: Props) {
   const envs = useTapStore((s) => s.envs)
   const activateWorkspace = useTapStore((s) => s.activateWorkspace)
   const addAndActivateWorkspace = useTapStore((s) => s.addAndActivateWorkspace)
-  const setActiveEnv = useTapStore((s) => s.setActiveEnv)
   const reload = useTapStore((s) => s.reload)
   const openTab = useTapStore((s) => s.openTab)
-  const activeEnv = useActiveEnv()
+
+  // The collection whose editor is open decides what this switcher is choosing *for*.
+  const activeCollection = useActiveCollection()
+  const collectionName = useTapStore(
+    (s) => s.collections.find((c) => c.slug === activeCollection)?.name ?? activeCollection,
+  )
+  const { value: activeEnv, options: envChoices, select: selectEnv } = useEnvSelection(activeCollection)
 
   const isPinned = info?.mode === 'aspire'
 
@@ -52,9 +63,21 @@ export function Header({ rightAction }: Props) {
         })),
         { value: ADD_WORKSPACE_SENTINEL, label: '+ Add workspace…' },
       ]
+  // Grouped so it stays obvious which choices belong to the collection at hand and which are
+  // workspace-wide — the same split the base-URL chip draws.
+  const scoped = envChoices.filter((e) => e.collections.length > 0)
+  const globals = envChoices.filter((e) => e.collections.length === 0)
   const envOptions = [
-    { value: '', label: 'No environment' },
-    ...envs.map((e) => ({ value: e.path, label: e.name })),
+    { value: '', label: activeCollection ? 'Workspace default' : 'No environment' },
+    ...(scoped.length > 0
+      ? [{
+          group: activeCollection ? (collectionName ?? activeCollection) : 'Assigned to a collection',
+          items: scoped.map((e) => ({ value: e.path, label: e.name })),
+        }]
+      : []),
+    ...(globals.length > 0
+      ? [{ group: 'Global', items: globals.map((e) => ({ value: e.path, label: e.name })) }]
+      : []),
     { value: ADD_ENV_SENTINEL, label: '+ Create environment…' },
   ]
 
@@ -96,16 +119,24 @@ export function Header({ rightAction }: Props) {
 
   function handleEnvPick(value: string | null) {
     if (value === ADD_ENV_SENTINEL) { addEnvControls.open(); return }
-    setActiveEnv(value && value !== '' ? value : null)
+    selectEnv(value && value !== '' ? value : null)
   }
 
+  /** Creates an environment and selects it. With a collection open the new env is assigned to
+   *  it — that is what "create one from here" means — and lands beside the collection file so
+   *  deleting the collection takes it along. */
   async function createEnv(name: string) {
     const slug = nameToSlug(name)
     if (!slug) throw new Error('Pick a name.')
-    const path = `environments/${fileNameFor('env', slug)}`
-    await api.saveEnvSpec({ path, id: null, name })
+    const path = activeCollection
+      ? `collections/${activeCollection}/${fileNameFor('env', slug)}`
+      : `environments/${fileNameFor('env', slug)}`
+    await api.saveEnvSpec({
+      path, id: null, name,
+      collections: activeCollection ? [{ collection: activeCollection, baseUrl: null, defaultAuth: null }] : undefined,
+    })
     await reload()
-    setActiveEnv(path)
+    selectEnv(path)
   }
 
   return (
@@ -209,7 +240,7 @@ export function Header({ rightAction }: Props) {
           <Select
             aria-label="Environment"
             data={envOptions}
-            value={activeEnv ?? ''}
+            value={envChoices.some((e) => e.path === activeEnv) ? activeEnv! : ''}
             onChange={handleEnvPick}
             w={240}
             allowDeselect={false}
@@ -218,7 +249,12 @@ export function Header({ rightAction }: Props) {
             rightSectionWidth={52}
             rightSection={
               <Group gap={2} wrap="nowrap" pr={4}>
-                <Tooltip label={activeEnvSummary ? 'Edit environment' : 'No environment selected'} withArrow>
+                <Tooltip
+                  label={activeEnvSummary
+                    ? `Edit environment${activeCollection ? ` — chosen for ${collectionName}` : ''}`
+                    : 'No environment selected'}
+                  withArrow
+                >
                   <ActionIcon
                     variant="subtle"
                     color="gray"

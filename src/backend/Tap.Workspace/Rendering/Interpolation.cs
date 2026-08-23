@@ -8,7 +8,7 @@ namespace Tap.Workspace.Rendering;
 /// <summary>
 /// Token expansion against the provider registry + scope cascade. A token can be either:
 /// <list type="bullet">
-///   <item><c>{{name}}</c> — unprefixed. Looked up first in the cascade (workspace/collection/api/stage/env/request),
+///   <item><c>{{name}}</c> — unprefixed. Looked up first in the cascade (workspace/collection/env/request),
 ///     then walked across providers in registration order. First non-null wins.</item>
 ///   <item><c>{{provider:name}}</c> — explicit. Resolved only against <c>provider</c>.
 ///     Throws if the provider doesn't have the name.</item>

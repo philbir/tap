@@ -230,13 +230,12 @@ export const api = {
   evaluateAssertions: (
     assertions: AssertSpec[],
     response: AssertResponseSnapshot,
-    context: { path?: string; env?: string | null; stage?: string | null },
+    context: { path?: string; env?: string | null },
   ) => post<EvaluateAssertsResponse>('/api/assertions/evaluate', {
     assertions,
     response,
     path: context.path,
     env: context.env ?? undefined,
-    stage: context.stage ?? undefined,
   }),
 
   /** Upload a binary payload to the workspace's sideband store. The server writes it
@@ -329,22 +328,22 @@ export const api = {
   tagDictionary: () => get<string[]>('/api/tags/dictionary'),
 
   // Render — request path goes in body since ASP.NET routing can't suffix /render after a catch-all
-  render: (path: string, env: string | null, stage: string | null, overrides?: Record<string, string>) =>
-    post<RenderedRequest>('/api/render', { path, env, stage, overrides }),
+  render: (path: string, env: string | null, overrides?: Record<string, string>) =>
+    post<RenderedRequest>('/api/render', { path, env, overrides }),
 
   /** Probe a GraphQL endpoint for its schema. Uses the request's URL + headers + auth from
    *  the usual render pipeline but swaps the body for a standard introspection POST (or
    *  appends `?sdl` for SDL mode). Returns the raw upstream payload; the client builds a
    *  `GraphQLSchema` from it. */
-  graphqlSchema: (path: string, env: string | null, stage: string | null, mode: GraphQLSchemaMode) =>
-    post<GraphQLSchemaResponse>('/api/graphql/schema', { path, env, stage, mode }),
+  graphqlSchema: (path: string, env: string | null, mode: GraphQLSchemaMode) =>
+    post<GraphQLSchemaResponse>('/api/graphql/schema', { path, env, mode }),
 
   // Actually fire the request against the upstream and return status/headers/body/timing.
-  execute: (path: string, env: string | null, stage: string | null, overrides?: Record<string, string>) =>
-    post<ExecutionResult>('/api/execute', { path, env, stage, overrides }),
+  execute: (path: string, env: string | null, overrides?: Record<string, string>) =>
+    post<ExecutionResult>('/api/execute', { path, env, overrides }),
 
-  diagnoseTls: (path: string, env: string | null, stage: string | null, spec?: RequestSpec) =>
-    post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, stage, spec }),
+  diagnoseTls: (path: string, env: string | null, spec?: RequestSpec) =>
+    post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, spec }),
 
   /** Fetch more of a response the panel showed truncated. `max` is a byte ceiling — the
    *  server clamps it to what it actually retained (and to its own text ceiling). The
@@ -378,14 +377,13 @@ export const api = {
   executeStream(
     path: string,
     env: string | null,
-    stage: string | null,
     handler: (event: StreamEvent) => void,
     overrides?: Record<string, string>,
     spec?: RequestSpec,
     source?: string,
   ): AbortController {
     const ctrl = new AbortController()
-    void runExecuteStream(path, env, stage, overrides, handler, ctrl.signal, spec, source)
+    void runExecuteStream(path, env, overrides, handler, ctrl.signal, spec, source)
     return ctrl
   },
 
@@ -447,12 +445,11 @@ export const api = {
   runTests(
     path: string,
     env: string | null,
-    stage: string | null,
     handler: (event: TestRunEvent) => void,
     options?: { only?: number | null; overrides?: Record<string, string> },
   ): AbortController {
     const ctrl = new AbortController()
-    void runTestStream(path, env, stage, options, handler, ctrl.signal)
+    void runTestStream(path, env, options, handler, ctrl.signal)
     return ctrl
   },
 
@@ -460,27 +457,24 @@ export const api = {
 
   /** Fetch the OpenID Connect discovery document for a given authority URL. `authPath` is
    *  the profile being edited — passing it lets a collection-scoped profile resolve an
-   *  authority that references its collection's (or stage's) variables. `env` is the active
-   *  environment, without which the authority resolves against the workspace default. */
-  oidcDiscovery: (authority: string, authPath?: string, stage?: string, env?: string) => {
+   *  authority that references its collection's variables. `env` is the active environment,
+   *  without which the authority resolves against the workspace default. */
+  oidcDiscovery: (authority: string, authPath?: string, env?: string) => {
     const q = new URLSearchParams({ authority })
     if (authPath) q.set('authPath', authPath)
-    if (stage) q.set('stage', stage)
     if (env) q.set('env', env)
     return get<OidcDiscovery>(`/api/auth/discovery?${q}`)
   },
 
   /** Run an auth profile. For OAuth2 client_credentials returns tokens synchronously;
    *  for authorization_code+PKCE returns a loginUrl + flowId for the UI to drive.
-   *  `context` carries the caller's request + stage so a collection-scoped profile expands
-   *  against the right stage (and caches its token there); ignored for workspace-scoped ones.
-   *  `env` applies to every profile — it must be the environment the editor previewed the
-   *  profile's fields against, or the runner resolves `{{…}}` refs against a different one. */
-  executeAuth: (path: string, forceReauthenticate = false,
-                context?: { requestPath?: string; stage?: string; env?: string }) =>
+   *  `env` must be the environment the editor previewed the profile's fields against, or the
+   *  runner resolves `{{…}}` refs against a different one and caches the token under the wrong
+   *  key. A collection-scoped profile picks its collection's variables up from its own
+   *  location, so nothing else needs passing. */
+  executeAuth: (path: string, forceReauthenticate = false, context?: { env?: string }) =>
     post<AuthExecuteResponse>('/api/auth/execute', {
-      path, forceReauthenticate,
-      requestPath: context?.requestPath, stage: context?.stage, env: context?.env,
+      path, forceReauthenticate, env: context?.env,
     }),
 
   /** Poll a pending flow until it transitions to completed or failed. */
@@ -716,7 +710,8 @@ export interface StreamDone {
   durationMs: number
   responseBodyBytes: number
   variablesUsed: VariableTrace[]
-  stage: string | null
+  /** Path of the environment the request actually resolved under, or null. */
+  env: string | null
   error: string | null
   /** Assertion verdicts, evaluated server-side once the body is complete. */
   assertions: AssertResult[]
@@ -748,7 +743,6 @@ export type TestRunEvent =
 async function runExecuteStream(
   path: string,
   env: string | null,
-  stage: string | null,
   overrides: Record<string, string> | undefined,
   handler: (event: StreamEvent) => void,
   signal: AbortSignal,
@@ -757,7 +751,7 @@ async function runExecuteStream(
 ): Promise<void> {
   await postSse(
     '/api/execute/stream',
-    { path, env, stage, overrides, spec, source },
+    { path, env, overrides, spec, source },
     signal,
     (name, payload) => {
       switch (name) {
@@ -776,14 +770,13 @@ async function runExecuteStream(
 async function runTestStream(
   path: string,
   env: string | null,
-  stage: string | null,
   options: { only?: number | null; overrides?: Record<string, string> } | undefined,
   handler: (event: TestRunEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
   await postSse(
     '/api/tests/run',
-    { path, env, stage, only: options?.only ?? null, overrides: options?.overrides },
+    { path, env, only: options?.only ?? null, overrides: options?.overrides },
     signal,
     (name, payload) => {
       switch (name) {

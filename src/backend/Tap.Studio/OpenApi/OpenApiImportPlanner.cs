@@ -126,17 +126,6 @@ public static class OpenApiImportPlanner
         var servers = document.Servers ?? [];
         var baseUrl = options.BaseUrl ?? servers.FirstOrDefault()?.Url;
 
-        // Extra servers become stages, which is what they are: the same API at another address.
-        var stages = options.BaseUrl is not null || servers.Count <= 1
-            ? null
-            : servers.Skip(1)
-                .Select((s, i) => new CollectionStageSpecDto
-                {
-                    Name = StageName(s, i),
-                    BaseUrl = s.Url,
-                })
-                .ToArray();
-
         var collectionSpec = new CollectionSpecDto
         {
             Slug = slug,
@@ -144,10 +133,31 @@ public static class OpenApiImportPlanner
             BaseUrl = baseUrl,
             DefaultAuth = defaultAuth,
             Body = CollectionDocs(document, selected.Length),
-            Stages = stages,
         };
         var collectionPath = $"{collectionDir}/{KindResolver.CollectionFileName}";
         files.Insert(0, new ImportFile(collectionPath, CollectionSpecEmitter.ToFileSource(collectionSpec)));
+
+        // Extra servers become environments scoped to this collection, which is what they are:
+        // the same API at another address. They live beside the collection so deleting it takes
+        // them with it, and they name the collection explicitly so they never crowd another's
+        // environment picker.
+        if (options.BaseUrl is null && servers.Count > 1)
+        {
+            var usedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var (server, i) in servers.Skip(1).Select((s, i) => (s, i)))
+            {
+                var name = ServerEnvName(server, i);
+                if (!usedNames.Add(name)) continue;
+
+                var envPath = $"{collectionDir}/{KindResolver.FileNameFor(WorkspaceKind.Env, ImportSlug.Slugify(name))}";
+                files.Add(new ImportFile(envPath, EnvSpecEmitter.ToFileSource(new EnvSpecDto
+                {
+                    Path = envPath,
+                    Name = name,
+                    Collections = [new EnvCollectionDto(slug, server.Url, null)],
+                })));
+            }
+        }
 
         // --- requests ---------------------------------------------------------------------------
         var planned = options.Layout == Layout.HttpFilePerTag
@@ -293,7 +303,7 @@ public static class OpenApiImportPlanner
     private static string? PortableBaseUrl(string? baseUrl)
         => baseUrl is { Length: > 0 } && !baseUrl.Contains("{{", StringComparison.Ordinal) ? baseUrl : null;
 
-    private static string StageName(OpenApiServer server, int index)
+    private static string ServerEnvName(OpenApiServer server, int index)
     {
         if (server.Description is { Length: > 0 } d) return d.Trim();
         if (Uri.TryCreate(server.Url, UriKind.Absolute, out var uri)) return uri.Host;

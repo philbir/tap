@@ -110,7 +110,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         var selected = Select(ws, set, request);
 
         await callbacks.OnStart(new TestRunStartDto(
-            set.RelativePath, "test", name, request.Env, request.Stage,
+            set.RelativePath, "test", name, request.Env,
             selected.Select(s => new TestRunPlanEntryDto(
                 s.Index,
                 EntryName(ws, set, s.Value),
@@ -230,7 +230,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         }
 
         await callbacks.OnStart(new TestRunStartDto(
-            flow.RelativePath, "flow", name, request.Env, request.Stage,
+            flow.RelativePath, "flow", name, request.Env,
             [new TestRunPlanEntryDto(0, name, "flow", flow.RelativePath, false)]), ct).ConfigureAwait(false);
 
         var clock = Stopwatch.StartNew();
@@ -377,7 +377,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         try
         {
             rendered = await pipeline.RenderAsync(
-                requestFile, request.Env, bag, ct, request.Stage, templates, declared).ConfigureAwait(false);
+                requestFile, request.Env, bag, ct, templates, declared).ConfigureAwait(false);
 
             HttpExecutionHelpers.ValidateScheme(rendered);
             rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
@@ -422,7 +422,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
             if (extra.Count > 0)
             {
                 var resolvedExtra = await pipeline.RenderAssertionsAsync(
-                    extra, requestFile.RelativePath, request.Env, request.Stage, ct,
+                    extra, requestFile.RelativePath, request.Env, ct,
                     tolerant: true, overrides: bag, templateOverrides: templates, declaredOverrides: declared)
                     .ConfigureAwait(false);
                 assertions = [.. assertions, .. resolvedExtra];

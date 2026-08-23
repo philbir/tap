@@ -216,7 +216,7 @@ your APIs — see [Run it from your Aspire AppHost](docs/studio.md#run-it-from-y
 | **The same verdict in CI** | The `tap-studio` .NET tool runs those flows and test sets headlessly — JUnit, TRX, JSON, or Markdown reports, and exit codes a pipeline can branch on. Same engine as the UI, so a pull-request check and the Testing tab are one computation. |
 | **AI assistance** | Hand the request to GitHub Copilot CLI or Claude Code — running locally, with your existing CLI login — and get a proposed edit you review before saving. |
 | **Git-native workspace** | Requests, collections, auth profiles, environments, flows, and test sets are Markdown files. Built-in branch, diff, stage, and commit. |
-| **Variables and secrets** | A six-level cascade (workspace → collection → stage → environment → request → per-run) over pluggable providers: process env with allowlists, an encrypted workspace file, Azure Key Vault, and machine-local system variables. |
+| **Variables and secrets** | A five-level cascade (workspace → collection → environment → request → per-run) over pluggable providers: process env with allowlists, an encrypted workspace file, Azure Key Vault, and machine-local system variables. |
 
 ### Authentication, properly
 
@@ -262,7 +262,7 @@ decide whether to keep it. Secrets are always referenced as `{{variables}}`, nev
 │   ├── checkout.flow.tap                  ← requests in order, values carried across
 │   └── billing.test.tap                   ← a set of checks over requests and flows
 └── collections/billing/
-    ├── _collection.tap                    ← baseUrl, stages, default auth/headers
+    ├── _collection.tap                    ← baseUrl, default auth/headers
     ├── billing-oauth.auth.tap             ← auth profile scoped to this collection
     └── create-customer.req.tap            ← one request, as a fenced http block
 ```

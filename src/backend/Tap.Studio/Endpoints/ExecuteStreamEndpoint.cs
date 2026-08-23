@@ -20,7 +20,7 @@ namespace Tap.Studio.Endpoints;
 ///   triple plus a server-relative timestamp.</item>
 ///   <item><c>event: body</c> — fired once with the full (decoded) body when the upstream
 ///   is NOT an SSE producer. Mirrors what <c>/api/execute</c> returns in one shot.</item>
-///   <item><c>event: done</c> — final event, includes duration / total bytes / secret traces / stage.</item>
+///   <item><c>event: done</c> — final event, includes duration / total bytes / secret traces / env.</item>
 ///   <item><c>event: error</c> — emitted on transport failure; <c>done</c> still follows.</item>
 /// </list>
 /// This keeps the client implementation unified: one streaming call handles both
@@ -41,7 +41,7 @@ public static class ExecuteStreamEndpoint
 
             var sw = Stopwatch.StartNew();
             long totalBytes = 0;
-            string? stage = null;
+            string? envPath = null;
             IReadOnlyList<VariableTraceDto> variables = Array.Empty<VariableTraceDto>();
             var ct = ctx.RequestAborted;
 
@@ -60,17 +60,17 @@ public static class ExecuteStreamEndpoint
             try
             {
                 rendered = await svc.RenderAsync(
-                    body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec, draftSource: body.Source).ConfigureAwait(false);
+                    body.Path, body.Env, body.Overrides, ct, body.Spec, draftSource: body.Source).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
                 rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
-                stage = rendered.Metadata.StageName;
+                envPath = rendered.Metadata.EnvPath;
                 variables = rendered.Metadata.VariablesUsed
                     .Select(s => new VariableTraceDto(s.ProviderName, s.Name, s.Resolved, s.IsSecret, s.Duration.TotalMilliseconds))
                     .ToArray();
                 // Snapshot auth state *after* RenderAsync so the cached-token freshness check sees
                 // whatever the executor saw (the renderer doesn't mutate the store, so the order
                 // is just for clarity).
-                var authStatus = svc.BuildAuthStatus(body.Path, body.Spec, stage, body.Env, body.Source);
+                var authStatus = svc.BuildAuthStatus(body.Path, body.Spec, envPath, body.Source);
 
                 // WebSocket requests skip the HttpClient path entirely — see WebSocketExecutor.
                 // Same event stream shape, just `ws` frames in place of `body`/`sse`.
@@ -106,7 +106,7 @@ public static class ExecuteStreamEndpoint
                         new HistoryResponse(0, null, assertHeaders, null, null, totalBytes, BodyTruncated: false),
                         sw.Elapsed.TotalMilliseconds, wsAsserts, wsSummary, error: null);
                     await WriteEventAsync(resp, "done",
-                        new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, null, wsAsserts, wsSummary), ct);
+                        new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, envPath, null, wsAsserts, wsSummary), ct);
                     return;
                 }
 
@@ -185,7 +185,7 @@ public static class ExecuteStreamEndpoint
                         assertBody, totalBytes, BodyTruncated: totalBytes > (assertBody?.Length ?? 0)),
                     sw.Elapsed.TotalMilliseconds, assertions, assertSummary, error: null);
                 await WriteEventAsync(resp, "done",
-                    new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, null, assertions, assertSummary), ct);
+                    new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, envPath, null, assertions, assertSummary), ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -205,7 +205,7 @@ public static class ExecuteStreamEndpoint
                 }
                 await WriteEventAsync(resp, "error", new ExecuteStreamErrorDto(message), ct);
                 await WriteEventAsync(resp, "done",
-                    new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, stage, message, assertions, assertSummary), ct);
+                    new ExecuteStreamDoneDto(sw.Elapsed.TotalMilliseconds, totalBytes, variables, envPath, message, assertions, assertSummary), ct);
             }
         });
     }

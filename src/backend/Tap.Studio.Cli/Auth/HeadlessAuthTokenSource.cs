@@ -55,8 +55,7 @@ public sealed class HeadlessAuthTokenSource(
             }
         }
 
-        var context = AuthScopeResolver.ContextFor(
-            workspace, profile.RelativePath, requestPath: null, stageName: scope.Stage, envPath: scope.Env);
+        var context = AuthScopeResolver.ContextFor(workspace, profile.RelativePath, envPath: scope.Env);
         var resolver = new AuthFieldResolver(workspace, registryFactory(context.Env), context);
 
         var token = profile.Type switch

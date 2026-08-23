@@ -3,6 +3,7 @@ using Tap.Studio.Contracts;
 using Tap.Workspace;
 using Tap.Workspace.Model;
 using Tap.Execution.Variables;
+using Tap.Workspace.Rendering;
 
 namespace Tap.Studio.Endpoints;
 
@@ -160,7 +161,7 @@ public static class AiEndpoints
 
             // The same variable catalog the request assistant gets — names, scopes and secret
             // flags, never values.
-            var variables = GatherVariables(settings, svc.Current, OwningCollection(svc.Current, null), null)
+            var variables = GatherVariables(settings, svc.Current, collection: null, svc.Current.Environments, null)
                 .Select(v => new AiOpenApiAssistant.VariableInfo(v.Name, v.Scope, v.Secret, v.Description, v.Example))
                 .ToArray();
 
@@ -250,11 +251,17 @@ public static class AiEndpoints
                 a.RelativePath, a.Name, a.Type, a.Scopes, a.Headers.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray()))
             .ToArray();
 
-        var envNames = current.Environments
+        var collection = OwningCollection(current, path);
+        var slug = collection is null ? null : CollectionLocator.SlugForFile(collection.RelativePath);
+
+        // Only the environments this request could actually be sent under: naming one that is
+        // scoped to a different collection would invite the model to reference variables that
+        // will never be in the cascade here.
+        var scopedEnvs = current.EnvironmentsFor(slug);
+        var envNames = scopedEnvs
             .Select(e => e.Name ?? Path.GetFileNameWithoutExtension(e.RelativePath))
             .OrderBy(n => n, StringComparer.Ordinal).ToArray();
 
-        var collection = OwningCollection(current, path);
         AiRequestAssistant.CollectionInfo? collectionInfo = null;
         if (collection is not null)
         {
@@ -264,11 +271,10 @@ public static class AiEndpoints
                 string.IsNullOrWhiteSpace(collection.BaseUrl) ? null : collection.BaseUrl,
                 ResolveRefLabel(current, collection.DefaultAuth, collection.RelativePath),
                 collection.DefaultHeaders.Keys.OrderBy(k => k, StringComparer.Ordinal).ToArray(),
-                collection.Stages.Select(s => s.Name).ToArray(),
-                collection.DefaultStage);
+                envNames);
         }
 
-        var variables = GatherVariables(settings, current, collection, currentSpec);
+        var variables = GatherVariables(settings, current, collection, scopedEnvs, currentSpec);
 
         return new AiRequestAssistant.AssistContext(currentSpec, collectionInfo, authProfiles, envNames, variables);
     }
@@ -304,10 +310,13 @@ public static class AiEndpoints
     }
 
     /// <summary>Collects variable declarations across the cascade (system → workspace →
-    /// collection → stage → env → request), deduped by name with the highest-priority scope
-    /// kept as the label. Secret flags accumulate; values are never included.</summary>
+    /// collection → env → request), deduped by name with the highest-priority scope kept as
+    /// the label. Secret flags accumulate; values are never included.</summary>
+    /// <param name="envs">The environments in scope for the request being assisted — every
+    /// global one plus the collection's own.</param>
     private static IReadOnlyList<AiRequestAssistant.VariableInfo> GatherVariables(
-        SystemSettingsStore settings, LoadedWorkspace ws, CollectionFile? collection, RequestSpecDto? currentSpec)
+        SystemSettingsStore settings, LoadedWorkspace ws, CollectionFile? collection,
+        IReadOnlyList<EnvFile> envs, RequestSpecDto? currentSpec)
     {
         var acc = new Dictionary<string, AiRequestAssistant.VariableInfo>(StringComparer.OrdinalIgnoreCase);
 
@@ -334,13 +343,8 @@ public static class AiEndpoints
             Add(name, "system", v.Secret, null, null);
         if (ws.Manifest?.Vars is { } manifestVars)
             AddSpecs(manifestVars, "workspace");
-        if (collection is not null)
-        {
-            AddSpecs(collection.Vars, "collection");
-            foreach (var stage in collection.Stages)
-                AddSpecs(stage.Vars, "stage");
-        }
-        foreach (var env in ws.Environments)
+        if (collection is not null) AddSpecs(collection.Vars, "collection");
+        foreach (var env in envs)
             AddSpecs(env.Vars, "env");
         if (currentSpec?.Vars is { } specVars)
             foreach (var name in specVars.Keys) Add(name, "request", false, null, null);
@@ -356,9 +360,8 @@ public static class AiEndpoints
     {
         "request" => 0,
         "env" => 1,
-        "stage" => 2,
-        "collection" => 3,
-        "workspace" => 4,
+        "collection" => 2,
+        "workspace" => 3,
         _ => 5,
     };
 

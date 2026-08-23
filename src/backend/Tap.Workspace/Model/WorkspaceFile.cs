@@ -71,6 +71,47 @@ public sealed record AuthFile : WorkspaceFile
     public IReadOnlyList<string> Scopes { get; init; } = [];
 }
 
+/// <summary>
+/// One collection an <see cref="EnvFile"/> is assigned to, plus what the environment changes
+/// about that collection while it is active.
+///
+/// <para>The overrides live here rather than on the environment because they are inherently
+/// per-collection: an <c>uat</c> environment assigned to both <c>orders</c> and <c>billing</c>
+/// points each at a different host. An environment-wide <c>baseUrl</c> could only ever be
+/// right for one of them.</para>
+/// </summary>
+public sealed record EnvCollectionBinding
+{
+    /// <summary>Collection slug — the directory name under <c>collections/</c>.</summary>
+    public required string Collection { get; init; }
+
+    /// <summary>Replaces the collection's <c>baseUrl</c> while this env is active, or
+    /// <c>null</c> to inherit it. May contain <c>{{vars}}</c>.</summary>
+    public string? BaseUrl { get; init; }
+
+    /// <summary>Replaces the collection's <c>defaultAuth</c> while this env is active, or
+    /// <c>null</c> to inherit it. Resolved relative to the <em>env file's</em> directory,
+    /// since that is the file the ref is written in.</summary>
+    public WorkspaceRef? DefaultAuth { get; init; }
+
+    /// <summary>True when the assignment carries no overrides — the env contributes only its
+    /// variables here. Emitted as a bare slug rather than a mapping.</summary>
+    public bool IsBare => BaseUrl is null && DefaultAuth is null;
+}
+
+/// <summary>
+/// A named environment — the single mechanism for "the same requests, pointed somewhere else".
+///
+/// <para>An environment is either <b>global</b> (<see cref="Collections"/> empty), selectable
+/// anywhere in the workspace, or <b>assigned</b> to specific collections, offered only while a
+/// request from one of those is in front of you. An assignment is what a collection
+/// <c>stage</c> used to be: alongside the env tier of the variable cascade it may override that
+/// collection's base URL and default auth — see <see cref="EnvCollectionBinding"/>.</para>
+///
+/// <para>A global environment therefore carries variables and provider bindings only. There is
+/// deliberately no environment-wide base URL: that would move every collection at once, which
+/// is never what "the dev environment" means.</para>
+/// </summary>
 public sealed record EnvFile : WorkspaceFile
 {
     /// <summary>Environment-scoped variables. Each entry can be either a literal value or
@@ -78,6 +119,30 @@ public sealed record EnvFile : WorkspaceFile
     /// the UI displays secret values as <c>***</c> in catalogs and autocomplete.</summary>
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
         new Dictionary<string, VarSpec>();
+
+    /// <summary>The collections this environment is assigned to, each with its own overrides.
+    /// Empty means global — the env is selectable everywhere and overrides nothing. A non-empty
+    /// list confines it to those collections, which is what makes a per-collection
+    /// <c>dev</c>/<c>uat</c>/<c>prod</c> set possible without every collection's environments
+    /// crowding the workspace picker.</summary>
+    public IReadOnlyList<EnvCollectionBinding> Collections { get; init; } = [];
+
+    /// <summary>True when no collection was assigned, so the env applies workspace-wide.</summary>
+    public bool IsGlobal => Collections.Count == 0;
+
+    /// <summary>Whether this env may be applied to a request owned by <paramref name="slug"/>.
+    /// A global env applies to everything, including requests that belong to no collection at
+    /// all; an assigned one only to the collections it names.</summary>
+    public bool AppliesTo(string? slug) => IsGlobal || BindingFor(slug) is not null;
+
+    /// <summary>This env's assignment to <paramref name="slug"/>, or <c>null</c> when it has
+    /// none — which is the case for every collection when the env is global. Callers reading an
+    /// override must go through here: the same env means a different base URL in each
+    /// collection it is assigned to.</summary>
+    public EnvCollectionBinding? BindingFor(string? slug)
+        => slug is null
+            ? null
+            : Collections.FirstOrDefault(b => string.Equals(b.Collection, slug, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Provider that bare <c>{{name}}</c> lookups consult first (and that receives
     /// un-targeted writes) while this env is active. Overrides the workspace manifest's and
@@ -101,12 +166,14 @@ public sealed record EnvFile : WorkspaceFile
 }
 
 /// <summary>
-/// A top-level grouping under <c>collections/</c>. A collection owns the base URL and the
-/// optional <see cref="Stages"/>, default auth, default headers, collection-scoped variables,
-/// display name, and tags — what used to live on a separate <c>ApiFile</c> in <c>apis/</c>.
-/// Its file lives at <c>collections/&lt;slug&gt;/_collection.tap</c>; nested directories
-/// below it are pure grouping (no metadata). Sits between workspace and env in the variable
-/// cascade.
+/// A top-level grouping under <c>collections/</c>. A collection owns the base URL, default
+/// auth, default headers, collection-scoped variables, display name, and tags — what used to
+/// live on a separate <c>ApiFile</c> in <c>apis/</c>. Its file lives at
+/// <c>collections/&lt;slug&gt;/_collection.tap</c>; nested directories below it are pure
+/// grouping (no metadata). Sits between workspace and env in the variable cascade.
+///
+/// <para>Per-target overrides — the old <c>stages:</c> block — are now
+/// <see cref="EnvFile"/>s that name this collection in their <c>collections:</c> list.</para>
 /// </summary>
 public sealed record CollectionFile : WorkspaceFile
 {
@@ -126,23 +193,9 @@ public sealed record CollectionFile : WorkspaceFile
     public RequestTransportSettings Transport { get; init; } = new();
 
     /// <summary>Collection-scoped variables. Cascade tier between workspace and env
-    /// (workspace &lt; <b>collection</b> &lt; stage &lt; env &lt; request).</summary>
+    /// (workspace &lt; <b>collection</b> &lt; env &lt; request).</summary>
     public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
         new Dictionary<string, VarSpec>();
-
-    /// <summary>
-    /// Named environments inside this collection (e.g. <c>dev</c>, <c>staging</c>, <c>prod</c>).
-    /// Each stage can override <see cref="BaseUrl"/>, <see cref="DefaultAuth"/>, and
-    /// <see cref="Vars"/>; unset fields fall through to the collection defaults. Stages
-    /// don't carry their own header overrides — vary headers across stages by referencing
-    /// stage-scoped vars in <see cref="DefaultHeaders"/>. Renderer treats the stage as a
-    /// tier between Collection and Env in the variable cascade
-    /// (workspace &lt; collection &lt; <b>stage</b> &lt; env &lt; request).
-    /// </summary>
-    public IReadOnlyList<CollectionStage> Stages { get; init; } = [];
-
-    /// <summary>Name of the stage to preselect in the UI when no stage is explicitly chosen.</summary>
-    public string? DefaultStage { get; init; }
 
     /// <summary>Whether agents may use this collection — see <see cref="CollectionAgentOptions"/>.</summary>
     public CollectionAgentOptions Agent { get; init; } = new();
@@ -151,8 +204,6 @@ public sealed record CollectionFile : WorkspaceFile
     /// workspace manifest per key; a request overrides it in turn.</summary>
     public HistoryOptions History { get; init; } = new();
 
-    public CollectionStage? FindStage(string? name)
-        => string.IsNullOrEmpty(name) ? null : Stages.FirstOrDefault(s => string.Equals(s.Name, name, StringComparison.OrdinalIgnoreCase));
 }
 
 /// <summary>
@@ -172,27 +223,6 @@ public sealed record CollectionAgentOptions
     public bool Enabled { get; init; } = true;
 }
 
-/// <summary>
-/// A named environment inside a <see cref="CollectionFile"/>. Provides per-stage overrides
-/// for the baseUrl, auth, and variables. Variables here override workspace + collection
-/// variables but are themselves overridden by env/request scopes.
-/// </summary>
-public sealed record CollectionStage
-{
-    /// <summary>Stage identifier (e.g. <c>dev</c>, <c>staging</c>, <c>prod</c>). Required, unique within the collection.</summary>
-    public required string Name { get; init; }
-
-    /// <summary>Optional override for the collection's baseUrl. <c>null</c> means "inherit".</summary>
-    public string? BaseUrl { get; init; }
-
-    /// <summary>Optional override for the collection's defaultAuth. <c>null</c> means "inherit".</summary>
-    public WorkspaceRef? DefaultAuth { get; init; }
-
-    /// <summary>Stage-scoped variables. Override workspace+collection defaults; can carry <c>${{secret}}</c> refs.</summary>
-    public IReadOnlyDictionary<string, VarSpec> Vars { get; init; } =
-        new Dictionary<string, VarSpec>();
-}
-
 public sealed record RequestFile : WorkspaceFile
 {
     public WorkspaceRef? Auth { get; init; }
@@ -204,8 +234,8 @@ public sealed record RequestFile : WorkspaceFile
     ///
     /// <para>This exists because a portable <c>.http</c> file's whole appeal is living next to
     /// the code it exercises rather than being filed into Tap's directory layout. The directive
-    /// lets such a file claim a collection's baseUrl, headers, auth, and stages from anywhere in
-    /// the repo.</para>
+    /// lets such a file claim a collection's baseUrl, headers, auth, and environments from
+    /// anywhere in the repo.</para>
     /// </summary>
     public string? CollectionRef { get; init; }
 
@@ -237,9 +267,9 @@ public sealed record RequestFile : WorkspaceFile
     /// <para><b>These are the weakest scope in the cascade, below the workspace manifest.</b>
     /// That inversion is the whole point: a <c>.http</c> file is expected to run in Visual
     /// Studio and REST Client too, where its <c>@baseUrl</c> is the only definition there is.
-    /// Inside Tap the workspace, collection, stage, and environment are deliberate
-    /// configuration and must win, or selecting a stage would silently do nothing to a file
-    /// that carries its own fallback. See §5.7 of <c>docs/workspace-format.md</c>.</para>
+    /// Inside Tap the workspace, the collection, and the environment are deliberate
+    /// configuration and must win, or selecting an environment would silently do nothing to a
+    /// file that carries its own fallback. See §5.7 of <c>docs/workspace-format.md</c>.</para>
     /// </summary>
     public IReadOnlyDictionary<string, VarSpec> PortableVars { get; init; } =
         new Dictionary<string, VarSpec>();

@@ -101,7 +101,7 @@ public class WorkspaceInventoryTests
     private static Tap.Workspace.LoadedWorkspace Ws()
         => BuildWorkspace(
             Manifest, DevEnv, ProdEnv,
-            DemoCollection(baseUrl: "{{DEMO_API_URL}}"), BearerAuth,
+            DemoCollection(baseUrl: "{{DEMO_API_URL}}"), BearerAuth, UatEnv,
             GetRequest, PostRequest, LooseRequest, Smoke, Checkout);
 
     [Fact]
@@ -115,11 +115,17 @@ public class WorkspaceInventoryTests
         var demo = Assert.Single(inventory.Collections);
         Assert.Equal("Demo", demo.Name);
         Assert.Equal("{{DEMO_API_URL}}", demo.BaseUrl);
-        Assert.Equal(["uat"], demo.Stages);
+        // Only the scoped env is listed on the collection — the two globals apply everywhere
+        // and are reported once, on inventory.Envs.
+        Assert.Equal(["collections/demo/uat.env.tap"], demo.Environments);
         Assert.Equal(2, demo.RequestCount);
 
         Assert.Equal(3, inventory.Requests.Count);
-        Assert.Equal(2, inventory.Envs.Count);
+        Assert.Equal(3, inventory.Envs.Count);
+        Assert.Empty(inventory.Envs.Single(e => e.Name == "Dev").Collections);
+        var uat = Assert.Single(inventory.Envs.Single(e => e.Name == "UAT").Collections);
+        Assert.Equal("demo", uat.Collection);
+        Assert.Equal("http://uat.demo.test", uat.BaseUrl);
         Assert.True(inventory.Envs.Single(e => e.Name == "Dev").IsDefault);
         Assert.False(inventory.Envs.Single(e => e.Name == "Prod").IsDefault);
 
@@ -176,7 +182,10 @@ public class WorkspaceInventoryTests
         Assert.Equal(["DEMO_API_URL", "TRACE", "thing.id"], described.VariablesReferenced);
 
         Assert.Equal("Demo Bearer", described.Auth);
-        Assert.Equal(["uat"], described.Stages);
+        // Every env the request could run under: both globals plus its collection's own.
+        Assert.Equal(
+            ["collections/demo/uat.env.tap", "environments/dev.env.tap", "environments/prod.env.tap"],
+            described.Environments.Order(StringComparer.Ordinal));
         Assert.Equal("status = 200", Assert.Single(described.Assertions));
     }
 

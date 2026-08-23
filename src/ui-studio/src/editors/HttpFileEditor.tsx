@@ -7,13 +7,12 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { HttpRequestSummary, TreeNode, VariableContext, WorkspaceErrorDto } from '../api/types'
-import { useActiveEnv, useTapStore } from '../store'
+import { useEffectiveEnv, useTapStore } from '../store'
 import { CollectionLinkChip } from './CollectionLinkChip'
 import { EditorShell } from './EditorShell'
 import { ResponsePanel } from './ResponsePanel'
 import { SourceCodeEditor } from './SourceCodeEditor'
 import { restoreDraft, usePublishDraft } from './useDraft'
-import { useTabView } from './useTabView'
 import { useExecution } from './useExecution'
 
 interface Props {
@@ -49,7 +48,6 @@ export function HttpFileEditor({ path }: Props) {
   const generation = useTapStore((s) => s.generation)
   const openTab = useTapStore((s) => s.openTab)
   const collections = useTapStore((s) => s.collections)
-  const activeEnv = useActiveEnv()
 
   /** Last-saved text, as the server handed it over. `null` until the first load lands. */
   const [source, setSource] = useState<string | null>(null)
@@ -62,8 +60,6 @@ export function HttpFileEditor({ path }: Props) {
   const [warnings, setWarnings] = useState<WorkspaceErrorDto[]>([])
   const [reveal, setReveal] = useState<{ line: number; nonce: number } | null>(null)
   const revealNonce = useRef(0)
-  /** Stage override for this session; `null` means "the collection's default". */
-  const [stage, setStage] = useTabView<string | null>(path, 'stage', null)
 
   // Keyed by tab path: the response (and a stream still arriving) survives a trip to another
   // tab. `sentPath` names which of the file's requests produced what is on screen.
@@ -83,27 +79,19 @@ export function HttpFileEditor({ path }: Props) {
     return collections.find((c) => c.slug === parts[1]) ?? null
   }, [collections, path])
 
-  // Drop the override only on an actual move between collections. The slug resolves from
-  // null on the first render pass, and treating that as a move would undo the stage the tab
-  // is being restored with.
-  const lastSlugRef = useRef<string | null | undefined>(undefined)
-  useEffect(() => {
-    const slug = linkedCollection?.slug ?? null
-    const previous = lastSlugRef.current
-    lastSlugRef.current = slug
-    if (previous !== undefined && previous !== slug) setStage(null)
-  }, [linkedCollection?.slug, setStage])
-  const effectiveStage = stage ?? linkedCollection?.defaultStage ?? null
+  // The environment the whole file resolves under — a property of the collection, so every
+  // request in the file (and every other file under the same collection) follows the same pick.
+  const env = useEffectiveEnv(linkedCollection?.slug ?? null)
+  const setCollectionEnv = useTapStore((s) => s.setCollectionEnv)
 
   // Scoped to the file, not to one request inside it: the server attributes a collection by
-  // walking the path's directories, so the file path resolves the same collection/stage/env
-  // cascade its requests do. The request-scope layer is simply absent, which is correct —
-  // a file has no single request's vars.
+  // walking the path's directories, so the file path resolves the same collection/env cascade
+  // its requests do. The request-scope layer is simply absent, which is correct — a file has
+  // no single request's vars.
   const variableContext = useMemo<VariableContext>(() => ({
     requestPath: path,
-    envPath: activeEnv ?? undefined,
-    stage: effectiveStage ?? undefined,
-  }), [path, activeEnv, effectiveStage])
+    envPath: env ?? undefined,
+  }), [path, env])
 
   useEffect(() => {
     let cancelled = false
@@ -180,8 +168,7 @@ export function HttpFileEditor({ path }: Props) {
     // requests and the panel has to name the one it is showing.
     send({
       path: request.path,
-      env: activeEnv,
-      stage: effectiveStage,
+      env,
       // Only send the draft when it differs. On a clean file the on-disk read is the same
       // text, and skipping it keeps the saved path exercising exactly the saved-file code.
       source: dirty ? draft : undefined,
@@ -231,14 +218,14 @@ export function HttpFileEditor({ path }: Props) {
     >
       <Stack gap="sm" mt="xs">
         {/* Sits above the request list rather than beside any one row: the collection and
-            stage apply to every request in the file, and every relative request line below
-            is read against them. */}
+            its environment apply to every request in the file, and every relative request
+            line below is read against them. */}
         {linkedCollection && (
           <Group gap="xs" wrap="nowrap">
             <CollectionLinkChip
               summary={linkedCollection}
-              stage={effectiveStage}
-              onStageChange={setStage}
+              env={env}
+              onEnvChange={(next) => setCollectionEnv(linkedCollection.slug, next)}
               variableContext={variableContext}
               onOpen={() => openTab({
                 path: `collections/${linkedCollection.slug}`,

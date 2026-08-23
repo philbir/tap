@@ -22,15 +22,17 @@ public static partial class AiRequestAssistant
         IReadOnlyList<VariableInfo> Variables);
 
     /// <summary>The collection that owns the current request — its base URL, default auth,
-    /// shared headers, and stages all influence how a request should be crafted.</summary>
+    /// shared headers, and the environments it can be sent under all influence how a request
+    /// should be crafted.</summary>
     public sealed record CollectionInfo(
         string Name,
         string Path,
         string? BaseUrl,
         string? DefaultAuth,
         IReadOnlyList<string> DefaultHeaderNames,
-        IReadOnlyList<string> StageNames,
-        string? DefaultStage);
+        /// <summary>Names of the environments in scope here — the globals plus the ones scoped
+        /// to this collection.</summary>
+        IReadOnlyList<string> EnvNames);
 
     /// <summary>A reusable auth profile the request can point at via its <c>auth</c> field.</summary>
     public sealed record AuthProfileInfo(
@@ -122,8 +124,8 @@ public static partial class AiRequestAssistant
                 sb.AppendLine($"Default auth: {Clean(col.DefaultAuth)} is applied automatically — only set the request `auth` to override it or set `none` to opt out.");
             if (col.DefaultHeaderNames.Count > 0)
                 sb.AppendLine($"Collection headers added to every request (don't duplicate these unless overriding): {CleanJoin(", ", col.DefaultHeaderNames)}.");
-            if (col.StageNames.Count > 0)
-                sb.AppendLine($"Stages (environments) available: {CleanJoin(", ", col.StageNames)}{(col.DefaultStage is { } ds ? $" (default: {Clean(ds)})" : "")}. Vary host/values across stages with stage-scoped variables, not by hardcoding.");
+            if (col.EnvNames.Count > 0)
+                sb.AppendLine($"Environments available here: {CleanJoin(", ", col.EnvNames)}. Vary host/values across environments with env-scoped variables, not by hardcoding.");
             sb.AppendLine();
         }
 

@@ -5,11 +5,11 @@ import { COLLECTION_FILE, resolveCollectionFile } from './tapFiles'
  *
  *  Shape per `kind`:
  *  - `collection` — top-level directory under `.tap/collections/`. Carries optional
- *                   metadata via `_collection.tap` (baseUrl, stages, defaults, vars).
+ *                   metadata via `_collection.tap` (baseUrl, defaults, vars).
  *  - `folder`     — pure grouping directory inside a collection. No metadata.
  *  - `request`    — leaf request file. Inherits everything from its containing collection.
  *  - `auth`       — leaf auth profile owned by the collection it sits in. Resolves its
- *                   `{{var}}` refs against that collection's variables and stages.
+ *                   `{{var}}` refs against that collection's variables.
  *                   Workspace-scoped profiles live under `auth/` and don't appear here.
  *  - `httpfile`   — a portable `.http` file. Groups the requests it holds, so it *renders*
  *                   like a folder — but it is one file, and its row acts like one: it opens

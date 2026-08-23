@@ -22,20 +22,26 @@ export function collectionSlugOf(path: string): string | null {
 
 /**
  * Group the workspace's auth profiles for a `<Select>`, so it's obvious which ones are
- * owned by the collection at hand (and can therefore use its variables and stages), which
+ * owned by the collection at hand (and can therefore use its variables), which
  * are shared workspace-wide, and which belong to some *other* collection — legal to
  * reference, but they resolve against that collection's variables, not this one's.
  *
  * Values are refs relative to `fromPath` (the request or `_collection.tap` doing the
  * referencing), matching what the emitter writes to disk.
+ *
+ * `forCollection` separates the two jobs `fromPath` normally does at once. An environment's
+ * per-collection assignment writes its ref relative to the *env file* but is used inside the
+ * *assigned collection*, so that collection's own profiles are the ones that belong under
+ * "This collection". Omit it and the grouping follows `fromPath`, as everywhere else.
  */
 export function authSelectGroups(opts: {
   auths: AuthSummary[]
   collections: CollectionSummary[]
   fromPath: string
+  forCollection?: string | null
 }): ComboboxItemGroup<ComboboxItem>[] {
-  const { auths, collections, fromPath } = opts
-  const ownSlug = collectionSlugOf(fromPath)
+  const { auths, collections, fromPath, forCollection } = opts
+  const ownSlug = forCollection !== undefined ? forCollection : collectionSlugOf(fromPath)
   const nameOf = (slug: string) => collections.find((c) => c.slug === slug)?.name ?? slug
 
   const own: AuthSummary[] = []

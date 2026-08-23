@@ -38,7 +38,6 @@ public sealed record HistoryEntry
     public string? Collection { get; init; }
 
     public string? Env { get; init; }
-    public string? Stage { get; init; }
 
     /// <summary>How the exchange was run. <c>studio</c> today; the field exists so a later CLI
     /// or CI recorder doesn't have to change the format to say who it was.</summary>
@@ -105,7 +104,6 @@ public sealed record HistorySummary(
     string? RequestName,
     string? Collection,
     string? Env,
-    string? Stage,
     string Method,
     string Url,
     int? Status,

@@ -44,7 +44,7 @@ const docs: DocSection[] = [
             ["Response panel", "Status, duration, size, and content type, with tabs for the body, headers, the exact request sent, the auth and variable flow, and the secrets resolved."],
             ["Streaming", "text/event-stream responses stream into a live timeline; protocol: websocket opens a real socket and appends frames as they arrive."],
             ["GraphQL", "The GraphQL body mode fetches the endpoint schema, so queries, mutations, and variables get completion and validation against the live server."],
-            ["Base URL and stages", "A request stores a path; the collection contributes the base URL, and a named stage can override it for dev, uat, or prod."],
+            ["Base URL and environments", "A request stores a path; the collection contributes the base URL, and an environment scoped to that collection can override it for dev, uat, or prod."],
           ]}
         />
       </>
@@ -189,7 +189,7 @@ const docs: DocSection[] = [
         />
         <div className="code-grid section-gap">
           <CodeBlock title="Selecting what runs" code={commands.studioCliSelect} />
-          <CodeBlock title="Environment, stage, and input variables" code={commands.studioCliVars} />
+          <CodeBlock title="Environment and input variables" code={commands.studioCliVars} />
         </div>
         <CodeBlock title=".github/workflows/api-tests.yml" code={commands.studioCliCi} />
         <ConfigTable
@@ -315,7 +315,7 @@ const docs: DocSection[] = [
     id: "studio-workspace",
     eyebrow: "Format",
     title: "The workspace is your repo",
-    body: "Seven file kinds, all Markdown with YAML frontmatter. A runnable request is the composition of workspace, collection, stage, auth, environment, and request.",
+    body: "Seven file kinds, all Markdown with YAML frontmatter. A runnable request is the composition of workspace, collection, auth, environment, and request.",
     content: () => (
       <>
         <Screenshot
@@ -327,7 +327,7 @@ const docs: DocSection[] = [
           label="Workspace file kinds"
           rows={[
             ["workspace.tap", "The workspace: name, default environment, variable providers, workspace-wide variables."],
-            ["_collection.tap", "A collection: base URL, named stages, default auth, default headers, collection variables."],
+            ["_collection.tap", "A collection: base URL, default auth, default headers, collection variables."],
             ["*.req.tap", "One request, as a fenced http block plus Markdown documentation."],
             ["*.auth.tap", "A reusable authentication profile."],
             ["*.env.tap", "A named environment: a set of variables and secret references."],
@@ -336,7 +336,7 @@ const docs: DocSection[] = [
           ]}
         />
         <Callout title="A runnable request is a composition">
-          Workspace + collection (+ stage) + auth + environment + request. No single file is the
+          Workspace + collection + auth + environment + request. No single file is the
           whole story, and sub-folders inside a collection are pure grouping — they carry no metadata
           and no inheritance.
         </Callout>
@@ -373,13 +373,13 @@ const docs: DocSection[] = [
         <div className="section-gap">
           <FlowDiagram
             label="Variable cascade"
-            steps={["workspace", "collection", "stage", "env", "request", "run"]}
+            steps={["workspace", "collection", "env", "request", "run"]}
           />
         </div>
         <ModeGrid
           gap
           items={[
-            ["Scopes carry the boring values", "Base URLs, tenant names, page sizes — the things that differ per environment and are fine to read in a diff. They live in the vars block of the workspace, collection, stage, env, or request file."],
+            ["Scopes carry the boring values", "Base URLs, tenant names, page sizes — the things that differ per environment and are fine to read in a diff. They live in the vars block of the workspace, collection, env, or request file."],
             ["Providers carry everything else", "A provider is a named, typed connection to somewhere values actually live. The workspace file records the name and the type; the value is fetched when the request runs."],
             ["Declared in two places", "Workspace providers live in workspace.tap and travel with the repo. System providers live in ~/.tap/system.json and follow the machine. A workspace provider shadows a system one with the same name."],
             ["Every read is recorded", "Each execution logs which provider answered which name and whether it was secret, so the response's Secrets tab can show what a request depends on without surfacing a value."],

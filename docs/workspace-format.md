@@ -15,7 +15,7 @@ This document is the authoritative spec for the on-disk format. The Tap parser (
 ## 1. Design goals
 
 1. **Git-native.** Every artifact is plain text. Renames work via `git mv`. Diffs are readable.
-2. **Composable.** A runnable request is the composition of *workspace + collection (+ stage) + auth + environment + request*. No single file is the whole story.
+2. **Composable.** A runnable request is the composition of *workspace + collection + auth + environment + request*. No single file is the whole story.
 3. **Readable on GitHub.** Frontmatter is the structured part; the body is human prose. A request file is a documentation page that happens to be executable.
 4. **Secret-safe by construction.** A literal secret never needs to occur in a workspace file. A field that needs one references a provider (`{{kv-prod:stripe-live-key}}`), or a variable declared `secret: true`; values resolve at render time, are traced by name only, and are redacted from anything echoed back out (§12.3, §13).
 5. **One format, a handful of shapes.** Every file is `Markdown + YAML frontmatter`. The `kind` field plus the filename suffix tell the parser what shape to expect.
@@ -30,14 +30,14 @@ This document is the authoritative spec for the on-disk format. The Tap parser (
 | `request` | `*.req.tap` | A single HTTP request template. |
 | `auth` | `*.auth.tap` | A reusable authentication profile (bearer, oauth2, azure-cli, github, …). Lives either in `auth/` (workspace-scoped) or inside a collection (collection-scoped) — see §8.0. |
 | `env` | `*.env.tap` | A named environment (variables plus provider bindings). |
-| `collection` | `_collection.tap` *(at `collections/<slug>/`)* | A top-level group of requests. Owns the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. |
+| `collection` | `_collection.tap` *(at `collections/<slug>/`)* | A top-level group of requests. Owns the base URL, default auth, default headers, plus collection-scoped variables and tags. |
 | `flow` | `*.flow.tap` | An ordered sequence of requests where each step can extract values from its response for the steps after it. Lives in `tests/` — see §10. |
 | `test` | `*.test.tap` | A test set: named checks, each running one request or one flow, with set-scoped variables. Lives in `tests/` — see §11. |
 | `workspace` | `workspace.tap` *(at workspace root)* | Workspace-level config: name, default env, registered variable providers. |
 
-Sub-directories inside a collection are pure grouping for the explorer tree — they carry no metadata, no variables, and no inherited defaults. Every request below a collection inherits its baseUrl, stages, default auth, default headers, and variables; variable sharing across a group of requests lives on `_collection.tap`.
+Sub-directories inside a collection are pure grouping for the explorer tree — they carry no metadata, no variables, and no inherited defaults. Every request below a collection inherits its baseUrl, default auth, default headers, and variables; variable sharing across a group of requests lives on `_collection.tap`.
 
-An `*.auth.tap` placed inside a collection is *owned* by it: the profile's fields resolve against that collection's variables and its active stage. That's the only kind of file below a collection that inherits anything besides a request.
+An `*.auth.tap` placed inside a collection is *owned* by it: the profile's fields resolve against that collection's variables and its active environment. That's the only kind of file below a collection that inherits anything besides a request.
 
 The filename suffix is canonical. The `kind:` frontmatter field is required and must match the suffix. A mismatch is a hard parse error.
 
@@ -78,8 +78,9 @@ my-service/
     │   └── checkout.flow.tap
     └── collections/
         └── stripe/
-            ├── _collection.tap        ← kind: collection (owns baseUrl, default auth/headers, stages)
-            ├── stripe-oauth.auth.tap  ← collection-scoped profile (sees this collection's vars/stages)
+            ├── _collection.tap        ← kind: collection (owns baseUrl, default auth/headers)
+            ├── stripe-live.env.tap    ← env assigned to this collection (collections: [stripe])
+            ├── stripe-oauth.auth.tap  ← collection-scoped profile (sees this collection's vars)
             ├── create-customer.req.tap
             ├── get-customer.req.tap
             └── refunds/              ← pure-grouping sub-folder
@@ -359,7 +360,7 @@ The body is CommonMark. **Exactly one** fenced code block tagged `http` carries 
 The `http` block follows the [VS Code REST Client / JetBrains HTTP Client](https://www.jetbrains.com/help/idea/exploring-http-syntax.html) syntax, with three extensions:
 
 1. `{{var}}` and `{{provider:name}}` interpolation per §3.2 — in the request line, headers, and body.
-2. The request line's URL may be a bare path (`/v1/customers`) — Tap prepends the containing collection's `baseUrl` (or, when a stage is active, the stage override). If the URL is not absolute and the collection has no baseUrl, the render fails with `E_HTTP_BLOCK_SYNTAX`.
+2. The request line's URL may be a bare path (`/v1/customers`) — Tap prepends the containing collection's `baseUrl` (or, when the active environment declares one, the environment's override). If the URL is not absolute and neither answers, the render fails with `E_HTTP_BLOCK_SYNTAX`.
 3. A body that is exactly one line of the form `< ./relative/path` is a **file reference**: the executor loads the file's bytes (resolved relative to the request file, clamped inside the workspace) and sends them as the body. The literal `< …` text is kept for display so captures show what was referenced.
 
 If multiple `http` blocks are present, the parser fails with `E_MULTIPLE_REQUEST_BLOCKS`. If zero are present, the parser fails with `E_NO_REQUEST_BLOCK`.
@@ -540,7 +541,9 @@ either way — the difference is only indentation, and it is invisible in an edi
 
 ## 6. `collection` — `_collection.tap`
 
-A top-level group of requests, owning the base URL, optional named stages, default auth, default headers, plus collection-scoped variables and tags. Lives at `collections/<slug>/_collection.tap`.
+A top-level group of requests, owning the base URL, default auth, default headers, plus collection-scoped variables and tags. Lives at `collections/<slug>/_collection.tap`.
+
+Per-target overrides — the `stages:` block that existed through 0.6.x — are **environments assigned to this collection** (§7), each assignment carrying the base URL and default auth it points this collection at. A collection file that still carries `stages:` or `defaultStage:` fails to parse with `E_UNKNOWN_FIELD`.
 
 ### 6.1 Frontmatter
 
@@ -553,9 +556,7 @@ A top-level group of requests, owning the base URL, optional named stages, defau
 | `defaultAuth` | path \| id-ref | no | Auth profile inherited by every request in the collection that doesn't pin its own `auth:`. |
 | `defaultHeaders` | map<string,string> | no | Merged under request-specific headers. Values may contain `{{vars}}`. |
 | `transport` | mapping | no | `ignoreTlsErrors: <bool>` and/or `timeoutMs: <int ≥ 0>` — inherited by member requests; a request's own `transport` overrides per key. |
-| `vars` | map<string, var-spec> | no | Collection-scoped variables. Cascade tier between workspace and stage. |
-| `stages` | sequence of stage | no | Named per-stage overrides (e.g. `dev`/`staging`/`prod`). Each stage requires a `name` (unique within the collection, case-insensitive) and may override `baseUrl`, `defaultAuth`, and `vars`. |
-| `defaultStage` | string | no | Stage to preselect when no explicit stage is passed. Must name a defined stage — anything else is a parse error. |
+| `vars` | map<string, var-spec> | no | Collection-scoped variables. Cascade tier between workspace and env. |
 | `tags` | string[] | no | |
 | `history` | bool \| map | no | Recording policy inherited by every request in this collection. Overrides the manifest per key; a request overrides it in turn — see §4.3. |
 | `agent` | bool \| mapping | no | Agent-surface policy. `agent: false` (or `agent: { enabled: false }`) fences the collection off from AI agents: its requests disappear from agent discovery, and the MCP tools and `tap-studio call` refuse to describe, send, or call into it (`E_AGENT_ACCESS_DISABLED`). The Studio UI, `send`, and `test` are unaffected — this is policy for agents, not a sandbox. Absent means enabled. The mapping form is reserved for finer-grained controls later. |
@@ -572,26 +573,66 @@ defaultAuth: ../../auth/stripe-bearer.auth.tap
 defaultHeaders:
   Stripe-Version: "2025-04-30"
   Accept: application/json
-stages:
-- name: live
-- name: test
-  baseUrl: https://api.stripe.com
-  defaultAuth: ../../auth/stripe-test-bearer.auth.tap
-defaultStage: live
 ---
 
 # Stripe
 
 [Public docs](https://stripe.com/docs/api). Every request below this collection
 inherits the baseUrl, default auth, and default headers automatically.
+
+`stripe-test.env.tap` next door scopes itself to this collection and swaps the
+default auth for the test key — selecting it in the environment picker moves
+every request below without touching this file.
+```
+
+```markdown
+---
+kind: env
+name: Stripe test mode
+collections:
+- collection: stripe
+  defaultAuth: ../../auth/stripe-test-bearer.auth.tap
+---
 ```
 
 ---
 
 ## 7. `env` — `*.env.tap`
 
-A named environment. Activated by Tap at execute time; supplies the env tier of the variable
-cascade and binds provider prefixes for the duration of the run.
+A named environment — the single mechanism for "the same requests, pointed somewhere else".
+Activated by Tap at execute time; supplies the env tier of the variable cascade, binds
+provider prefixes for the duration of the run, and may override the owning collection's
+`baseUrl` and `defaultAuth`.
+
+An environment is one of two kinds:
+
+- **Global** — no `collections:` key. Selectable anywhere, in the header's workspace-wide
+  environment switcher. This is the right shape for a `dev` / `prod` pair every collection
+  shares.
+- **Assigned** — a non-empty `collections:` list. Offered only while a request from one of
+  those collections is in front of you, and applied only to them; carried into any other
+  collection (by a test set that spans several, say) it silently drops out rather than
+  contributing another collection's values. This is what a collection `stage` was.
+
+Each assignment may carry a `baseUrl` and a `defaultAuth` — the two things a stage could do
+that an env could not. **They belong to the assignment, not to the environment**, because
+they are only ever true of one collection: an `uat` assigned to both `orders` and `billing`
+points each at a different host. A global environment therefore has no base URL at all, which
+is right — "the dev environment" is not a statement about one collection's address.
+
+An assignment with no overrides is written as a bare slug:
+
+```yaml
+collections:
+- billing                                  # offered here; contributes variables only
+- collection: orders                       # …and moves this one
+  baseUrl: https://orders-uat.acme.test
+  defaultAuth: ../../auth/uat.auth.tap
+```
+
+The file may live anywhere — `environments/` for the global ones, beside `_collection.tap`
+for one belonging to a single collection, so deleting the collection takes it along.
+Location does not decide scope; `collections:` does.
 
 ### 7.1 Frontmatter
 
@@ -600,6 +641,9 @@ cascade and binds provider prefixes for the duration of the run.
 | `kind` | `"env"` | yes | |
 | `name` | string | no | |
 | `id` | uuid | no | |
+| `collections` | sequence | no | Collections this env is assigned to. Each entry is a **slug** (not a path), or a mapping with `collection` plus that collection's overrides. Absent or empty = global. A slug may appear once. |
+| `collections[].baseUrl` | string | no | Replaces *that* collection's `baseUrl` while this env is active. May contain `{{vars}}`. |
+| `collections[].defaultAuth` | path \| id-ref | no | Replaces *that* collection's `defaultAuth` while this env is active. Resolved relative to **this env file**, since that is where the ref is written. A request that pins its own `auth:` still wins. |
 | `vars` | map<string, var-spec> | no | Env-tier variables. Same var-spec shape as §5.1, including `secret: true`. |
 | `defaultVariableProvider` | string | no | Provider (or alias) that bare `{{name}}` tokens hit first — and that receives un-targeted variable writes — while this env is active. Overrides the workspace/system default. |
 | `providerAliases` | map<string, string> | no | Alias → provider-name bindings. Requests use a stable prefix (`{{kv:secret}}`); each env points the alias at its own provider (`kv: kv-dev` vs `kv: kv-prod`). |
@@ -625,6 +669,9 @@ extends the same guarantee to bare tokens.
 kind: env
 id: 0192-3a4d-c000-7e1f-...
 name: Production
+collections:
+- collection: stripe
+  baseUrl: https://api.stripe.com
 vars:
   api.baseUrl: https://api.stripe.com
   customer.email: noreply+prod@acme.example
@@ -649,17 +696,20 @@ When Tap renders a request, it merges variable scopes in this order (later overr
    file kind, and deliberately the weakest tier.
 1. `workspace.tap` `vars`
 2. Owning `_collection.tap` `vars` (the collection the request lives under)
-3. Active collection stage's `vars`
-4. Active `env.md` `vars`
-5. Request file `vars`
-6. Per-run overrides (CLI `--var foo=bar`, UI form input; flow/test-set tiers per §10.5)
+3. Active `*.env.tap` `vars`
+4. Request file `vars`
+5. Per-run overrides (CLI `--var foo=bar`, UI form input; flow/test-set tiers per §10.5)
+
+An **assigned** env only contributes tier 3 for the collections it names. For any other
+collection it is as if no env were selected at all, and the rendered request reports
+`envPath: null`.
 
 A later scope redefining a name also redefines its sensitivity — an env that overrides a
 secret with a literal test value is no longer holding a secret.
 
 **`{{baseUrl}}` is built in.** Before the request block is expanded, Tap binds `baseUrl` to the
-owning collection's base URL — the active stage's override when it has one — already expanded and
-with any trailing `/` trimmed. It binds only when no scope from tier 1 upward defines the name, so
+owning collection's base URL — the active environment's override for *that* collection when its
+assignment declares one — already expanded and with any trailing `/` trimmed. It binds only when no scope from tier 1 upward defines the name, so
 declaring your own `baseUrl` var keeps working unchanged. Writing `GET {{baseUrl}}/orders` is
 therefore equivalent to `GET /orders` inside Tap, and unlike the relative form it also resolves in
 tools that know nothing about collections (§13.5.5).
@@ -683,7 +733,7 @@ fields can reference:
 | Location | Scope | Cascade its fields resolve against |
 |---|---|---|
 | `auth/**/*.auth.tap` | **workspace** — shared by every collection | workspace < env |
-| `collections/<slug>/**/*.auth.tap` | **collection** — owned by that collection | workspace < collection < stage < env |
+| `collections/<slug>/**/*.auth.tap` | **collection** — owned by that collection | workspace < collection < env |
 
 Both are referenced the same way, by relative path from the referencing file:
 
@@ -696,7 +746,7 @@ auth: stripe-oauth.auth.tap
 ```
 
 Pick collection scope when the profile's token URL, client id, audience, or credentials are
-already expressed as collection (or stage) variables:
+already expressed as collection (or environment) variables:
 
 ```yaml
 # collections/stripe/_collection.tap
@@ -707,12 +757,17 @@ defaultAuth: stripe-oauth.auth.tap
 vars:
   API_URL: https://api.stripe.test
   IDP_URL: https://idp.stripe.test
-stages:
-- name: dev
-- name: prod
-  vars:
-    API_URL: https://api.stripe.com
-    IDP_URL: https://idp.stripe.com
+```
+
+```yaml
+# collections/stripe/prod.env.tap
+kind: env
+name: prod
+collections:
+- collection: stripe
+vars:
+  API_URL: https://api.stripe.com
+  IDP_URL: https://idp.stripe.com
 ```
 
 ```yaml
@@ -721,14 +776,17 @@ kind: auth
 name: Stripe OAuth
 type: oauth2
 flow: client_credentials
-tokenUrl: '{{IDP_URL}}/connect/token'   # resolves per stage
+tokenUrl: '{{IDP_URL}}/connect/token'   # resolves per environment
 clientId: '{{STRIPE_CLIENT_ID}}'
 ```
 
-Selecting the `prod` stage repoints `tokenUrl` without touching the profile. Runtime tokens
-are cached **per stage and per environment**, so `dev` and `prod` never hand each other a
-token; clearing a profile's token clears every stage/env combination at once. A
-workspace-scoped profile has no stage, so its cache key carries only the env.
+Selecting the `prod` environment repoints `tokenUrl` without touching the profile. Runtime
+tokens are cached **per environment**, so `dev` and `prod` never hand each other a token;
+clearing a profile's token clears every environment at once.
+
+A profile's environment is decided by the profile's *own* collection, not the caller's: a
+request in collection A that borrows a profile from collection B resolves that profile
+against B's scope, so a scoped env belonging to A never leaks across.
 
 Nothing else changes with scope: a request in collection A may reference a profile owned by
 collection B (it just resolves against B's variables, not A's), and a collection-scoped
@@ -804,7 +862,7 @@ know what to register with the identity provider, and ignores any `redirectUri` 
 the file.
 
 Acquired access tokens, refresh tokens, and expiry timestamps live in the host's token store,
-keyed per profile + stage + env (§8.0). They are never written to a workspace file.
+keyed per profile + env (§8.0). They are never written to a workspace file.
 
 ### 8.6 `azure-cli`
 
@@ -894,7 +952,7 @@ to exactly one collection.
 
 ### 9.1 Frontmatter
 
-See §6 — collections own the base URL, default headers, default auth, stages, vars, and tags. This section is retained for navigation only; the canonical schema lives in §6.
+See §6 — collections own the base URL, default headers, default auth, vars, and tags. This section is retained for navigation only; the canonical schema lives in §6.
 
 ---
 
@@ -1246,7 +1304,7 @@ Hand-authored files can of course write the reference directly; the flag and the
 independent, and `secret: true` on a literal still only masks.
 
 A reference resolves wherever a `vars:` block can be written — the workspace manifest, a
-collection, a stage, an env, a request, a `.http` file's `@name = value` lines, and a test
+collection, an env, a request, a `.http` file's `@name = value` lines, and a test
 set's or flow's own variables. What it resolves *to* is redacted on the strength of the
 provider's own mark, so the value in the store is the one that says `secret: true`.
 
@@ -1271,7 +1329,7 @@ ResolvedRequest {
   assertions:  [ …selectors and expected values, already expanded… ]
   redactor:    scrubs this render's secret values from any echoed output
   metadata: {
-    sourceRequestPath, envPath, stageName, resolvedBaseUrl,
+    sourceRequestPath, envPath, resolvedBaseUrl,
     variablesUsed: [ { provider, name, isSecret } ]   ← names only, never values
   }
 }
@@ -1280,16 +1338,18 @@ ResolvedRequest {
 The render pipeline:
 
 1. Load the request file; locate the owning collection by walking the request path
-   (`collections/<slug>/…`); pick the active stage (explicit, else `defaultStage`); resolve
-   the auth ref — the request's `auth:`, else the stage's `defaultAuth`, else the
-   collection's; merge transport settings (request over collection).
+   (`collections/<slug>/…`); drop the selected environment if it is scoped away from that
+   collection (§7); resolve the auth ref — the request's `auth:`, else the env's assignment to
+   this collection, else the collection's own; merge transport settings (request over collection).
+   `metadata.envPath` reports the env that actually applied, which is what the executor keys
+   its token lookup on.
 2. Build the merged variable cascade (§7.3), tracking which names are secret and which came
    out of a `vars:` block — the latter decides whose value may itself carry a token (§3.2).
    Template-valued overrides (a flow step's `vars:`) are expanded against the cascade in
    order, each seeing the ones before it.
 3. Expand `{{…}}` tokens in the fenced `http` block — cascade first, then providers (§3.2) —
    and parse it into method / URL / headers / body.
-4. If the URL is relative, expand the stage-or-collection `baseUrl`, normalize its scheme
+4. If the URL is relative, expand the env-or-collection `baseUrl`, normalize its scheme
    (bare `host:port` gains `http://`, or `ws://` for websocket requests; `http(s)` is
    rewritten to `ws(s)` for websocket), and join. Failing that, `E_HTTP_BLOCK_SYNTAX`.
 5. Merge headers: collection `defaultHeaders` (each value expanded) under the block's
@@ -1303,7 +1363,7 @@ The render pipeline:
 
 The executor then adds what only it can know: for runtime-token profiles (oauth2, azure-cli,
 jwt, github past PAT) it stamps `Authorization: Bearer …` from the token store — scoped per
-profile + stage + env, and the minted token joins the redaction set; a `< ./file` body
+profile + env, and the minted token joins the redaction set; a `< ./file` body
 reference is loaded from disk (workspace-scoped); and Tap Studio stamps
 `User-Agent: tap-studio/<version>` when the rendered headers don't already carry one
 (case-insensitive) — a `User-Agent` set on the request, the collection's `defaultHeaders`,
@@ -1367,7 +1427,7 @@ every other tool:
 
 | Directive | Effect |
 |---|---|
-| `# @tap-collection <slug>` | Attach to a collection from anywhere in the repo — inherits its baseUrl, default headers, default auth, and stages. Files under `collections/<slug>/` inherit by location and need no directive. |
+| `# @tap-collection <slug>` | Attach to a collection from anywhere in the repo — inherits its baseUrl, default headers, default auth, and scoped environments. Files under `collections/<slug>/` inherit by location and need no directive. |
 | `# @tap-auth <path\|id:uuid>` | Same semantics as a request's `auth:` frontmatter key. |
 | `# @tap-assert <expression>` | One assertion, in the one-line form below. Repeatable. |
 | `# @tap-secret <var>[, <var>]` | Marks file variables secret, so their values are redacted everywhere Tap reports a request. |
@@ -1423,7 +1483,7 @@ Accept: application/json
 
 Outside Tap, `@baseUrl` is the only definition there is, so the request goes to
 `http://localhost:5000/`. Inside Tap, the file's own variables are the **weakest** tier of the
-cascade, so the collection's base URL — and the active stage's, and any `env` that redefines the
+cascade, so the collection's base URL — and the active environment's override, and any `env` that redefines the
 name — wins instead. One file, both meanings, no edit in between.
 
 That inversion is specific to `.http` files. A `*.req.tap`'s `vars:` are authored for Tap and stay
@@ -1431,8 +1491,8 @@ at their usual tier, above the collection.
 
 Two consequences worth knowing:
 
-- Selecting a stage moves a portable request, exactly as it moves a `*.req.tap` one. Had the file's
-  own `@baseUrl` won, the stage picker would have silently done nothing.
+- Selecting an environment moves a portable request, exactly as it moves a `*.req.tap` one. Had
+  the file's own `@baseUrl` won, the environment picker would have silently done nothing.
 - A relative request line still works and still inherits the collection's base URL. The portable
   form is an option, not a requirement — and a file that will only ever run inside Tap can use
   either.
@@ -1479,7 +1539,7 @@ The parser accepts both, normalizes internally to a canonical `WorkspaceRef`. Ta
 | `E_KIND_MISSING` | `kind:` field absent. |
 | `E_EXTENSION_COLLISION` | The same logical file exists under both extension families (`orders.req.md` beside `orders.req.tap`) — what a half-finished migration leaves behind. The canonical file wins; the legacy one is not loaded. |
 | `W_LEGACY_EXTENSION` | *Warning.* The file loaded but uses the pre-0.7.0 `.md` extension (§2.0). Run `tap-studio migrate`. Does not fail `lint`. |
-| `E_UNKNOWN_FIELD` | A frontmatter field is unrecognized or malformed for that kind (bad `protocol:`, duplicate stage name, dangling `defaultStage`, invalid `agent:` shape, duplicate path/id in the index, …). |
+| `E_UNKNOWN_FIELD` | A frontmatter field is unrecognized or malformed for that kind (bad `protocol:`, a removed `stages:`/`defaultStage:` on a collection, a path where `collections:` wants a slug, the same collection assigned twice, invalid `agent:` shape, duplicate path/id in the index, …). |
 | `E_NO_REQUEST_BLOCK` | A `request` file has no fenced `http` block. |
 | `E_MULTIPLE_REQUEST_BLOCKS` | A `request` file has more than one fenced `http` block. |
 | `E_DANGLING_REF` | A `path` or `id:` reference does not resolve. |

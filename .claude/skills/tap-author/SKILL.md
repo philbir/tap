@@ -15,9 +15,9 @@ writing files. Verify with the CLI after every change; never consider an asset d
 
 ```
 workspace.tap                                ← kind: workspace — the root marker + manifest
-collections/<slug>/_collection.tap     ← kind: collection — baseUrl, default headers/auth, stages, vars
+collections/<slug>/_collection.tap     ← kind: collection — baseUrl, default headers/auth, vars
 collections/<slug>/**/*.req.tap        ← kind: request — one executable request each
-collections/<slug>/**/*.auth.tap      ← collection-scoped auth profile (sees collection+stage vars)
+collections/<slug>/**/*.auth.tap      ← collection-scoped auth profile (sees collection vars)
 auth/*.auth.tap                        ← workspace-scoped auth profiles (shared, see only workspace+env vars)
 environments/*.env.tap                 ← kind: env — named variable sets (local / dev / prod)
 tests/*.test.tap                       ← kind: test — named group of checks over requests/flows
@@ -31,8 +31,8 @@ one collection (the nearest `_collection.tap` above it), and inherits its `baseU
 ## Concepts that decide everything else
 
 **The variable cascade.** `{{name}}` tokens resolve through scopes, later wins:
-workspace `workspace.tap` vars → owning collection vars → active stage vars → active env vars →
-request vars → per-run overrides (`--var`), plus flow-extracted values in the run bag.
+workspace `workspace.tap` vars → owning collection vars → active env vars → request vars →
+per-run overrides (`--var`), plus flow-extracted values in the run bag.
 A var declared in any of those scopes may hold a token of its own —
 `apiToken: { default: '{{file:api.token}}', secret: true }` resolves through to the provider
 — but a var must not resolve through itself (`E_VAR_CYCLE`), and a value that arrived at
@@ -53,12 +53,31 @@ must export `TAP_VARS_ALLOWED` / `TAP_SECRETS_ALLOWED` (comma-separated globs) b
 `{{env:NAME}}` resolves.
 
 **Auth scoping.** A profile under `auth/` resolves its fields against workspace+env vars
-only; one inside a collection also sees that collection's (and active stage's) vars —
-which is what lets `tokenUrl: '{{IDP_URL}}/connect/token'` re-point per stage. Runtime
-tokens (oauth2, azure-cli) are cached per stage and never written to workspace files.
+only; one inside a collection also sees that collection's vars — which is what lets
+`tokenUrl: '{{IDP_URL}}/connect/token'` re-point per environment. Runtime tokens (oauth2,
+azure-cli) are cached per environment and never written to workspace files. A profile's
+scope comes from its own location, so a request borrowing a profile from another collection
+never drags its environment across.
 
-**Stages.** A collection's `stages:` are named overrides (baseUrl, defaultAuth, vars) —
-dev/uat/prod of the same API. Select at run time with `--stage <name>`.
+**Environments, global and assigned.** An `*.env.tap` with no `collections:` key is global —
+selectable anywhere, contributing variables only. One carrying a `collections:` list is
+offered in exactly those collections, and **each assignment carries that collection's own
+`baseUrl` and `defaultAuth`** — the same `uat` points `orders` and `billing` at different
+hosts, so the override cannot live on the environment. An assignment with no overrides is a
+bare slug:
+
+```yaml
+collections:
+- billing                                  # variables only
+- collection: orders
+  baseUrl: https://orders-uat.acme.test
+  defaultAuth: ../../auth/uat.auth.tap     # relative to THIS env file
+```
+
+The assigned form is what a collection `stage` used to be: dev/uat/prod of one API. Select
+either kind at run time with `-e <name>`; an assigned env used outside its collections
+silently drops out rather than contributing the wrong values. `stages:` / `defaultStage:` on
+a collection were removed in 0.7.0 and now fail to parse.
 
 **Agent access.** `agent: false` on a `_collection.tap` fences that collection off from
 agent surfaces (discovery omits its requests; describe/send/call refuse with
@@ -121,7 +140,7 @@ non-interactive auth type — never try to obtain credentials yourself.
 | `lint` | Parse every file; report what doesn't load | `-w <dir>` |
 | `list [kind]` | Inventory: `requests\|collections\|envs\|tests\|auths` | `--json` |
 | `describe <name>` | One request's template surface (nothing rendered) | `--json` |
-| `send <name>` | Send a saved request, evaluate assertions | `-e <env>` `-s <stage>` `--var k=v` `--use-cached-tokens` `--body` `--json` |
+| `send <name>` | Send a saved request, evaluate assertions | `-e <env>` `--var k=v` `--use-cached-tokens` `--body` `--json` |
 | `call <METHOD> <url>` | Ad-hoc request through a collection | `-c <collection>` `-H 'Name: v'` `-d <text\|@file>` `--auth <ref>` `--allow-any-url` `--json` |
 | `test <name>` | Run a test set or flow | `--tag` `--filter` `--only` `--fail-fast` `--output junit\|trx\|json\|markdown` `--json` `--list` |
 | `vars` | Resolved cascade, secrets masked | `-e <env>` `--request <path>` |

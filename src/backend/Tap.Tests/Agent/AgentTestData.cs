@@ -26,13 +26,22 @@ internal static class AgentTestData
             baseUrl: '{baseUrl}'
             {(defaultAuth is null ? "" : $"defaultAuth: {defaultAuth}\n")}defaultHeaders:
               Accept: application/json
-            stages:
-            - name: uat
-              baseUrl: http://uat.demo.test
             ---
 
             Demo collection.
             """);
+
+    /// <summary>An environment scoped to the demo collection — the replacement for what used to
+    /// be a <c>stages:</c> entry, and what the inventory reports on the collection row.</summary>
+    public static readonly WorkspaceFile UatEnv = Parse("collections/demo/uat.env.tap", """
+        ---
+        kind: env
+        name: UAT
+        collections:
+        - collection: demo
+          baseUrl: http://uat.demo.test
+        ---
+        """);
 
     public static readonly WorkspaceFile BearerAuth = Parse("collections/demo/bearer.auth.tap", """
         ---

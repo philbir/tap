@@ -149,9 +149,14 @@ baseUrl: https://api.stripe.com
 defaultAuth: ../../auth/stripe-bearer.auth.tap
 defaultHeaders:
   Accept: application/json
-stages:
-- name: live
-- name: test
+---
+
+# An environment assigned to this collection — stripe-test.env.tap
+---
+kind: env
+name: test
+collections:
+- collection: stripe
   defaultAuth: ../../auth/stripe-test.auth.tap
 ---`,
   studioAuth: `---
@@ -233,7 +238,7 @@ tap-studio test "Order API" --filter refund
 tap-studio test "Order API" --only 2
 tap-studio test --list`,
   studioCliVars: `tap-studio test "Order API" \\
-  --env ci --stage uat \\
+  --env uat \\
   --var customer=cus_ci \\
   --var-file ci.env
 

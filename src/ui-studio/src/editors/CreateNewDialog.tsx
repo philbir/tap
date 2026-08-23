@@ -37,7 +37,7 @@ interface KindOption {
 const KIND_OPTIONS: KindOption[] = [
   { kind: 'request', label: 'Request', description: 'A single HTTP call template', icon: IconSend, color: 'tap' },
   { kind: 'httpfile', label: '.http file', description: 'Portable REST Client / Visual Studio format — several requests in one file, never reformatted', icon: IconFileCode, color: 'blue' },
-  { kind: 'collection', label: 'Collection', description: 'A group of requests with a baseUrl, stages, default auth/headers, vars', icon: IconFolders, color: 'blue' },
+  { kind: 'collection', label: 'Collection', description: 'A group of requests with a baseUrl, default auth/headers, vars', icon: IconFolders, color: 'blue' },
   { kind: 'auth', label: 'Auth profile', description: 'Bearer, basic, OAuth2, AWS sigv4, …', icon: IconLock, color: 'orange' },
   { kind: 'env', label: 'Environment', description: 'Per-environment variables and secret refs', icon: IconWorld, color: 'grape' },
   { kind: 'test', label: 'Test set', description: 'A group of checks, each running one request or one flow', icon: IconChecklist, color: 'teal' },
@@ -74,7 +74,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
   const [collectionSlug, setCollectionSlug] = useState<string | null>(null)
   /** For Auth: which collection owns the profile, or `WORKSPACE_SCOPE` for a shared one
    *  under `auth/`. A collection-scoped profile can reference that collection's variables
-   *  and stages; a workspace-scoped one only sees workspace + env. */
+   *  a workspace-scoped one only sees workspace + env. */
   const [authScope, setAuthScope] = useState<string>(WORKSPACE_SCOPE)
   /** For Request / .http file: optional sub-folder path inside the chosen collection. */
   const [subFolder, setSubFolder] = useState<string>('')
@@ -314,7 +314,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
         {kind === 'auth' && (
           <Select
             label="Scope"
-            description="A profile inside a collection can use that collection's variables and stages. A workspace profile is shared by every collection."
+            description="A profile inside a collection can use that collection's variables. A workspace profile is shared by every collection."
             data={[
               { value: WORKSPACE_SCOPE, label: 'Workspace (shared)' },
               ...collectionOptions,
@@ -511,7 +511,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
  * Written to run outside Tap as well as in it. A bare `GET /` would only work here — nothing
  * but Tap knows to prepend the collection's base URL — so the file declares `@baseUrl` and
  * builds its request line from that. Visual Studio and REST Client resolve the declaration;
- * inside Tap the collection (and the selected stage) override it, because a `.http` file's own
+ * inside Tap the collection (and the selected environment) override it, because a `.http` file's own
  * variables are the weakest scope in the cascade.
  */
 function httpFileStarter(name: string): string {
@@ -520,7 +520,7 @@ function httpFileStarter(name: string): string {
     '# JetBrains, httpyac and Kulala; the "# @tap-*" lines are inert comments there.',
     '#',
     "# @baseUrl is the fallback those tools use. Inside Tap the collection's baseUrl wins,",
-    '# so selecting a stage or an environment moves this request.',
+    '# so selecting an environment moves this request.',
     '@baseUrl = http://localhost:5000',
     '',
     `### ${name}`,

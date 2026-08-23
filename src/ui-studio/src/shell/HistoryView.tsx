@@ -18,8 +18,13 @@ import { labelForPath } from './tapFiles'
  * <p>Rows for requests that have since been deleted stay in the list, tagged. Dropping them would
  * hide exactly the history most likely to be wanted — you deleted the request, and now you want
  * to know what it used to return.</p>
+ *
+ * <p>Clicking a row opens the exchange it names, not merely the request it belongs to: the tab,
+ * its History tab, and that entry in the response pane. Landing on the request's Params tab and
+ * leaving the user to find the row again would be answering a different question than the one
+ * the click asked.</p>
  */
-export function HistoryView({ onOpenRequest }: { onOpenRequest: (path: string) => void }) {
+export function HistoryView({ onOpenEntry }: { onOpenEntry: (row: HistorySummary) => void }) {
   const generation = useTapStore((s) => s.generation)
   const collections = useTapStore((s) => s.collections)
   const [rows, setRows] = useState<HistorySummary[] | null>(null)
@@ -129,7 +134,7 @@ export function HistoryView({ onOpenRequest }: { onOpenRequest: (path: string) =
                     <TimelineRow
                       key={`${row.requestId}/${row.id}`}
                       row={row}
-                      onOpen={() => { if (row.requestPath) onOpenRequest(row.requestPath) }}
+                      onOpen={() => onOpenEntry(row)}
                     />
                   ))}
                 </Box>
@@ -164,7 +169,7 @@ function TimelineRow({ row, onOpen }: { row: HistorySummary; onOpen: () => void 
   return (
     <UnstyledButton
       onClick={onOpen}
-      disabled={row.orphaned}
+      disabled={row.orphaned || !row.requestPath}
       style={{
         display: 'block',
         width: '100%',

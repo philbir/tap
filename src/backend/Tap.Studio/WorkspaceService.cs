@@ -236,14 +236,14 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// <paramref name="requestPath"/> points into. See <see cref="ResolveRequestFile"/>.</param>
     public ValueTask<ResolvedRequest> RenderAsync(string requestPath, string? envPath,
         IReadOnlyDictionary<string, string>? overrides, CancellationToken ct,
-        string? stageName = null, RequestSpecDto? draftSpec = null,
+        RequestSpecDto? draftSpec = null,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
         string? draftSource = null)
     {
         // Resolving an unsaved editor draft is the one part of the render path that is purely
         // Studio's — the engine only ever sees a RequestFile.
         var req = ResolveRequestFile(Current, requestPath, draftSpec, draftSource);
-        return _pipeline.RenderAsync(req, envPath, overrides, ct, stageName, templateOverrides);
+        return _pipeline.RenderAsync(req, envPath, overrides, ct, templateOverrides);
     }
 
 
@@ -253,12 +253,12 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// re-checks edited assertions against a response the client already has.
     /// </summary>
     public ValueTask<IReadOnlyList<ResolvedAssert>> RenderAssertionsAsync(
-        IReadOnlyList<AssertSpec> assertions, string? requestPath, string? envPath, string? stageName,
+        IReadOnlyList<AssertSpec> assertions, string? requestPath, string? envPath,
         CancellationToken ct, bool tolerant = false,
         IReadOnlyDictionary<string, string>? overrides = null,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
         => _pipeline.RenderAssertionsAsync(
-            assertions, requestPath, envPath, stageName, ct, tolerant, overrides, templateOverrides);
+            assertions, requestPath, envPath, ct, tolerant, overrides, templateOverrides);
 
     private static EnvFile? ResolveEnv(LoadedWorkspace ws, string? envPath)
     {
@@ -276,7 +276,7 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// is supplied (an unsaved editor draft), the request is built in-memory through the same
     /// emit pipeline as Save — <see cref="RequestSpecEmitter.ToFileSource"/> + <see cref="FileParser"/>
     /// — but never written to disk. Otherwise the on-disk file at <paramref name="requestPath"/> is used.
-    /// Either way the request keeps its workspace-relative path, so auth/collection/stage resolution
+    /// Either way the request keeps its workspace-relative path, so auth/collection/env resolution
     /// in the renderer behaves identically to the saved file.
     ///
     /// <para><paramref name="draftSource"/> is the same idea for a <c>.http</c> file, which has no
@@ -364,7 +364,7 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// </summary>
     private ResolvedRequest InjectAuthToken(LoadedWorkspace ws, RequestFile req, ResolvedRequest rendered, string? envPath)
     {
-        var auth = ResolveAuth(ws, req, rendered.Metadata.StageName);
+        var auth = ResolveAuth(ws, req, rendered.Metadata.EnvPath);
         if (auth is null || auth.Type is "none" or "basic" or "bearer" or "apiKey" or "custom" or "aws-sigv4")
             return rendered;
 
@@ -377,10 +377,10 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
                 return rendered;
         }
 
-        // A profile has one cached token per stage and env — read the one minted for the stage
-        // and env this render resolved to, not whichever entry happens to exist.
+        // A profile has one cached token per env — read the one minted for the env this render
+        // actually resolved under, not whichever entry happens to exist.
         var scope = AuthScopeResolver
-            .ContextFor(ws, auth.RelativePath, req.RelativePath, rendered.Metadata.StageName, envPath)
+            .ContextFor(ws, auth.RelativePath, rendered.Metadata.EnvPath)
             .ScopeFor(auth.RelativePath);
         var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
@@ -395,18 +395,16 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
 
     /// <summary>
     /// Snapshot the auth state the executor would see for <paramref name="requestPath"/>:
-    /// which profile is bound (via request &lt; stage &lt; collection precedence), whether a
+    /// which profile is bound (via request &lt; env &lt; collection precedence), whether a
     /// usable runtime token is cached, and whether running the flow would be interactive.
     /// The Flow tab uses this to decide between "already authorized" vs "Run auth" affordances.
     ///
-    /// <para><paramref name="stageName"/> is the stage the caller has selected. It only changes
-    /// the answer for a profile that lives inside the request's own collection, where each
-    /// stage caches its own token. <paramref name="envPath"/> is the selected env, which caches
-    /// its own token for every profile — pass the same one the render used or the Flow tab
-    /// reports on an entry the executor will never read.</para>
+    /// <para><paramref name="envPath"/> is the env the caller has selected. Each env caches its
+    /// own token for every profile — pass the same one the render used or the Flow tab reports
+    /// on an entry the executor will never read.</para>
     /// </summary>
     public AuthStatusDto BuildAuthStatus(
-        string requestPath, RequestSpecDto? draftSpec = null, string? stageName = null, string? envPath = null,
+        string requestPath, RequestSpecDto? draftSpec = null, string? envPath = null,
         string? draftSource = null)
     {
         var ws = Current;
@@ -417,7 +415,7 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
             return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
         }
 
-        var auth = ResolveAuth(ws, req, stageName);
+        var auth = ResolveAuth(ws, req, envPath);
         if (auth is null)
             return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
 
@@ -437,7 +435,7 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
 
         var interactive = IsInteractive(auth);
         var scope = AuthScopeResolver
-            .ContextFor(ws, auth.RelativePath, req.RelativePath, stageName, envPath)
+            .ContextFor(ws, auth.RelativePath, envPath)
             .ScopeFor(auth.RelativePath);
         var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
@@ -469,28 +467,11 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
         }
     }
 
-    /// <summary>
-    /// Mirrors <see cref="WorkspaceRenderer"/>'s auth resolution order — request &lt; stage &lt; collection —
-    /// so the token injector targets the same file the renderer's static <c>ApplyAuthHeaders</c>
-    /// saw. <paramref name="stageName"/> is the stage the render resolved to; null falls back
-    /// to the collection's default stage, same as the renderer. Returning null means there's
-    /// no auth attached (or the ref didn't resolve).
-    /// </summary>
-    private static AuthFile? ResolveAuth(LoadedWorkspace ws, RequestFile req, string? stageName)
-    {
-        var requestDir = Path.GetDirectoryName(req.RelativePath) ?? string.Empty;
-        if (ws.Resolve(req.Auth, requestDir) is AuthFile direct) return direct;
-
-        var collection = CollectionLocator.ForRequest(ws, req);
-        if (collection is null) return null;
-        var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-        var stage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
-        if (stage?.DefaultAuth is { } stageAuthRef && ws.Resolve(stageAuthRef, collectionDir) is AuthFile stageAuth)
-            return stageAuth;
-        if (collection.DefaultAuth is { } collectionAuthRef && ws.Resolve(collectionAuthRef, collectionDir) is AuthFile collectionAuth)
-            return collectionAuth;
-        return null;
-    }
+    /// <summary>Request &lt; env &lt; collection, exactly as the renderer resolves it. Delegated
+    /// to the engine so the Studio's static preview and a real send can never disagree about
+    /// which profile is bound.</summary>
+    private static AuthFile? ResolveAuth(LoadedWorkspace ws, RequestFile req, string? envPath)
+        => RequestPipeline.ResolveAuth(ws, req, envPath);
 
     /// <summary>Reads the raw source text of a workspace file. Used by detail endpoints so
     /// the UI can offer a "Source" tab for raw-markdown editing. The path goes through the

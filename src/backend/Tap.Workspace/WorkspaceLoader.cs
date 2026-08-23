@@ -328,6 +328,14 @@ public sealed class LoadedWorkspace
 
     private static readonly HistoryOptions DefaultHistory = new();
 
+    /// <summary>
+    /// The environments selectable while a file owned by <paramref name="collectionSlug"/> is in
+    /// front of the user: every global env, plus the ones scoped to that collection. Pass
+    /// <c>null</c> for a file that belongs to no collection — only the globals answer then.
+    /// </summary>
+    public IReadOnlyList<EnvFile> EnvironmentsFor(string? collectionSlug)
+        => Environments.Where(e => e.AppliesTo(collectionSlug)).ToArray();
+
     public WorkspaceFile? FindByPath(string relativePath)
         => _byPath.GetValueOrDefault(relativePath.Replace('\\', '/'));
 

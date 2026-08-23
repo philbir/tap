@@ -1,7 +1,9 @@
 ---
 kind: request
+id: 01a02b0f-1be0-7fcb-9d36-382570a7ada9
 name: Whoami (auth code + PKCE)
 auth: ../../../auth/demo-oauth-pkce.auth.tap
+history: true
 tags: [demo, auth, oauth2, pkce]
 ---
 

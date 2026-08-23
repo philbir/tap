@@ -33,7 +33,7 @@ public static class ExecuteEndpoint
             try
             {
                 rendered = await svc.RenderAsync(
-                    body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec, draftSource: body.Source).ConfigureAwait(false);
+                    body.Path, body.Env, body.Overrides, ct, body.Spec, draftSource: body.Source).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
                 rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
 
@@ -104,7 +104,7 @@ public static class ExecuteEndpoint
                         VariablesUsed: rendered.Metadata.VariablesUsed
                             .Select(s => new VariableTraceDto(s.ProviderName, s.Name, s.Resolved, s.IsSecret, s.Duration.TotalMilliseconds))
                             .ToArray(),
-                        Stage: rendered.Metadata.StageName,
+                        Env: rendered.Metadata.EnvPath,
                         Error: null,
                         Protocol: rendered.Protocol.ToWire(),
                         Assertions: wsAsserts,
@@ -160,7 +160,7 @@ public static class ExecuteEndpoint
                     VariablesUsed: rendered.Metadata.VariablesUsed
                         .Select(s => new VariableTraceDto(s.ProviderName, s.Name, s.Resolved, s.IsSecret, s.Duration.TotalMilliseconds))
                         .ToArray(),
-                    Stage: rendered.Metadata.StageName,
+                    Env: rendered.Metadata.EnvPath,
                     Error: null,
                     Protocol: rendered.Protocol.ToWire(),
                     Assertions: assertions,
@@ -197,7 +197,7 @@ public static class ExecuteEndpoint
                     ResponseBodyBytes: 0,
                     DurationMs: 0,
                     VariablesUsed: [],
-                    Stage: null,
+                    Env: null,
                     Error: failure,
                     Protocol: "http",
                     Assertions: [],
@@ -208,7 +208,7 @@ public static class ExecuteEndpoint
         app.MapPost("/api/execute/tls-diagnose", async (ExecuteRequestDto body, WorkspaceService svc, CancellationToken ct) =>
         {
             var rendered = await svc.RenderAsync(
-                body.Path, body.Env, body.Overrides, ct, body.Stage, body.Spec, draftSource: body.Source).ConfigureAwait(false);
+                body.Path, body.Env, body.Overrides, ct, body.Spec, draftSource: body.Source).ConfigureAwait(false);
             return Results.Ok(await HttpTransport.DiagnoseAsync(new Uri(rendered.Url), ct).ConfigureAwait(false));
         });
     }

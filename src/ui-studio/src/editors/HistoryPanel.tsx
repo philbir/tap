@@ -5,7 +5,7 @@ import { modals } from '@mantine/modals'
 import {
   IconAdjustments, IconAlertTriangle, IconHistory, IconLock, IconRefresh, IconTrash,
 } from '@tabler/icons-react'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { HistorySummary } from '../api/types'
 import { useTapStore } from '../store'
@@ -40,6 +40,7 @@ export function HistoryPanel({ requestId, enabled, selectedId, onSelect, onCount
   const generation = useTapStore((s) => s.generation)
   const [rows, setRows] = useState<HistorySummary[] | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const listRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
     if (!requestId) { setRows([]); onCountChange?.(0); return }
@@ -58,6 +59,15 @@ export function HistoryPanel({ requestId, enabled, selectedId, onSelect, onCount
   // `generation` bumps after every save and every watcher-driven reload — which is also when a
   // Send has just finished, so the list refreshes without its own subscription.
   useEffect(() => { void load() }, [load, generation])
+
+  // Bring the selected row into view. It matters when the selection came from somewhere else —
+  // the sidebar timeline picks an entry that may be the fortieth row here, and a highlight you
+  // have to scroll to find is not a selection the user can see.
+  useEffect(() => {
+    if (!selectedId || !rows?.length) return
+    const row = listRef.current?.querySelector(`[data-entry-id="${CSS.escape(selectedId)}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+  }, [selectedId, rows])
 
   function confirmClear() {
     if (!requestId || !rows?.length) return
@@ -119,7 +129,7 @@ export function HistoryPanel({ requestId, enabled, selectedId, onSelect, onCount
 
       {rows.length > 0 && (
         <ScrollArea.Autosize mah={420} type="hover" scrollbarSize={8}>
-          <Stack gap={2}>
+          <Stack gap={2} ref={listRef}>
             {rows.map((row) => (
               <HistoryRow
                 key={row.id}
@@ -171,6 +181,7 @@ function HistoryRow({ row, selected, onSelect, onDelete }: {
   return (
     <UnstyledButton
       onClick={onSelect}
+      data-entry-id={row.id}
       style={{
         display: 'block',
         padding: '6px 8px',
@@ -184,7 +195,7 @@ function HistoryRow({ row, selected, onSelect, onDelete }: {
         <StatusChip row={row} />
         <Text size="xs" ff="var(--mono)" c="dimmed" style={{ width: 46, flexShrink: 0 }}>{row.method}</Text>
         <Text size="xs" truncate="end" style={{ flex: 1, minWidth: 0 }} title={row.url}>{row.url}</Text>
-        {row.stage && <Badge size="xs" variant="light" color="grape">{row.stage}</Badge>}
+        {row.env && <Badge size="xs" variant="light" color="grape">{envLabel(row.env)}</Badge>}
         {row.encrypted && (
           <Tooltip label={row.locked ? 'Encrypted — no key on this machine' : 'Encrypted at rest'} withArrow>
             <IconLock size={12} color="var(--mantine-color-dimmed)" style={{ flexShrink: 0 }} />
@@ -248,3 +259,9 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
+/** The env badge on a history row shows the file's stem — a full workspace-relative path
+ *  would swamp the row, and the stem is what the picker calls it anyway. */
+function envLabel(path: string): string {
+  const name = path.split('/').pop() ?? path
+  return name.replace(/\.env\.(tap|md)$/i, '')
+}

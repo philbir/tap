@@ -10,10 +10,10 @@ import { notifications } from '@mantine/notifications'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, type AssertResponseSnapshot } from '../api/client'
 import type {
-  AssertResult, AssertSummary, ExecutionResult, HistoryEntry, HistorySummary, HttpHeaderSpec, RequestDetail,
+  AssertResult, AssertSummary, ExecutionResult, HistoryEntry, HttpHeaderSpec, RequestDetail,
   RequestSpec, TlsDiagnosis, VariableContext,
 } from '../api/types'
-import { useActiveEnv, useTapStore } from '../store'
+import { useEffectiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import {
   BODY_MODE_LABELS, contentTypeForBodyMode, detectBodyMode, detectRawSubType, looksLikeGraphql,
@@ -59,7 +59,6 @@ export function RequestEditor({ path }: Props) {
   const renameTab = useTapStore((s) => s.renameTab)
   const clearDraft = useTapStore((s) => s.clearDraft)
   const reload = useTapStore((s) => s.reload)
-  const activeEnv = useActiveEnv()
   const tagSuggestions = useTagDictionary()
 
   const [detail, setDetail] = useState<RequestDetail | null>(null)
@@ -75,7 +74,6 @@ export function RequestEditor({ path }: Props) {
     rendered, execution, error: actionError, sending, stopped,
     send: startSend, stop, clear: clearExecution, setError: setActionError,
   } = useExecution(path)
-  const [stage, setStage] = useTabView<string | null>(path, 'stage', null)
   const [diagnosis, setDiagnosis] = useState<TlsDiagnosis | null>(null)
   const [diagnosing, setDiagnosing] = useState(false)
   const [varsOpened, varsCtl] = useDisclosure(false)
@@ -87,10 +85,18 @@ export function RequestEditor({ path }: Props) {
   // recompute what the server already told us.
   const sentAssertionsRef = useRef<string>('')
   // A recorded exchange the user opened from the History tab. Kept apart from the live
-  // execution so picking one doesn't overwrite the response you just got — and so leaving the
-  // tab puts the live one straight back.
+  // execution so picking one doesn't overwrite the response you just got — and so closing it
+  // puts the live one straight back.
   const [replay, setReplay] = useState<HistoryEntry | null>(null)
   const [historyCount, setHistoryCount] = useState(0)
+  // Which entry is open, as tab state rather than local state. Two things need that: the
+  // sidebar timeline, which selects an entry in a tab whose editor isn't mounted yet, and a
+  // tab switch, which unmounts this editor and would otherwise drop the selection.
+  const [openEntryId, setOpenEntryId] = useTabView<string | null>(path, 'historyEntry', null)
+  // The id we last asked the server for. Guards the fetch effect against re-running for an
+  // entry that is already open — or that failed to open, which is not worth retrying on
+  // every `generation` bump.
+  const requestedEntryRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -208,23 +214,18 @@ export function RequestEditor({ path }: Props) {
     return collections.find((c) => c.slug === slug) ?? null
   }, [collections, path])
 
-  // Drop the override only on an actual move between collections. The slug resolves from
-  // null on the first render pass, and treating that as a move would undo the stage the tab
-  // is being restored with.
-  const lastSlugRef = useRef<string | null | undefined>(undefined)
-  useEffect(() => {
-    const slug = linkedCollection?.slug ?? null
-    const previous = lastSlugRef.current
-    lastSlugRef.current = slug
-    if (previous !== undefined && previous !== slug) setStage(null)
-  }, [linkedCollection?.slug, setStage])
-  const effectiveStage = stage ?? linkedCollection?.defaultStage ?? null
+  // The environment this request resolves under: the collection's own choice when it has
+  // one, else the workspace default. Unlike the stage override it replaced, this is a
+  // property of the collection rather than of the tab — every request under `demo` follows
+  // the same pick, and it survives a reload.
+  const slug = linkedCollection?.slug ?? null
+  const env = useEffectiveEnv(slug)
+  const setCollectionEnv = useTapStore((s) => s.setCollectionEnv)
 
   const variableContext = useMemo<VariableContext>(() => ({
     requestPath: path,
-    envPath: activeEnv ?? undefined,
-    stage: effectiveStage ?? undefined,
-  }), [path, activeEnv, effectiveStage])
+    envPath: env ?? undefined,
+  }), [path, env])
 
   const assertions = useMemo(() => spec?.assertions ?? [], [spec?.assertions])
   const assertionsKey = useMemo(() => JSON.stringify(assertions), [assertions])
@@ -240,9 +241,7 @@ export function RequestEditor({ path }: Props) {
 
     let cancelled = false
     const timer = setTimeout(() => {
-      api.evaluateAssertions(assertions, assertSnapshot(execution), {
-        path, env: activeEnv, stage: effectiveStage,
-      })
+      api.evaluateAssertions(assertions, assertSnapshot(execution), { path, env })
         .then((r) => { if (!cancelled) setLiveAsserts({ results: r.results, summary: r.summary }) })
         // A failed re-check is not worth an error bar — the next keystroke retries, and the
         // authoritative verdict still arrives on the next Send.
@@ -250,7 +249,7 @@ export function RequestEditor({ path }: Props) {
     }, 300)
 
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [tab, sending, execution, assertions, assertionsKey, path, activeEnv, effectiveStage])
+  }, [tab, sending, execution, assertions, assertionsKey, path, env])
 
   // Verdicts to paint on the editor rows: the live re-check when it applies, otherwise
   // whatever the last Send returned.
@@ -258,22 +257,42 @@ export function RequestEditor({ path }: Props) {
   const assertSummary = liveAsserts?.summary ?? execution?.assertSummary ?? null
 
   /**
-   * Opens a recorded exchange in the response panel. Fetched on demand — the History list holds
-   * summaries, and the bodies stay on disk until someone actually wants one.
+   * Loads whichever entry `openEntryId` names into the response panel. Fetched on demand — the
+   * History list holds summaries, and the bodies stay on disk until someone actually wants one.
+   *
+   * <p>Driven by an effect rather than by the click handler so both routes in behave the same:
+   * picking a row in the History tab, and arriving from the sidebar timeline with the entry
+   * already chosen for a tab this editor was not yet mounted for.</p>
    *
    * <p>A locked entry (encrypted, no key on this machine) fails with 423 rather than 404, which
    * is a different thing to tell the user: the entry is there, it just can't be opened here.</p>
    */
-  async function openHistoryEntry(summary: HistorySummary) {
+  useEffect(() => {
+    const requestId = detail?.id
+    if (!openEntryId || !requestId) return
+    if (requestedEntryRef.current === openEntryId) return
+    requestedEntryRef.current = openEntryId
+
+    let cancelled = false
     setActionError(null)
-    try {
-      setReplay(await api.historyEntry(summary.requestId, summary.id))
-    } catch (e) {
-      setReplay(null)
-      setActionError(e instanceof ApiError && e.status === 423
-        ? 'This entry is encrypted and this machine has no key that opens it.'
-        : e instanceof Error ? e.message : String(e))
-    }
+    api.historyEntry(requestId, openEntryId)
+      .then((entry) => { if (!cancelled) setReplay(entry) })
+      .catch((e) => {
+        if (cancelled) return
+        setReplay(null)
+        setActionError(e instanceof ApiError && e.status === 423
+          ? 'This entry is encrypted and this machine has no key that opens it.'
+          : e instanceof Error ? e.message : String(e))
+      })
+    return () => { cancelled = true }
+  }, [openEntryId, detail?.id, setActionError])
+
+  /** Puts the live response back. Clears the selection too — leaving it set would have the
+   *  effect above re-open the entry the moment this tab is revisited. */
+  function closeHistoryEntry() {
+    requestedEntryRef.current = null
+    setReplay(null)
+    setOpenEntryId(null)
   }
 
   /** A recorded entry rendered in the shapes the response panel already speaks. Assembled here
@@ -298,7 +317,7 @@ export function RequestEditor({ path }: Props) {
       variablesUsed: replay.variablesUsed.map((v) => ({
         variableProvider: v.provider, name: v.name, resolved: true, isSecret: v.secret, durationMs: 0,
       })),
-      stage: replay.stage,
+      env: replay.env,
       error: replay.error,
       protocol: replay.request.protocol === 'websocket' ? 'websocket' : 'http',
       assertions: replay.assertions,
@@ -314,8 +333,7 @@ export function RequestEditor({ path }: Props) {
     setLiveAsserts(null)
     startSend({
       path,
-      env: activeEnv,
-      stage: effectiveStage,
+      env,
       // No draft for a .http-backed request: there is no spec to emit, so sending one is a
       // parse error rather than a run. Its drafts are raw text, sent from the .http editor.
       spec: !httpBacked && dirty && spec ? spec : undefined,
@@ -354,7 +372,7 @@ export function RequestEditor({ path }: Props) {
   }
   async function diagnoseTls() {
     setDiagnosing(true); setActionError(null)
-    try { setDiagnosis(await api.diagnoseTls(path, activeEnv, effectiveStage, spec ?? undefined)) }
+    try { setDiagnosis(await api.diagnoseTls(path, env, spec ?? undefined)) }
     catch (e) { setActionError(e instanceof Error ? e.message : String(e)) }
     finally { setDiagnosing(false) }
   }
@@ -430,7 +448,7 @@ export function RequestEditor({ path }: Props) {
             requestAuth={spec.auth ?? null}
             replayedAt={replay?.at ?? null}
             replayRedacted={replay ? replay.redacted : undefined}
-            onClose={replayed ? () => setReplay(null) : clearExecution}
+            onClose={replayed ? closeHistoryEntry : clearExecution}
           />
         ) : undefined
       }
@@ -467,8 +485,8 @@ export function RequestEditor({ path }: Props) {
         {linkedCollection && (
           <CollectionLinkChip
             summary={linkedCollection}
-            stage={effectiveStage}
-            onStageChange={setStage}
+            env={env}
+            onEnvChange={(next) => setCollectionEnv(linkedCollection.slug, next)}
             variableContext={variableContext}
             onOpen={() => openTab({ path: `collections/${linkedCollection.slug}`, kind: 'collection', label: linkedCollection.name })}
           />
@@ -602,8 +620,7 @@ export function RequestEditor({ path }: Props) {
             variableContext={variableContext}
             onOpenVariables={varsCtl.open}
             requestPath={path}
-            env={activeEnv}
-            stage={effectiveStage}
+            env={env}
             dirty={dirty}
           />
         </Tabs.Panel>
@@ -729,8 +746,8 @@ export function RequestEditor({ path }: Props) {
             <HistoryPanel
               requestId={detail.id}
               enabled={detail.effectiveHistory?.enabled ?? false}
-              selectedId={replay?.id ?? null}
-              onSelect={openHistoryEntry}
+              selectedId={openEntryId}
+              onSelect={(row) => setOpenEntryId(row.id)}
               onCountChange={setHistoryCount}
               onOpenSettings={() => setTab('meta')}
             />
@@ -752,7 +769,7 @@ export function RequestEditor({ path }: Props) {
             {linkedCollection && (
               <Text size="xs" c="dimmed">
                 Inherits from collection <Code fz="xs">{linkedCollection.name}</Code> — base URL,
-                stages, default auth, and default headers come from there.
+                default auth, and default headers come from there.
               </Text>
             )}
 
@@ -798,7 +815,7 @@ export function RequestEditor({ path }: Props) {
   )
 }
 
-function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariables, requestPath, env, stage, dirty }: {
+function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariables, requestPath, env, dirty }: {
   body: string
   contentType: string | null
   onChange: (body: string | undefined, ct: string | null) => void
@@ -806,7 +823,6 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
   onOpenVariables?: () => void
   requestPath: string
   env: string | null
-  stage: string | null
   dirty: boolean
 }) {
   const [mode, setMode] = useState<BodyMode>(() => detectBodyMode(contentType, body))
@@ -900,7 +916,6 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
         <GraphQLEditor
           requestPath={requestPath}
           env={env}
-          stage={stage}
           body={body}
           dirty={dirty}
           onChange={(b) => onChange(b, contentTypeForBodyMode('graphql'))}

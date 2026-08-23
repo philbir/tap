@@ -232,10 +232,10 @@ committed. Seven file kinds, all Markdown + YAML frontmatter:
 | Kind | File | Owns |
 |---|---|---|
 | `workspace` | `workspace.tap` | Name, default environment, variable providers, workspace-wide vars. |
-| `collection` | `collections/<slug>/_collection.tap` | Base URL, named stages, default auth, default headers, collection vars. |
+| `collection` | `collections/<slug>/_collection.tap` | Base URL, default auth, default headers, collection vars. |
 | `request` | `*.req.tap` | One HTTP (or WebSocket) call, as a fenced `http` block. |
 | `auth` | `auth/*.auth.tap` or `collections/<slug>/*.auth.tap` | A reusable authentication profile — shared workspace-wide, or owned by one collection. |
-| `env` | `environments/*.env.tap` | A named set of variables. |
+| `env` | `*.env.tap` | A named set of variables — global, or assigned to collections, each assignment carrying the base URL and default auth it points that one at. |
 | `flow` | `tests/*.flow.tap` | Requests run in order, passing values from one response to the next. |
 | `test` | `tests/*.test.tap` | A set of checks, each running one request or one flow. |
 
@@ -255,16 +255,17 @@ my-service/
     │   └── checkout.flow.tap  ← requests in order, values carried across
     └── collections/
         └── stripe/
-            ├── _collection.tap    ← baseUrl, stages, default auth/headers
+            ├── _collection.tap    ← baseUrl, default auth/headers
+            ├── stripe-test.env.tap    ← env assigned to this collection
             ├── stripe-oauth.auth.tap  ← auth owned by this collection
             ├── create-customer.req.tap
             └── refunds/          ← plain grouping folder, no metadata
                 └── issue.req.tap
 ```
 
-A runnable request is the *composition* of workspace + collection (+ stage) + auth +
-environment + request. Sub-folders inside a collection are pure grouping — they carry no
-metadata and no inheritance.
+A runnable request is the *composition* of workspace + collection + auth + environment +
+request. Sub-folders inside a collection are pure grouping — they carry no metadata and no
+inheritance.
 
 The [workspace format spec](workspace-format.md) is the authoritative reference for every
 frontmatter field, the variable cascade, and the canonical parse-error codes.
@@ -291,7 +292,7 @@ The request editor is one URL bar plus seven tabs:
 | **Source** | The generated `*.req.tap`, read-only. |
 
 The URL bar splits the collection's base URL from the path, so a request stores
-`/v1/customers` and picks up `https://api.stripe.com` (or the active stage's override) at
+`/v1/customers` and picks up `https://api.stripe.com` (or the active environment's override) at
 render time. `{{variable}}` tokens are highlighted inline wherever they appear.
 
 **Executing.** Send runs the composed request and opens the response panel: status, duration,
@@ -631,13 +632,15 @@ decides which variables it can use:
 - **Workspace** (`auth/`) — shared by every collection, resolves workspace + environment
   variables. The right choice for a credential several APIs share.
 - **A collection** (`collections/<slug>/`) — owned by that collection, and additionally
-  resolves its variables and the selected stage's. Use it when the token URL, client id, or
-  audience already lives on the collection: switching stage (`dev` → `prod`) repoints the
-  profile with no edit. Tokens are cached per stage, so the two never mix.
+  resolves its variables. Use it when the token URL, client id, or audience already lives on
+  the collection: switching environment (`dev` → `prod`) repoints the profile with no edit.
+  Tokens are cached per environment, so the two never mix. The profile's own location decides
+  its scope, so a request borrowing it from another collection never drags an environment
+  across.
 
 Collection-scoped profiles appear in the **Requests** tree under their collection, next to
 the requests that use them, and in the **Auth** tab grouped under the collection name.
-Every auth picker (request `auth:`, collection/stage `defaultAuth`) groups its options the
+Every auth picker (request `auth:`, collection and environment `defaultAuth`) groups its options the
 same way, so it's always clear which scope a profile came from.
 
 | Template | What it does |
@@ -699,10 +702,9 @@ The cascade, lowest precedence first:
 
 1. `workspace.tap` `vars`
 2. the owning `_collection.tap` `vars`
-3. the active collection **stage**
-4. the active `*.env.tap`
-5. the request's own `vars`
-6. per-run overrides
+3. the active `*.env.tap`
+4. the request's own `vars`
+5. per-run overrides
 
 Providers are declared in `workspace.tap` under `variableProviders` (a workspace provider shadows a
 same-named system one):
@@ -733,7 +735,7 @@ let it propose changes.
   dependency and your existing CLI authentication is reused as-is. Pick the provider and the
   model in Settings; `/api/ai/status` reports what was detected and what still needs setup.
 - **It sees your workspace, not just your prompt.** The system prompt carries the current
-  request spec, the owning collection (base URL, default auth, shared headers, stages), the
+  request spec, the owning collection (base URL, default auth, shared headers), the
   available auth profiles, the environment names, and the variable catalog with scopes and
   secret flags — so it references things that actually exist instead of inventing them.
 - **It proposes, you apply.** The assistant never writes files. It returns a structured request
@@ -781,7 +783,7 @@ Two layouts, chosen per import:
 | **One `.http` file per tag** | Portable — opens and sends in Visual Studio, VS Code REST Client, JetBrains, httpyac, Kulala. |
 
 What else comes across: `servers[0]` becomes the collection's `baseUrl` and the rest become
-stages; `securitySchemes` becomes an auth profile whose credentials are `{{variables}}` you
+environments assigned to the collection; `securitySchemes` becomes an auth profile whose credentials are `{{variables}}` you
 fill in once (**nothing secret is ever taken from a document**); a `requestBody` schema becomes
 an example body, following `$ref` and preferring the spec's own `example`. Path and query
 parameters become declared `vars`, so a request documents its own inputs.

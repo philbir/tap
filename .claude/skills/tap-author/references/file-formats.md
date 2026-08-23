@@ -68,8 +68,6 @@ Workspace docs for humans.
 | `defaultHeaders` | map<string,string> | Merged under request-specific headers. |
 | `transport` | mapping | `ignoreTlsErrors: true` and/or `timeoutMs: <n>` — inherited by member requests. |
 | `vars` | map<string, var-spec> | Collection tier of the cascade. |
-| `stages` | sequence | Each: `name` (required), `baseUrl?`, `defaultAuth?`, `vars?`. Named env-of-the-API overrides; select with `--stage`. |
-| `defaultStage` | string | Stage preselected in the editor. |
 | `agent` | bool \| mapping | `agent: false` (or `agent: { enabled: false }`) fences the collection off from agent surfaces. Default enabled; omit unless opting out. |
 | `history` | bool \| map | Recording policy for every request in the collection. Overrides the workspace per key; a request overrides it in turn. See **History** below. |
 
@@ -84,15 +82,25 @@ defaultHeaders:
 vars:
   API_URL: https://api.stripe.test
   IDP_URL: https://idp.stripe.test
-stages:
-- name: dev
-- name: prod
-  vars:
-    API_URL: https://api.stripe.com
-    IDP_URL: https://idp.stripe.com
 ---
 
 # Stripe
+```
+
+Per-target overrides — `dev` / `uat` / `prod` of this one API — are **environments assigned to
+the collection**, not a `stages:` block (removed in 0.7.0; a collection still carrying one
+fails to parse):
+
+```markdown
+---
+kind: env
+name: prod
+collections:
+- collection: stripe
+  baseUrl: https://api.stripe.com
+vars:
+  IDP_URL: https://idp.stripe.com
+---
 ```
 
 ## `request` — `*.req.tap`
@@ -145,8 +153,10 @@ email={{customer.email}}&name={{customer.name}}
 
 ## `auth` — `*.auth.tap`
 
-Location decides variable scope: `auth/**` sees workspace+env vars; inside a collection
-it also sees collection+stage vars (that's how `{{IDP_URL}}` re-points per stage).
+Location decides variable scope: `auth/**` sees workspace+env vars; inside a collection it
+also sees that collection's vars (that's how `{{IDP_URL}}` re-points per environment). The
+profile's own location decides this, not the caller's — a request borrowing a profile from
+another collection resolves it in that collection's scope.
 Common fields: `kind: auth`, `name`, `type` (required), `tags`. Type-specific fields —
 any field marked *(s)* may reference a secret via `{{provider:name}}`:
 
@@ -156,7 +166,7 @@ any field marked *(s)* may reference a secret via `{{provider:name}}`:
 | `bearer` | `token` *(s)* | `Authorization: Bearer <token>`. |
 | `basic` | `username`, `password` *(s)* | Basic auth header. |
 | `apiKey` | `in` (`header`\|`query`\|`cookie`), `apiKeyName`, `apiKeyValue` *(s)* | Injects the key where `in` says (only `header` is applied today). Don't use `name`/`value` — `name` is the profile's display name. |
-| `oauth2` | `flow` (`authorization_code` \| `authorization_code_pkce` \| `client_credentials` \| `device_code` \| `password`), `tokenUrl`, `clientId` *(s)*, `clientSecret?` *(s)*, `authorizeUrl` (auth-code flows), `scopes[]`, `audience?` (no `redirectUri` — the runtime derives it and ignores the field) | Token minted at run time and cached per stage — never written to files. Interactive flows (PKCE/device) need a human: Studio UI, or CLI `--use-cached-tokens` after the user signed in. `client_credentials`/`password` work headlessly. |
+| `oauth2` | `flow` (`authorization_code` \| `authorization_code_pkce` \| `client_credentials` \| `device_code` \| `password`), `tokenUrl`, `clientId` *(s)*, `clientSecret?` *(s)*, `authorizeUrl` (auth-code flows), `scopes[]`, `audience?` (no `redirectUri` — the runtime derives it and ignores the field) | Token minted at run time and cached per environment — never written to files. Interactive flows (PKCE/device) need a human: Studio UI, or CLI `--use-cached-tokens` after the user signed in. `client_credentials`/`password` work headlessly. |
 | `azure-cli` | `scope` (v2) or `resource` (v1) | Shells out to `az account get-access-token`; requires prior `az login`. |
 | `jwt` | `algorithm` (HS256/RS256/RS512/…), `key` *(s)*, claim fields | Renderer mints and signs the JWT itself. |
 | `github` | `mode` (`gh-cli` \| `pat`), for `pat`: `token` *(s)* | `gh-cli` shells out to `gh auth token`; adds GitHub API headers automatically. |
@@ -176,11 +186,19 @@ scopes: [api]
 ---
 ```
 
-## `env` — `environments/*.env.tap`
+## `env` — `*.env.tap`
+
+The single mechanism for "the same requests, pointed somewhere else". **Global** with no
+`collections:` key (selectable anywhere — `environments/dev.env.tap`); **assigned** with one
+(offered only in those collections, and applied only to them — put it beside
+`_collection.tap`). The assigned form is what a collection `stage` was.
 
 | Field | Type | Notes |
 |---|---|---|
-| `vars` | map<string, var-spec> | Env tier — above collection/stage, below request. |
+| `collections` | sequence | Collections to assign this env to. Each entry is a **slug** (not a path — that's a parse error), or a mapping with `collection` plus that collection's overrides. Absent/empty = global. One entry per slug. |
+| `collections[].baseUrl` | string | Replaces *that* collection's `baseUrl` while active. Per-assignment because one env points each collection somewhere different. |
+| `collections[].defaultAuth` | path \| id-ref | Replaces *that* collection's `defaultAuth` while active; resolved relative to this env file. A request's own `auth:` still wins. |
+| `vars` | map<string, var-spec> | Env tier — above collection, below request. |
 | `defaultVariableProvider` | string | Provider bare tokens hit first while this env is active. |
 | `providerAliases` | map<string,string> | Stable alias → provider name (`kv: kv-dev` here, `kv: kv-prod` in prod.env.tap) so requests keep one spelling `{{kv:secret}}`. |
 | `strictVariables` | bool | With a default provider set: bare-token misses fail instead of falling through. |
@@ -344,7 +362,7 @@ Content-Type: application/json
 
 | Directive | Effect |
 |---|---|
-| `# @tap-collection <slug>` | Inherit a collection's baseUrl/headers/auth/stages from anywhere in the repo. Files already under `collections/<slug>/` don't need it. |
+| `# @tap-collection <slug>` | Inherit a collection's baseUrl/headers/auth and its scoped environments from anywhere in the repo. Files already under `collections/<slug>/` don't need it. |
 | `# @tap-auth <path\|id:uuid>` | Same as the `auth:` frontmatter key. |
 | `# @tap-assert <expr>` | One assertion; repeatable. |
 | `# @tap-secret <var>[, ...]` | Mark file variables secret so their values are redacted. |
@@ -386,10 +404,10 @@ GET {{baseUrl}}/
 ```
 
 Outside Tap, `@baseUrl` answers. Inside Tap, a file's own variables are the **weakest** tier of
-the cascade, so the collection's baseUrl (and the active stage's, and any env redefining the name)
-overrides it — which is also what keeps the stage picker meaningful. `{{baseUrl}}` is built in:
-Tap binds it to the collection's stage-resolved base URL whenever no other scope defines the name,
-so it works even in a file that never declared one.
+the cascade, so the collection's baseUrl (and the active environment's override, and any env
+redefining the name) overrides it — which is also what keeps the environment picker meaningful.
+`{{baseUrl}}` is built in: Tap binds it to the env-resolved base URL whenever no other scope
+defines the name, so it works even in a file that never declared one.
 
 A relative request line still works and still inherits the collection's baseUrl — prefer the
 portable form when the file is shared with other tools; either is fine otherwise.

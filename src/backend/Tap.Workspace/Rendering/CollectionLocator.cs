@@ -8,8 +8,8 @@ namespace Tap.Workspace.Rendering;
 ///
 /// <para>By convention, everything owned by a collection lives at
 /// <c>collections/&lt;slug&gt;/...nested-folders.../*</c> — requests (<c>*.req.tap</c>) and,
-/// optionally, auth profiles (<c>*.auth.tap</c>) that want the collection's variables and
-/// stages in scope. The collection's own file is <c>collections/&lt;slug&gt;/_collection.tap</c>.
+/// optionally, auth profiles (<c>*.auth.tap</c>) that want the collection's variables in
+/// scope. The collection's own file is <c>collections/&lt;slug&gt;/_collection.tap</c>.
 /// This helper walks a file's path to identify the owning collection, returning <c>null</c>
 /// for files that don't sit under <c>collections/</c> (workspace-scoped auth profiles under
 /// <c>auth/</c>, environments, or malformed/legacy paths).</para>

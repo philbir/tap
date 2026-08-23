@@ -11,7 +11,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { AssertResult, AssertSummary, AuthExecuteResponse, AuthStatus, AuthSummary, ExecutionResult, RenderedRequest, SseEvent, WsFrame } from '../api/types'
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
-import { useActiveEnv, useTapStore } from '../store'
+import { useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
 import { useTabView } from './useTabView'
 import { COLLECTION_FILE } from '../shell/tapFiles'
@@ -1301,8 +1301,7 @@ function FlowView({ rendered, execution, busy, requestPath, requestAuth }: {
             ? <AuthFlowCardFromStatus
                 status={serverStatus}
                 summary={summaryForStatus}
-                requestPath={requestPath}
-                stage={execution?.stage ?? rendered?.stage ?? undefined}
+                env={execution?.env ?? rendered?.env ?? undefined}
               />
             : <AuthFlowCard resolved={fallback} />}
           <FlowConnector active={!!execution || busy} />
@@ -1445,13 +1444,12 @@ function AuthFlowCard({ resolved }: { resolved: EffectiveAuth }) {
 
 /** Auth card rendered from the server's authoritative <code>AuthStatus</code> snapshot.
  *  Distinguishes cached / expired / missing / static / none + flags interactive flows.
- *  `requestPath` + `stage` are handed to the runner so a collection-scoped profile
- *  authenticates against the stage this request resolved to. */
-function AuthFlowCardFromStatus({ status, summary, requestPath, stage }: {
+ *  `env` is the environment this render actually resolved under — handed to the runner so
+ *  the flow mints its token under the same key the send will read it from. */
+function AuthFlowCardFromStatus({ status, summary, env }: {
   status: AuthStatus
   summary: AuthSummary | null
-  requestPath?: string
-  stage?: string
+  env?: string
 }) {
   // No auth attached to the request at all.
   if (status.source === 'none' || !status.type) {
@@ -1504,10 +1502,9 @@ function AuthFlowCardFromStatus({ status, summary, requestPath, stage }: {
       {status.source !== 'static' && (
         <Box mt="sm">
           <AuthRunPanel
-            key={`${status.path ?? 'no-path'}#${stage ?? ''}`}
+            key={`${status.path ?? 'no-path'}@${env ?? ''}`}
             status={status}
-            requestPath={requestPath}
-            stage={stage}
+            env={env}
           />
         </Box>
       )}
@@ -1540,12 +1537,10 @@ function formatRelativeExpiry(iso: string): string {
  * Mirrors the auth-editor's "Try it" panel but scoped to the Run-auth-then-resend loop:
  * the success state nudges the user to re-send rather than showing token internals.
  */
-function AuthRunPanel({ status, requestPath, stage }: {
+function AuthRunPanel({ status, env }: {
   status: AuthStatus
-  requestPath?: string
-  stage?: string
+  env?: string
 }) {
-  const activeEnv = useActiveEnv()
   const [result, setResult] = useState<AuthExecuteResponse | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1591,9 +1586,9 @@ function AuthRunPanel({ status, requestPath, stage }: {
     setBusy(true); setError(null); setResult(null); setLaunchMode(null); setCleared(false)
     stopPolling()
     try {
-      // env goes with requestPath/stage: the token is cached per env, so running the flow
-      // under a different one than the send used would mint an entry the send never reads.
-      const r = await api.executeAuth(status.path, force, { requestPath, stage, env: activeEnv ?? undefined })
+      // The token is cached per env, so running the flow under a different one than the send
+      // resolved to would mint an entry the send never reads.
+      const r = await api.executeAuth(status.path, force, { env })
       setResult(r)
       if (r.status === 'pending' && r.flowId) {
         pollRef.current = window.setInterval(() => { void pollOnce(r.flowId!) }, 800)

@@ -170,7 +170,6 @@ public sealed class TestCommand : AsyncCommand<TestCommand.Settings>
             var request = new RunTestRequestDto(
                 Path: target.Path,
                 Env: envPath,
-                Stage: settings.Stage,
                 Only: settings.Only,
                 Overrides: variables.Count > 0 ? variables : null,
                 FailFast: settings.FailFast,

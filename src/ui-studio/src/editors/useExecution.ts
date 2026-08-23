@@ -9,7 +9,6 @@ export interface SendTarget {
   /** Workspace-relative path — for a `.http` request, its `file.http#fragment` form. */
   path: string
   env: string | null
-  stage: string | null
   /** Unsaved draft of a structured request. Omit to run the file on disk. */
   spec?: RequestSpec
   /** Unsaved raw text of the `.http` file `path` points into. Omit to run the file on disk. */
@@ -165,13 +164,13 @@ function sendFor(key: string, target: SendTarget) {
     requestHeaders: {}, requestBody: null,
     responseHeaders: {}, responseBody: null,
     contentType: null, responseBodyBytes: 0, durationMs: 0,
-    variablesUsed: [], stage: null, error: null,
+    variablesUsed: [], env: null, error: null,
     protocol: target.protocol ?? 'http',
   }
   const sseAccum: SseEvent[] = []
   const wsAccum: WsFrame[] = []
 
-  entry.ctrl = api.executeStream(target.path, target.env, target.stage, (ev) => {
+  entry.ctrl = api.executeStream(target.path, target.env, (ev) => {
     switch (ev.kind) {
       case 'meta':
         Object.assign(snapshot, {
@@ -193,7 +192,7 @@ function sendFor(key: string, target: SendTarget) {
             headers: ev.payload.requestHeaders,
             body: ev.payload.requestBody,
             variablesUsed: [],
-            stage: null,
+            env: null,
             protocol: ev.payload.protocol,
           },
           execution: { ...snapshot },
@@ -221,7 +220,7 @@ function sendFor(key: string, target: SendTarget) {
         snapshot.durationMs = ev.payload.durationMs
         snapshot.responseBodyBytes = ev.payload.responseBodyBytes || snapshot.responseBodyBytes
         snapshot.variablesUsed = ev.payload.variablesUsed
-        snapshot.stage = ev.payload.stage
+        snapshot.env = ev.payload.env
         snapshot.assertions = ev.payload.assertions
         snapshot.assertSummary = ev.payload.assertSummary
         if (ev.payload.error) snapshot.error = ev.payload.error

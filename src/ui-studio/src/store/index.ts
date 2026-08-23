@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { api, subscribeWorkspaceChanges } from '../api/client'
@@ -6,6 +6,7 @@ import type {
   AuthSummary, CollectionSummary, EnvSummary, FlowSummary, KnownWorkspace, TestSetSummary, TreeNode,
   WorkspaceFileKind, WorkspaceInfo,
 } from '../api/types'
+import { envAppliesTo } from '../api/types'
 import { toCanonicalPath } from '../shell/tapFiles'
 
 /** Per-tab state that outlives the editor's mount. See `TapStore.tabState`. */
@@ -17,7 +18,7 @@ export interface TabState {
    */
   draft?: unknown
   /**
-   * View state by slot name: which sub-tab is open, the stage override, and so on. Losing
+   * View state by slot name: which sub-tab is open, which body view, and so on. Losing
    * these on a tab switch is small but constant friction — you come back to the request you
    * were reading and it has snapped from Body back to Params.
    */
@@ -74,9 +75,16 @@ export interface TapStore {
   // -- UI state (persisted) --------------------------------------------------
   tabs: OpenTab[]
   activeTab: string | null
-  /** Per-workspace active env path. Keyed by workspace root so switching workspaces
-   *  doesn't smuggle one workspace's env into another. */
+  /** Per-workspace active env path — the workspace default, chosen in the header from the
+   *  global environments. Keyed by workspace root so switching workspaces doesn't smuggle one
+   *  workspace's env into another. */
   activeEnvByRoot: Record<string, string | null>
+  /** Per-collection env override, keyed by `${root}::${slug}` — what the baseUrl chip sets.
+   *  This is where a collection-scoped environment is selected, and it is remembered rather
+   *  than held per tab: "this collection points at UAT right now" is a decision about the
+   *  collection, and re-picking it in every request that belongs to it is the friction the
+   *  merge of stages into environments exists to remove. */
+  envByCollection: Record<string, string | null>
 
   // -- UI state (in-memory) --------------------------------------------------
   /**
@@ -98,6 +106,9 @@ export interface TapStore {
   // -- Actions ---------------------------------------------------------------
   reload: () => Promise<void>
   setActiveEnv: (path: string | null) => void
+  /** Point one collection at an environment, or pass null to fall back to the workspace
+   *  default. */
+  setCollectionEnv: (slug: string, path: string | null) => void
   openTab: (tab: OpenTab) => void
   closeTab: (path: string) => void
   closeOtherTabs: (path: string) => void
@@ -111,7 +122,7 @@ export interface TapStore {
   setDraft: (path: string, value: unknown) => void
   /** Drop a tab's unsaved editor state — it was saved, or discarded. */
   clearDraft: (path: string) => void
-  /** Remember one slot of a tab's view state (an open sub-tab, a stage override, …). */
+  /** Remember one slot of a tab's view state (an open sub-tab, a body view, …). */
   setTabView: (path: string, slot: string, value: unknown) => void
   activateWorkspace: (path: string) => Promise<void>
   addAndActivateWorkspace: (path: string) => Promise<void>
@@ -123,7 +134,12 @@ interface PersistedSlice {
   tabs: OpenTab[]
   activeTab: string | null
   activeEnvByRoot: Record<string, string | null>
+  envByCollection: Record<string, string | null>
 }
+
+/** Key for {@link TapStore.envByCollection}. Root-qualified for the same reason
+ *  `activeEnvByRoot` is: two workspaces can both have a `demo` collection. */
+const collectionEnvKey = (root: string, slug: string) => `${root}::${slug}`
 
 /** A copy of `tabState` without the entry for one tab path. */
 function withoutTab(tabState: Record<string, TabState>, path: string): Record<string, TabState> {
@@ -149,6 +165,7 @@ export const useTapStore = create<TapStore>()(
       tabs: [],
       activeTab: null,
       activeEnvByRoot: {},
+      envByCollection: {},
       tabState: {},
 
       reload: async () => {
@@ -222,6 +239,12 @@ export const useTapStore = create<TapStore>()(
         const root = state.info?.root
         if (!root) return {}
         return { activeEnvByRoot: { ...state.activeEnvByRoot, [root]: path } }
+      }),
+
+      setCollectionEnv: (slug, path) => set((state) => {
+        const root = state.info?.root
+        if (!root) return {}
+        return { envByCollection: { ...state.envByCollection, [collectionEnvKey(root, slug)]: path } }
       }),
 
       openTab: (tab) => set((state) => ({
@@ -325,6 +348,7 @@ export const useTapStore = create<TapStore>()(
         tabs: state.tabs,
         activeTab: state.activeTab,
         activeEnvByRoot: state.activeEnvByRoot,
+        envByCollection: state.envByCollection,
       }),
     },
   ),
@@ -341,6 +365,89 @@ export const useActiveEnv = (): string | null => useTapStore((s) => {
   const root = s.info?.root
   return root ? (s.activeEnvByRoot[root] ?? null) : null
 })
+
+/**
+ * The collection a tab belongs to, or null when it belongs to none. Covers both a file under
+ * `collections/<slug>/…` and the collection's own tab, whose path is the bare directory.
+ */
+export function collectionOfTab(path: string | null): string | null {
+  if (!path) return null
+  const parts = path.split('/')
+  if (parts.length < 2 || parts[0].toLowerCase() !== 'collections') return null
+  return parts[1] || null
+}
+
+/** The collection whose editor is in front of the user right now, or null. This is the context
+ *  every environment control narrows by. */
+export const useActiveCollection = (): string | null =>
+  useTapStore((s) => collectionOfTab(s.activeTab))
+
+/** The environments offerable while a file owned by `slug` is in front of the user: every
+ *  global one, plus the ones assigned to that collection. Mirrors
+ *  `LoadedWorkspace.EnvironmentsFor`.
+ *
+ *  <p>`slug === null` means "no collection in front of us", and then there is nothing to
+ *  narrow by — every environment is offered, assigned ones included. Filtering to globals
+ *  there would hide environments the user has no other way to reach.</p> */
+export const useEnvsFor = (slug: string | null): EnvSummary[] => {
+  const envs = useTapStore((s) => s.envs)
+  return useMemo(() => (slug === null ? envs : envs.filter((e) => envAppliesTo(e, slug))), [envs, slug])
+}
+
+/**
+ * The environment a request in `slug` actually resolves under: the collection's own override
+ * when one is set and still valid, else the workspace default when it is in scope here, else
+ * none.
+ *
+ * <p>Both fallbacks matter. An override can go stale — the env file gets deleted, or its
+ * `collections:` list stops naming this collection — and silently keeping it would send the
+ * request somewhere the picker no longer offers. And the workspace default is frequently a
+ * global env that every collection should honour without being told.</p>
+ */
+export const useEffectiveEnv = (slug: string | null): string | null => {
+  const envs = useTapStore((s) => s.envs)
+  const root = useTapStore((s) => s.info?.root ?? null)
+  const override = useTapStore((s) => (root && slug ? s.envByCollection[`${root}::${slug}`] ?? null : null))
+  const workspaceDefault = useActiveEnv()
+
+  return useMemo(() => {
+    const usable = (path: string | null) => {
+      if (!path) return null
+      const env = envs.find((e) => e.path === path)
+      return env && envAppliesTo(env, slug) ? path : null
+    }
+    return usable(override) ?? usable(workspaceDefault)
+  }, [envs, slug, override, workspaceDefault])
+}
+
+/**
+ * The single environment control, in whichever context the user is in.
+ *
+ * <p>With a collection in front of you it reads and writes *that collection's* environment;
+ * with none, the workspace default. One meaning per context, so the header and the base-URL
+ * chip are two surfaces on the same choice rather than two competing ones.</p>
+ */
+export function useEnvSelection(slug: string | null): {
+  value: string | null
+  options: EnvSummary[]
+  select: (path: string | null) => void
+} {
+  const options = useEnvsFor(slug)
+  const workspaceDefault = useActiveEnv()
+  const effective = useEffectiveEnv(slug)
+  const setActiveEnv = useTapStore((s) => s.setActiveEnv)
+  const setCollectionEnv = useTapStore((s) => s.setCollectionEnv)
+
+  const select = useCallback(
+    (path: string | null) => {
+      if (slug === null) setActiveEnv(path)
+      else setCollectionEnv(slug, path)
+    },
+    [slug, setActiveEnv, setCollectionEnv],
+  )
+
+  return { value: slug === null ? workspaceDefault : effective, options, select }
+}
 
 /**
  * Tab paths that currently hold unsaved edits. Selected as a stable joined string rather

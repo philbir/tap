@@ -287,7 +287,7 @@ public sealed class HistoryStore(string rootDirectory, IEncryptionKeySource keyS
             var stem = EntryStem(path);
             return new HistorySummary(
                 Id: stem, RequestId: requestId, At: ParseAt(stem),
-                RequestPath: null, RequestName: null, Collection: null, Env: null, Stage: null,
+                RequestPath: null, RequestName: null, Collection: null, Env: null,
                 Method: "—", Url: string.Empty, Status: null, StatusText: null,
                 DurationMs: 0, BodyBytes: 0, Ok: false, AssertSummary: null, Error: null,
                 Encrypted: true, Locked: true, Orphaned: orphaned);
@@ -305,7 +305,6 @@ public sealed class HistoryStore(string rootDirectory, IEncryptionKeySource keyS
             RequestName: entry.RequestName,
             Collection: entry.Collection,
             Env: entry.Env,
-            Stage: entry.Stage,
             Method: entry.Request.Method,
             Url: entry.Request.Url,
             Status: entry.Response?.Status,

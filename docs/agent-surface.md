@@ -123,7 +123,7 @@ The `tap-studio` tool grew a discovery pair and a machine mode:
 | Command | Purpose |
 |---|---|
 | `tap-studio list [requests\|collections\|envs\|tests\|auths]` | What's in the workspace. Keeps working on a partially-broken workspace — parse errors become stderr warnings. |
-| `tap-studio describe <request>` | One request's template surface: method, URL template, headers, referenced `{{variables}}`, auth (name + type), stages, assertions. Nothing is rendered, so nothing secret can appear. |
+| `tap-studio describe <request>` | One request's template surface: method, URL template, headers, referenced `{{variables}}`, auth (name + type), the environments it can run under, assertions. Nothing is rendered, so nothing secret can appear. |
 | `tap-studio call <METHOD> <url> -c <collection>` | Ad-hoc request through a collection — see below. |
 
 …and every execution command takes **`--json`**: one parseable, secret-redacted document

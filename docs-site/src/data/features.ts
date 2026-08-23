@@ -50,7 +50,7 @@ export const tunnelFeatures: Feature[] = [
 export const studioFeatures: Feature[] = [
   {
     title: "Start from your OpenAPI description",
-    text: "Import a spec by file or URL and pick which operations become requests — as one .req.tap each or one portable .http file per tag. Servers become the baseUrl and stages, security schemes become an auth profile wired to variables, and schemas become example bodies. The import stays linked, so re-sync shows what changed upstream without touching the assertions you added.",
+    text: "Import a spec by file or URL and pick which operations become requests — as one .req.tap each or one portable .http file per tag. Servers become the baseUrl and a set of scoped environments, security schemes become an auth profile wired to variables, and schemas become example bodies. The import stays linked, so re-sync shows what changed upstream without touching the assertions you added.",
     glyph: "O",
   },
   {

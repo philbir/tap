@@ -5,8 +5,8 @@ using Tap.Workspace.Variables;
 namespace Tap.Workspace.Rendering;
 
 /// <summary>
-/// Two-layer resolver: file-scope cascade (workspace/collection/stage/env/request +
-/// overrides) composes a flat dictionary, then <see cref="Interpolation"/> walks tokens —
+/// Two-layer resolver: file-scope cascade (workspace/collection/env/request + overrides)
+/// composes a flat dictionary, then <see cref="Interpolation"/> walks tokens —
 /// first against the cascade, then across the <see cref="VariableProviderRegistry"/>.
 ///
 /// <para>"Overwrite by name" — within the cascade, later scopes overwrite earlier ones; within
@@ -24,18 +24,22 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     /// <param name="declaredOverrides">Names among <paramref name="overrides"/> that came from
     /// a <c>vars:</c> block rather than from a response or a command line — a test set's or a
     /// flow's own variables. Only those may hold a reference to another variable.</param>
+    /// <param name="env">The environment the caller selected. Applied only when it is in scope
+    /// for the request's collection — a scoped env carried across a collection boundary (a test
+    /// set that spans two collections, say) drops out rather than contributing another
+    /// collection's variables. <see cref="ResolvedRequestMetadata.EnvPath"/> reports the one
+    /// that actually applied.</param>
     public async ValueTask<ResolvedRequest> RenderAsync(
         RequestFile request,
         EnvFile? env,
         IReadOnlyDictionary<string, string>? overrides,
         CancellationToken ct,
-        string? stageName = null,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
         IReadOnlySet<string>? declaredOverrides = null)
     {
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
         var collection = CollectionLocator.ForRequest(workspace, request);
-        var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
+        env = InScope(env, collection);
         var transport = new RequestTransportSettings
         {
             IgnoreTlsErrors = request.Transport.IgnoreTlsErrors ?? collection?.Transport.IgnoreTlsErrors,
@@ -44,19 +48,11 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         var history = HistoryOptions.Resolve(
             workspace.Manifest?.History, collection?.History, request.History);
 
-        var auth = workspace.Resolve(request.Auth, requestDir) as AuthFile;
-        if (auth is null && stage?.DefaultAuth is not null && collection is not null)
-        {
-            var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-            auth = workspace.Resolve(stage.DefaultAuth, collectionDir) as AuthFile;
-        }
-        if (auth is null && collection?.DefaultAuth is not null)
-        {
-            var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-            auth = workspace.Resolve(collection.DefaultAuth, collectionDir) as AuthFile;
-        }
+        var auth = workspace.Resolve(request.Auth, requestDir) as AuthFile
+            ?? ResolveEnvAuth(workspace, env, collection)
+            ?? ResolveCollectionAuth(workspace, collection);
 
-        var built = BuildCascade(request, collection, stage, env, overrides, declaredOverrides);
+        var built = BuildCascade(request, collection, env, overrides, declaredOverrides);
         var cascade = built.Values;
         var secretNames = built.SecretNames;
         var declared = built.Declared;
@@ -65,7 +61,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         // Resolve the effective base URL *before* the block is interpolated, so the block can
         // refer to it as {{baseUrl}}. It only needs the cascade and the providers, never the
         // block, so hoisting it costs nothing and buys the portable spelling.
-        var effectiveBaseUrl = await BindBaseUrlAsync(built, collection, stage, request.Protocol, ct)
+        var effectiveBaseUrl = await BindBaseUrlAsync(built, collection, env, request.Protocol, ct)
             .ConfigureAwait(false);
 
         var expandedBlock = await Interpolation.ExpandAsync(request.HttpBlock, cascade, registry, ct, declared).ConfigureAwait(false);
@@ -154,7 +150,6 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             {
                 SourceRequestPath = request.RelativePath,
                 EnvPath = env?.RelativePath,
-                StageName = stage?.Name,
                 VariablesUsed = registry.Trace,
                 ResolvedBaseUrl = resolvedBaseUrl,
             },
@@ -175,21 +170,20 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         EnvFile? env,
         IReadOnlyList<AssertSpec> assertions,
         CancellationToken ct,
-        string? stageName = null,
         bool tolerant = false,
         IReadOnlyDictionary<string, string>? overrides = null,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
         IReadOnlySet<string>? declaredOverrides = null)
     {
         var collection = CollectionLocator.ForRequest(workspace, request);
-        var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
-        var built = BuildCascade(request, collection, stage, env, overrides, declaredOverrides);
+        env = InScope(env, collection);
+        var built = BuildCascade(request, collection, env, overrides, declaredOverrides);
         var cascade = built.Values;
         var secretNames = built.SecretNames;
         await ApplyTemplateOverridesAsync(built, templateOverrides, ct).ConfigureAwait(false);
         // Same built-in the send path binds, so an assertion reading {{baseUrl}} gets the value
         // the request was actually built against rather than an unknown-variable error.
-        await BindBaseUrlAsync(built, collection, stage, request.Protocol, ct).ConfigureAwait(false);
+        await BindBaseUrlAsync(built, collection, env, request.Protocol, ct).ConfigureAwait(false);
         return await RenderAssertionsAsync(assertions, cascade, secretNames, built.Declared, ct, tolerant)
             .ConfigureAwait(false);
     }
@@ -220,10 +214,36 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     }
 
     /// <summary>
-    /// Resolves the collection's base URL for this render — the stage's override when it has one,
-    /// else the collection's own — and binds it into the cascade as <see cref="BaseUrlVariable"/>.
-    /// Returns the resolved value (scheme-normalized for the protocol), or null when there is no
-    /// collection or it declares no base URL — which is only an error if the request line turns
+    /// The env to actually apply: the caller's, unless it is scoped to collections that don't
+    /// include this request's. Returning null there — rather than throwing — is what lets a test
+    /// set spanning several collections run under one <c>--env</c> flag, with the scoped env
+    /// contributing to the collection it was written for and staying out of the others.
+    /// </summary>
+    private static EnvFile? InScope(EnvFile? env, CollectionFile? collection)
+        => env is null || env.AppliesTo(SlugOf(collection)) ? env : null;
+
+    private static string? SlugOf(CollectionFile? collection)
+        => collection is null ? null : CollectionLocator.SlugForFile(collection.RelativePath);
+
+    /// <summary>The env's <c>defaultAuth</c> <em>for this collection</em>, resolved relative to
+    /// the env file's own directory — the env declared the ref, so it owns the path it is
+    /// written against. Null for a global env, which assigns no collection and so overrides
+    /// nothing.</summary>
+    private static AuthFile? ResolveEnvAuth(LoadedWorkspace workspace, EnvFile? env, CollectionFile? collection)
+        => env?.BindingFor(SlugOf(collection))?.DefaultAuth is not { } authRef
+            ? null
+            : workspace.Resolve(authRef, Path.GetDirectoryName(env.RelativePath) ?? string.Empty) as AuthFile;
+
+    private static AuthFile? ResolveCollectionAuth(LoadedWorkspace workspace, CollectionFile? collection)
+        => collection?.DefaultAuth is null
+            ? null
+            : workspace.Resolve(collection.DefaultAuth, Path.GetDirectoryName(collection.RelativePath) ?? string.Empty) as AuthFile;
+
+    /// <summary>
+    /// Resolves the base URL for this render — the active environment's override for this
+    /// collection when it declares one, else the collection's own — and binds it into the cascade as
+    /// <see cref="BaseUrlVariable"/>. Returns the resolved value (scheme-normalized for the
+    /// protocol), or null when neither answers — which is only an error if the request line turns
     /// out to be relative.
     ///
     /// <para>The binding is skipped when a Tap scope already defines the name: the built-in fills
@@ -232,10 +252,11 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     /// doubled separator.</para>
     /// </summary>
     private async ValueTask<string?> BindBaseUrlAsync(
-        Cascade built, CollectionFile? collection, CollectionStage? stage, RequestProtocol protocol,
+        Cascade built, CollectionFile? collection, EnvFile? env, RequestProtocol protocol,
         CancellationToken ct)
     {
-        var source = !string.IsNullOrWhiteSpace(stage?.BaseUrl) ? stage!.BaseUrl : collection?.BaseUrl;
+        var overridden = env?.BindingFor(SlugOf(collection))?.BaseUrl;
+        var source = !string.IsNullOrWhiteSpace(overridden) ? overridden : collection?.BaseUrl;
         if (string.IsNullOrWhiteSpace(source)) return null;
 
         var expanded = await Interpolation.ExpandAsync(source!, built.Values, registry, ct, built.Declared)
@@ -250,10 +271,10 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         return normalized;
     }
 
-    /// <summary>The built-in name bound to the collection's (stage-resolved) base URL. Exists so
+    /// <summary>The built-in name bound to the effective (env-resolved) base URL. Exists so
     /// a <c>.http</c> file can write <c>GET {{baseUrl}}/orders</c> and mean the same thing in
     /// Visual Studio — where its own <c>@baseUrl</c> answers — and in Tap, where the collection
-    /// and the selected stage answer instead.</summary>
+    /// and the selected environment answer instead.</summary>
     public const string BaseUrlVariable = "baseUrl";
 
     /// <summary>The assembled cascade, the names whose winning definition is secret, the names
@@ -271,8 +292,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         HashSet<string> TapDefined,
         HashSet<string> Declared);
 
-    /// <summary>Composes the variable cascade — portable &lt; workspace &lt; collection &lt; stage
-    /// &lt; env &lt; request &lt; overrides.
+    /// <summary>Composes the variable cascade — portable &lt; workspace &lt; collection &lt; env
+    /// &lt; request &lt; overrides.
     ///
     /// <para>Portable vars (a <c>.http</c> file's <c>@name = value</c> lines) sit at the bottom
     /// rather than at request scope. They are what the file resolves to when it is opened by a
@@ -281,7 +302,6 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     private Cascade BuildCascade(
         RequestFile request,
         CollectionFile? collection,
-        CollectionStage? stage,
         EnvFile? env,
         IReadOnlyDictionary<string, string>? overrides,
         IReadOnlySet<string>? declaredOverrides = null)
@@ -297,7 +317,6 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         MergeVars(cascade, request.PortableVars, secretNames, declared: declared);
         if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames, tapDefined, declared);
         if (collection is not null) MergeVars(cascade, collection.Vars, secretNames, tapDefined, declared);
-        if (stage is not null) MergeVars(cascade, stage.Vars, secretNames, tapDefined, declared);
         if (env is not null) MergeVars(cascade, env.Vars, secretNames, tapDefined, declared);
         MergeVars(cascade, request.Vars, secretNames, tapDefined, declared);
 

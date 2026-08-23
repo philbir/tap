@@ -21,5 +21,11 @@ variableProviders:
     tenantId: f6acae55-feb3-4c9a-8a7d-53c383c9fbe8
 vars:
   JWT_SECRET: '{{env:DEMO_JWT_SECRET}}'
+  # Identity defaults. Selecting an environment *replaces* the previous one rather than
+  # layering on it — there is only one env tier now — so a value every environment shares
+  # belongs here, at workspace scope, not in whichever env happens to be selected. The
+  # global envs still override these; the collection-scoped ones inherit them.
+  user.name: Jane Doe
+  user.email: jane@example.com
 tags: [demo, local, public, sample, streaming, websocket, graphql, oauth2]
 ---

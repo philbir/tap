@@ -77,7 +77,7 @@ public static class UrlBuilder
     ///
     /// <para><paramref name="prefix"/> is <c>{{baseUrl}}</c> for portable <c>.http</c> output and
     /// null for <c>.req.tap</c>, where a bare path is correct — Tap prepends the collection's base
-    /// URL, so the request follows whatever stage is selected.</para>
+    /// URL, so the request follows whatever environment is selected.</para>
     /// </summary>
     public static string Build(MappedOperation op, string? prefix, bool includeOptionalQuery = false)
     {

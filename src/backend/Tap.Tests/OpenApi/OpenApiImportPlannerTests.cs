@@ -169,15 +169,25 @@ public class OpenApiImportPlannerTests
     }
 
     [Fact]
-    public void Extra_servers_become_stages()
+    public void Extra_servers_become_environments_scoped_to_the_collection()
     {
-        var content = Plan().Plan.Files.Single(f => f.RelativePath.EndsWith("_collection.tap", StringComparison.Ordinal)).Content;
-        var collection = (CollectionFile)FileParser.Parse("collections/pet-store/_collection.tap", content);
+        var files = Plan().Plan.Files;
 
+        var collectionContent = files.Single(f => f.RelativePath.EndsWith("_collection.tap", StringComparison.Ordinal)).Content;
+        var collection = (CollectionFile)FileParser.Parse("collections/pet-store/_collection.tap", collectionContent);
         Assert.Equal("https://api.example.com/v1", collection.BaseUrl);
-        var stage = Assert.Single(collection.Stages);
-        Assert.Equal("Staging", stage.Name);
-        Assert.Equal("https://staging.example.com/v1", stage.BaseUrl);
+
+        var envFile = Assert.Single(files, f => f.RelativePath.EndsWith(".env.tap", StringComparison.Ordinal));
+        var env = (EnvFile)FileParser.Parse(envFile.RelativePath, envFile.Content);
+
+        Assert.Equal("collections/pet-store/staging.env.tap", envFile.RelativePath);
+        Assert.Equal("Staging", env.Name);
+        // Assigned, not global: the first server's collection is the only one this address means
+        // anything to, and an unassigned env would appear in every other collection's picker —
+        // and the base URL rides on the assignment, since it is only true for that collection.
+        var binding = Assert.Single(env.Collections);
+        Assert.Equal("pet-store", binding.Collection);
+        Assert.Equal("https://staging.example.com/v1", binding.BaseUrl);
     }
 
     [Fact]

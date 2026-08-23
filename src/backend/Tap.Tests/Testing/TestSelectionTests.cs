@@ -71,7 +71,7 @@ public class TestSelectionTests
     }
 
     private static RunTestRequestDto Request(int? only = null, string? filter = null, string path = "tests/orders.test.tap")
-        => new(path, Env: null, Stage: null, Only: only, Overrides: null, FailFast: false, Filter: filter);
+        => new(path, Env: null, Only: only, Overrides: null, FailFast: false, Filter: filter);
 
     [Fact]
     public async Task Every_test_runs_when_nothing_narrows_it()

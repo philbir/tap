@@ -506,7 +506,7 @@ function SuggestionRow({ suggestion, active, onPick, onHover, onMouseDownGrab }:
   //     `env:` is already in the display.
   //   - Else if the variable is sourced from a provider, show the provider name —
   //     more useful than the literal scope `provider`.
-  //   - Otherwise show the cascade scope (workspace/api/stage/…).
+  //   - Otherwise show the cascade scope (workspace/collection/env/…).
   const trailing = isProvider
     ? (isDefaultProvider ? 'PROVIDER · default' : 'PROVIDER')
     : suggestion.provider

@@ -1,43 +1,43 @@
 import { Group, Menu, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core'
 import { IconCheck, IconChevronDown, IconFolders } from '@tabler/icons-react'
-import { useEffect, useMemo, useState } from 'react'
-import { api } from '../api/client'
-import type { CollectionDetail, CollectionSummary, VariableContext } from '../api/types'
-import { useTapStore } from '../store'
+import { useMemo } from 'react'
+import { envBindingFor } from '../api/types'
+import type { CollectionSummary, VariableContext } from '../api/types'
+import { useEnvsFor } from '../store'
 import { useVariableView, variableMap } from '../workspace/useVariables'
 
 /**
  * The collection a request inherits from, rendered as a compact two-part chip: the resolved
- * base URL (click to open the collection) and a stage menu.
+ * base URL (click to open the collection) and an environment menu.
  *
  * Shared by the request editor and the `.http` editor. Both need it for the same reason — a
- * relative request line only means something once you know which base URL and which stage it
- * resolves against, and the stage is a choice the user makes per send rather than a property
- * of the file.
+ * relative request line only means something once you know which base URL it resolves
+ * against, and which environment is in effect is a choice made per collection rather than a
+ * property of the file.
+ *
+ * <p>The menu lists every environment in scope here: the workspace's global ones plus the
+ * ones assigned to this collection. Picking one is remembered for the collection, so every
+ * request under it follows — which is what the old per-collection stage picker did, minus
+ * the second concept. It is the same control the header shows.</p>
  */
-export function CollectionLinkChip({ summary, stage, onStageChange, variableContext, onOpen }: {
+export function CollectionLinkChip({ summary, env, onEnvChange, variableContext, onOpen }: {
   summary: CollectionSummary
-  stage: string | null
-  onStageChange: (next: string | null) => void
+  /** Path of the environment currently in effect for this collection, or null. */
+  env: string | null
+  /** Null means "fall back to the workspace default". */
+  onEnvChange: (next: string | null) => void
   variableContext: VariableContext
   onOpen: () => void
 }) {
-  const generation = useTapStore((s) => s.generation)
   const view = useVariableView(variableContext)
   const vars = useMemo(() => variableMap(view), [view])
-  // Stage can override the collection-level baseUrl entirely. Fetch CollectionDetail to
-  // pick up per-stage overrides so changing the stage actually moves the URL.
-  const [detail, setDetail] = useState<CollectionDetail | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    api.collectionDetail(summary.slug).then((d) => { if (!cancelled) setDetail(d) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [summary.slug, generation])
-  const baseTemplate = useMemo(() => {
-    if (!stage || !detail) return summary.baseUrl
-    const s = detail.stages.find((x) => x.name === stage)
-    return s?.baseUrl ?? summary.baseUrl
-  }, [detail, stage, summary.baseUrl])
+  const envs = useEnvsFor(summary.slug)
+  const selected = envs.find((e) => e.path === env) ?? null
+
+  // An environment can override the collection's baseUrl outright — on the *assignment* to
+  // this collection, since the same env points elsewhere in another one. Summaries carry the
+  // assignments, so the chip moves with the picker without a second round trip.
+  const baseTemplate = (selected && envBindingFor(selected, summary.slug)?.baseUrl) || summary.baseUrl
   const display = useMemo(() => resolveTokens(baseTemplate, vars), [baseTemplate, vars])
   const hasUnresolved = /\{\{[^}]+\}\}/.test(display)
   // The chip is width-capped so a long base URL can't crowd out the path input, so the
@@ -49,8 +49,14 @@ export function CollectionLinkChip({ summary, stage, onStageChange, variableCont
       {baseTemplate !== display && (
         <Text size="xs" c="dimmed" ff="var(--mono)">template: {baseTemplate}</Text>
       )}
+      {selected && envBindingFor(selected, summary.slug)?.baseUrl && (
+        <Text size="xs" c="dimmed">baseUrl from environment “{selected.name}”</Text>
+      )}
     </Stack>
   )
+
+  const globals = envs.filter((e) => e.collections.length === 0)
+  const scoped = envs.filter((e) => e.collections.length > 0)
 
   return (
     <Group
@@ -84,12 +90,12 @@ export function CollectionLinkChip({ summary, stage, onStageChange, variableCont
           </Text>
         </UnstyledButton>
       </Tooltip>
-      {summary.stageNames.length > 0 && (
+      {envs.length > 0 && (
         <Menu shadow="md" position="bottom-end" withinPortal>
           <Menu.Target>
             <UnstyledButton
-              aria-label="Select stage"
-              title={stage ? `Stage: ${stage}` : 'Select stage'}
+              aria-label="Select environment"
+              title={selected ? `Environment: ${selected.name}` : 'Select environment'}
               style={{
                 display: 'flex', alignItems: 'center', gap: 4,
                 height: 34, padding: '0 8px',
@@ -97,31 +103,49 @@ export function CollectionLinkChip({ summary, stage, onStageChange, variableCont
                 color: 'var(--mantine-color-dimmed)',
               }}
             >
-              {stage && <Text size="xs" c="dimmed" ff="var(--mono)">{stage}</Text>}
+              {selected && <Text size="xs" c="dimmed" ff="var(--mono)">{selected.name}</Text>}
               <IconChevronDown size={12} />
             </UnstyledButton>
           </Menu.Target>
           <Menu.Dropdown>
-            <Menu.Label>Stage</Menu.Label>
             <Menu.Item
-              onClick={() => onStageChange(null)}
-              rightSection={stage === null ? <IconCheck size={12} /> : null}
+              onClick={() => onEnvChange(null)}
+              rightSection={env === null ? <IconCheck size={12} /> : null}
             >
-              (no stage)
+              <Text size="sm" c="dimmed">Workspace default</Text>
             </Menu.Item>
-            {summary.stageNames.map((s) => (
-              <Menu.Item
-                key={s}
-                onClick={() => onStageChange(s)}
-                rightSection={stage === s ? <IconCheck size={12} /> : null}
-              >
-                {s}
-              </Menu.Item>
+            {scoped.length > 0 && <Menu.Label>{summary.name}</Menu.Label>}
+            {scoped.map((e) => (
+              <EnvItem key={e.path} name={e.name} baseUrl={envBindingFor(e, summary.slug)?.baseUrl ?? null}
+                       checked={env === e.path} onClick={() => onEnvChange(e.path)} />
+            ))}
+            {globals.length > 0 && <Menu.Label>Global</Menu.Label>}
+            {globals.map((e) => (
+              <EnvItem key={e.path} name={e.name} baseUrl={null}
+                       checked={env === e.path} onClick={() => onEnvChange(e.path)} />
             ))}
           </Menu.Dropdown>
         </Menu>
       )}
     </Group>
+  )
+}
+
+/** One row in the environment menu. Shows the baseUrl an env would move the request to, since
+ *  that is the difference the user is usually choosing between. */
+function EnvItem({ name, baseUrl, checked, onClick }: {
+  name: string
+  baseUrl: string | null
+  checked: boolean
+  onClick: () => void
+}) {
+  return (
+    <Menu.Item onClick={onClick} rightSection={checked ? <IconCheck size={12} /> : null}>
+      <Stack gap={0}>
+        <Text size="sm">{name}</Text>
+        {baseUrl && <Text size="xs" c="dimmed" ff="var(--mono)">{baseUrl}</Text>}
+      </Stack>
+    </Menu.Item>
   )
 }
 

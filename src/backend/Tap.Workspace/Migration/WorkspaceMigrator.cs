@@ -49,8 +49,8 @@ public static class WorkspaceMigrator
 {
     /// <summary>
     /// Frontmatter keys whose value is a <see cref="WorkspaceRef"/>. Derived from the
-    /// <c>YamlExt.Ref(...)</c> call sites — request <c>auth:</c>, collection <c>defaultAuth:</c>
-    /// (top level and per stage), manifest <c>defaultEnv:</c>, flow step <c>request:</c>, and
+    /// <c>YamlExt.Ref(...)</c> call sites — request <c>auth:</c>, collection and env
+    /// <c>defaultAuth:</c>, manifest <c>defaultEnv:</c>, flow step <c>request:</c>, and
     /// test entry <c>request:</c>/<c>flow:</c>. Adding a ref-valued key to the parser without
     /// adding it here would leave that ref dangling after a migration.
     /// </summary>
@@ -58,7 +58,7 @@ public static class WorkspaceMigrator
 
     /// <summary>
     /// Matches a ref line in frontmatter. The optional <c>- </c> covers flow steps and test
-    /// entries, which are list items; indentation covers collection stages, which are nested.
+    /// entries, which are list items; the leading indentation covers nested mappings.
     /// </summary>
     private static readonly Regex RefLine = new(
         @"^(?<prefix>\s*(?:-\s+)?)(?<key>" + string.Join('|', RefKeys) + @"):(?<gap>[ \t]*)(?<value>\S.*)$",

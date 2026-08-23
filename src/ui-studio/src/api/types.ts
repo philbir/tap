@@ -431,7 +431,6 @@ export interface TestRunStart {
   kind: 'test' | 'flow'
   name: string
   env: string | null
-  stage: string | null
   entries: TestRunPlanEntry[]
 }
 
@@ -495,25 +494,6 @@ export interface RequestSpec {
   assertions?: AssertSpec[]
 }
 
-/** One named stage inside a collection. Stage fields override the parent collection's
- *  defaults; variables here override workspace + collection scopes but are still
- *  overridden by env / request scopes. */
-export interface CollectionStage {
-  name: string
-  baseUrl: string | null
-  defaultAuth: string | null
-  vars: Record<string, VarSpec>
-}
-
-export interface CollectionStageSpec {
-  name: string
-  baseUrl?: string
-  defaultAuth?: string
-  vars?: Record<string, string>
-  /** Names of stage-scoped variables marked secret. */
-  secrets?: string[]
-}
-
 export interface EnvSpec {
   path: string
   id: string | null
@@ -523,6 +503,9 @@ export interface EnvSpec {
   secrets?: string[]
   tags?: string[]
   body?: string
+  /** Collections to assign this env to, each with its own overrides. Omitted/empty leaves it
+   *  global — offered everywhere, overriding nothing. */
+  collections?: EnvCollection[]
   /** Provider bare `{{name}}` tokens hit first while this env is active (may be an alias).
    *  Omitted/empty = inherit the workspace/system default. */
   defaultVariableProvider?: string | null
@@ -568,7 +551,7 @@ export interface AuthSummary {
   type: string
   /** Slug of the collection that owns this profile (it lives under `collections/<slug>/`),
    *  or null for a workspace-scoped profile under `auth/`. A collection-scoped profile
-   *  resolves `{{var}}` refs against that collection's variables and stages. */
+   *  resolves `{{var}}` refs against that collection's variables and active environment. */
   collection: string | null
 }
 
@@ -652,10 +635,24 @@ export interface AuthSpec {
   query?: Record<string, string>
 }
 
+/** One collection an environment is assigned to, with what it overrides there. The overrides
+ *  live on the assignment because they are per-collection: one `uat` points `orders` and
+ *  `billing` at different hosts. */
+export interface EnvCollection {
+  collection: string
+  /** Base URL override as written, or null to inherit the collection's. */
+  baseUrl: string | null
+  /** Default-auth override — a path relative to the env file, or `id:…` — or null to inherit
+   *  the collection's. */
+  defaultAuth: string | null
+}
+
 export interface EnvSummary {
   path: string
   name: string
   id: string | null
+  /** Collections this env is assigned to. Empty = global, offered everywhere. */
+  collections: EnvCollection[]
 }
 
 export interface EnvDetail extends EnvSummary {
@@ -666,6 +663,19 @@ export interface EnvDetail extends EnvSummary {
   defaultVariableProvider: string | null
   providerAliases: Record<string, string>
   strictVariables: boolean
+}
+
+/** Whether `env` may be selected for a request owned by `slug` — every global env, plus the
+ *  ones assigned to that collection. Pass null for a file that belongs to no collection. */
+export function envAppliesTo(env: EnvSummary, slug: string | null): boolean {
+  return env.collections.length === 0 || envBindingFor(env, slug) !== null
+}
+
+/** This env's assignment to `slug`, or null when it has none — always null for a global env,
+ *  which assigns no collection and so overrides nothing. */
+export function envBindingFor(env: EnvSummary, slug: string | null): EnvCollection | null {
+  if (slug === null) return null
+  return env.collections.find((b) => b.collection === slug) ?? null
 }
 
 export interface ProviderConfig {
@@ -953,7 +963,7 @@ export type AuthExecuteStatus = 'completed' | 'pending' | 'failed'
 
 /** `portable` is a `.http` file's own `@name = value` lines — the weakest scope, since it is
  *  what the file resolves to when opened outside Tap. */
-export type VariableScope = 'provider' | 'portable' | 'workspace' | 'collection' | 'stage' | 'env' | 'request'
+export type VariableScope = 'provider' | 'portable' | 'workspace' | 'collection' | 'env' | 'request'
 
 /** Listing row for a collection. `exists:false` means the on-disk directory is present
  *  but has no `_collection.tap` yet — saving a CollectionSpec creates the file. */
@@ -963,10 +973,9 @@ export interface CollectionSummary {
   id: string | null
   exists: boolean
   baseUrl: string
-  /** Names of stages defined on this collection — just the names, full stage definitions
-   *  live on CollectionDetail.stages. Empty when the collection has none. */
-  stageNames: string[]
-  defaultStage: string | null
+  /** Paths of the environments scoped to this collection. The globals apply here too and
+   *  are not repeated. */
+  envPaths: string[]
 }
 
 export interface CollectionDetail {
@@ -982,8 +991,9 @@ export interface CollectionDetail {
   tags: string[]
   body: string
   source: string
-  stages: CollectionStage[]
-  defaultStage: string | null
+  /** Paths of the environments scoped to this collection — the ones that may override its
+   *  baseUrl and defaultAuth. */
+  envPaths: string[]
   /** The collection's `agent:` option — whether agent surfaces (MCP tools, `call`) may use it. */
   agentEnabled: boolean
   /** The collection's own `history:` keys, or null when it declares none. */
@@ -1004,8 +1014,6 @@ export interface CollectionSpec {
   /** Names of collection-scoped variables marked secret. */
   secrets?: string[]
   tags?: string[]
-  stages?: CollectionStageSpec[]
-  defaultStage?: string
   /** Only the opt-out travels: `false` emits `agent: false`, undefined leaves the file silent (enabled). */
   agentEnabled?: boolean
   /** Omitted when the collection declares nothing. */
@@ -1202,8 +1210,8 @@ export interface Variable {
   value: string | null
   isSensitive: boolean
   scope: VariableScope
-  /** Workspace-relative path of the file that declared it. For stage vars: `{collectionPath}#{stageName}`,
-   *  for provider vars: `provider:{name}`. */
+  /** Workspace-relative path of the file that declared it; for provider vars,
+   *  `provider:{name}`. */
   sourcePath: string
   providerName: string | null
 }
@@ -1236,7 +1244,6 @@ export interface VariableContext {
   requestPath?: string
   collectionPath?: string
   envPath?: string
-  stage?: string
 }
 
 export interface CompileResult {
@@ -1296,9 +1303,9 @@ export interface RenderedRequest {
   headers: Record<string, string>
   body: string | null
   variablesUsed: VariableTrace[]
-  /** Name of the stage that resolved the request, or null if the collection has no
-   *  stages or the caller didn't pick one. */
-  stage: string | null
+  /** Path of the environment that actually applied, or null when none did — a scoped env out
+   *  of range for this request's collection drops out of the render. */
+  env: string | null
   protocol: RequestProtocol
 }
 
@@ -1335,7 +1342,8 @@ export interface ExecutionResult {
   retainedBytes?: number
   durationMs: number
   variablesUsed: VariableTrace[]
-  stage: string | null
+  /** Path of the environment the request actually resolved under, or null. */
+  env: string | null
   error: string | null
   protocol: RequestProtocol
   /** Snapshot of how the auth profile contributed — surfaced by the stream's `meta` event.
@@ -1474,7 +1482,6 @@ export interface HistorySummary {
   requestName: string | null
   collection: string | null
   env: string | null
-  stage: string | null
   method: string
   url: string
   status: number | null
@@ -1503,7 +1510,6 @@ export interface HistoryEntry {
   requestName: string | null
   collection: string | null
   env: string | null
-  stage: string | null
   source: string
   /** False means the file held real credentials and was encrypted at rest. */
   redacted: boolean

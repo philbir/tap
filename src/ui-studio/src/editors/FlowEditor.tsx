@@ -122,7 +122,7 @@ export function FlowEditor({ path }: Props) {
             <Button
               size="xs"
               leftSection={<IconPlayerPlayFilled size={13} />}
-              onClick={() => run.run(activeEnv, null)}
+              onClick={() => run.run(activeEnv)}
               loading={run.state.running}
               disabled={dirty || steps.length === 0}
             >

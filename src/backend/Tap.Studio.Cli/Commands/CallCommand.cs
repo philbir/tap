@@ -161,7 +161,6 @@ public sealed class CallCommand : AsyncCommand<CallCommand.Settings>
         var request = new RunTestRequestDto(
             Path: requestFile.RelativePath,
             Env: envPath,
-            Stage: settings.Stage,
             Only: null,
             Overrides: variables.Count > 0 ? variables : null);
 

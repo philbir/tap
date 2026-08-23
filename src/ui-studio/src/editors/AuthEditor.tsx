@@ -56,7 +56,7 @@ export function AuthEditor({ path }: Props) {
 
   const [detail, setDetail] = useState<AuthDetail | null>(null)
   // A profile stored under `collections/<slug>/` is owned by that collection: its fields
-  // expand against the collection's (and active stage's) variables, so the variable panel
+  // expand against the collection's (and active environment's) variables, so the variable panel
   // and every VariableInput must resolve through the same context the runner uses.
   const collectionSlug = detail?.collection ?? null
   const variableContext = useMemo<VariableContext>(() => ({
@@ -276,7 +276,7 @@ export function AuthEditor({ path }: Props) {
 
 /**
  * Where this profile lives, and therefore which variables its fields can reference. A
- * profile under `collections/<slug>/` sees workspace < collection < stage < env; one under
+ * profile under `collections/<slug>/` sees workspace < collection < env; one under
  * `auth/` only sees workspace < env, but is reusable from every collection.
  */
 function ScopeRow({ slug }: { slug: string | null }) {
@@ -305,7 +305,7 @@ function ScopeRow({ slug }: { slug: string | null }) {
         {label}
       </Anchor>
       <Text size="xs" c="dimmed">
-        — this profile can use the collection's variables and stages.
+        — this profile can use the collection's variables.
       </Text>
     </Group>
   )
@@ -613,7 +613,7 @@ function OAuth2Fields({ spec, update }: { spec: AuthSpec; update: <K extends key
     // Pass the profile path so an authority like `{{IDP_URL}}/tenant` resolves through the
     // owning collection's variables, not just the workspace's — and the active env so it
     // resolves against the same one the field's own preview highlighted.
-    api.oidcDiscovery(debouncedAuthority.trim(), spec.path, undefined, activeEnv ?? undefined).then((doc) => {
+    api.oidcDiscovery(debouncedAuthority.trim(), spec.path, activeEnv ?? undefined).then((doc) => {
       if (cancelled) return
       update('tokenUrl', doc.tokenEndpoint)
       update('authorizeUrl', doc.authorizationEndpoint)

@@ -116,7 +116,7 @@ export function TestSetEditor({ path }: Props) {
             <Button
               size="xs"
               leftSection={<IconPlayerPlayFilled size={13} />}
-              onClick={() => run.run(activeEnv, null)}
+              onClick={() => run.run(activeEnv)}
               loading={run.state.running}
               disabled={dirty || tests.length === 0}
             >
@@ -130,7 +130,7 @@ export function TestSetEditor({ path }: Props) {
             kind="test"
             onStop={run.stop}
             onClose={run.clear}
-            onRunOne={(index) => run.run(activeEnv, null, index)}
+            onRunOne={(index) => run.run(activeEnv, index)}
           />
         ) : undefined}
       >

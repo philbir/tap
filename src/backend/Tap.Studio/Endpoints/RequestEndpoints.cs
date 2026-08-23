@@ -93,7 +93,7 @@ public static class RequestEndpoints
         {
             try
             {
-                var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct, body.Stage).ConfigureAwait(false);
+                var rendered = await svc.RenderAsync(body.Path, body.Env, body.Overrides, ct).ConfigureAwait(false);
                 return Results.Ok(new RenderedRequestDto(
                     Method: rendered.Method,
                     Url: rendered.Url,
@@ -102,7 +102,7 @@ public static class RequestEndpoints
                     VariablesUsed: rendered.Metadata.VariablesUsed
                         .Select(s => new VariableTraceDto(s.ProviderName, s.Name, s.Resolved, s.IsSecret, s.Duration.TotalMilliseconds))
                         .ToArray(),
-                    Stage: rendered.Metadata.StageName,
+                    Env: rendered.Metadata.EnvPath,
                     Protocol: rendered.Protocol.ToWire()));
             }
             catch (WorkspaceParseException ex)

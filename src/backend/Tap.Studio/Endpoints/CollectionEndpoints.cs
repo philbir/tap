@@ -42,8 +42,7 @@ public static class CollectionEndpoints
                     c.Id,
                     Exists: true,
                     BaseUrl: c.BaseUrl,
-                    StageNames: c.Stages.Select(s => s.Name).ToArray(),
-                    DefaultStage: c.DefaultStage));
+                    EnvPaths: ScopedEnvPaths(ws, slug)));
                 seenSlugs.Add(slug);
             }
 
@@ -54,7 +53,7 @@ public static class CollectionEndpoints
                 {
                     var slug = Path.GetFileName(dir);
                     if (string.IsNullOrEmpty(slug) || seenSlugs.Contains(slug)) continue;
-                    items.Add(new CollectionSummaryDto(slug, slug, null, false, string.Empty, Array.Empty<string>(), null));
+                    items.Add(new CollectionSummaryDto(slug, slug, null, false, string.Empty, ScopedEnvPaths(ws, slug)));
                 }
             }
 
@@ -81,12 +80,7 @@ public static class CollectionEndpoints
                     Tags: c.Tags,
                     Body: c.Body,
                     Source: svc.ReadSource(c.RelativePath),
-                    Stages: c.Stages.Select(s => new CollectionStageDto(
-                        Name: s.Name,
-                        BaseUrl: s.BaseUrl,
-                        DefaultAuth: s.DefaultAuth?.RelativePath,
-                        Vars: s.Vars)).ToArray(),
-                    DefaultStage: c.DefaultStage,
+                    EnvPaths: ScopedEnvPaths(ws, slug),
                     AgentEnabled: c.Agent.Enabled,
                     History: HistoryOptionsMapper.ToDto(c.History),
                     InheritedHistory: HistoryOptionsMapper.Effective(
@@ -108,8 +102,7 @@ public static class CollectionEndpoints
                 Tags: Array.Empty<string>(),
                 Body: string.Empty,
                 Source: string.Empty,
-                Stages: Array.Empty<CollectionStageDto>(),
-                DefaultStage: null,
+                EnvPaths: ScopedEnvPaths(ws, slug),
                 AgentEnabled: true,
                 History: null,
                 InheritedHistory: HistoryOptionsMapper.Effective(
@@ -192,6 +185,16 @@ public static class CollectionEndpoints
         => settings.IgnoreTlsErrors is null && settings.TimeoutMs is null
             ? null
             : new RequestTransportSettingsDto(settings.IgnoreTlsErrors, settings.TimeoutMs);
+
+    /// <summary>Paths of the environments that name <paramref name="slug"/> in their
+    /// <c>collections:</c> list. Global envs are deliberately absent — the client already holds
+    /// the full env list and knows a global one applies everywhere; this is the extra set the
+    /// baseUrl chip offers on top.</summary>
+    private static IReadOnlyList<string> ScopedEnvPaths(LoadedWorkspace ws, string slug)
+        => ws.Environments
+            .Where(e => !e.IsGlobal && e.AppliesTo(slug))
+            .Select(e => e.RelativePath)
+            .ToArray();
 
     private static string? SlugFromCollectionFile(string relativePath)
     {

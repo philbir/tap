@@ -49,8 +49,6 @@ public sealed record ResolvedRequestMetadata
 {
     public required string SourceRequestPath { get; init; }
     public string? EnvPath { get; init; }
-    /// <summary>The stage that was used to resolve baseUrl / vars / headers, or <c>null</c> if no stage applied.</summary>
-    public string? StageName { get; init; }
 
     /// <summary>Variables (including secrets) touched during render — by provider + name +
     /// IsSecret flag only. Never carries the resolved value; history surfaces this so

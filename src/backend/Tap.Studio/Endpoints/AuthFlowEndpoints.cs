@@ -27,19 +27,19 @@ public static class AuthFlowEndpoints
         // contain {{var}} / ${{secret}} refs (e.g. `http://{{DEMO_API_URL}}`). Expand them
         // through the same resolver the runner uses so the .well-known fetch hits a real URL.
         // `authPath` is the profile being edited: when it lives inside a collection, the
-        // authority may reference that collection's (or its stage's) variables. `env` is the
+        // authority may reference that collection's variables. `env` is the
         // selected environment — without it the authority resolves against the workspace
         // default and discovery probes an endpoint the user never asked for.
         app.MapGet("/api/auth/discovery", async (
             string authority, OidcDiscoveryClient client, WorkspaceService ws, CancellationToken ct,
-            string? authPath = null, string? stage = null, string? env = null) =>
+            string? authPath = null, string? env = null) =>
         {
             if (string.IsNullOrWhiteSpace(authority))
                 return Results.BadRequest(new { code = "missing-authority", message = "authority query parameter is required." });
             try
             {
                 var workspace = ws.Current;
-                var context = AuthScopeResolver.ContextFor(workspace, authPath, requestPath: null, stageName: stage, envPath: env);
+                var context = AuthScopeResolver.ContextFor(workspace, authPath, envPath: env);
                 var resolver = new AuthFieldResolver(workspace, ws.CreateRegistry(context.Env), context);
                 var resolved = await resolver.AllAsync(authority, ct).ConfigureAwait(false) ?? authority;
 
@@ -59,14 +59,14 @@ public static class AuthFlowEndpoints
         app.MapPost("/api/auth/execute", async (AuthExecuteRequestDto body, AuthRunner runner, CancellationToken ct) =>
         {
             var result = await runner
-                .ExecuteAsync(body.Path, body.ForceReauthenticate, ct, body.RequestPath, body.Stage, body.Env)
+                .ExecuteAsync(body.Path, body.ForceReauthenticate, ct, body.Env)
                 .ConfigureAwait(false);
             return Results.Ok(ToDto(result));
         });
 
         // ----- Clear cached token -----
         // Removes every persisted runtime token for an auth profile scoped to the current
-        // workspace — including the per-stage entries a collection-scoped profile accumulates.
+        // workspace — including the per-environment entries a profile accumulates.
         // After this call the Flow tab's status flips back to `missing` and the next request
         // Send will fire without an Authorization header (until the user runs the auth flow
         // again). 404 when the path doesn't point at an auth file — guards against accidental

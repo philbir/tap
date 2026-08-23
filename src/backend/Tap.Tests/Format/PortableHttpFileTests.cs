@@ -10,7 +10,7 @@ namespace Tap.Tests.Format;
 /// <summary>
 /// The two-way portability contract for <c>.http</c> files: the same file has to run in Visual
 /// Studio / REST Client, where its own <c>@baseUrl</c> is the only definition there is, and in
-/// Tap, where the collection and the selected stage must win instead.
+/// Tap, where the collection and the selected environment must win instead.
 ///
 /// <para>That is only possible because a file variable is the <em>weakest</em> scope rather than
 /// the strongest, and because Tap binds a built-in <c>{{baseUrl}}</c>. Get either half wrong and
@@ -38,12 +38,12 @@ public class PortableHttpFileTests
     }
 
     private static async Task<ResolvedRequest> RenderAsync(
-        RequestFile request, WorkspaceFile collection, string? stage = null, EnvFile? env = null)
+        RequestFile request, WorkspaceFile collection, EnvFile? env = null)
     {
         var files = new List<WorkspaceFile> { collection, request };
         if (env is not null) files.Add(env);
         var renderer = new WorkspaceRenderer(BuildWorkspace([.. files]), Registry());
-        return await renderer.RenderAsync(request, env, overrides: null, CancellationToken.None, stage);
+        return await renderer.RenderAsync(request, env, overrides: null, CancellationToken.None);
     }
 
     // ---- The collection wins over the file's fallback -----------------------------------------
@@ -61,13 +61,14 @@ public class PortableHttpFileTests
     }
 
     [Fact]
-    public async Task Selecting_a_stage_moves_a_portable_request()
+    public async Task Selecting_an_environment_moves_a_portable_request()
     {
-        // A stage that did nothing to a file carrying its own baseUrl would make the stage
-        // picker a lie.
+        // An environment that did nothing to a file carrying its own baseUrl would make the
+        // environment picker a lie.
         var request = ParseOne(PortableFile);
 
-        var rendered = await RenderAsync(request, DemoCollection(defaultAuth: null), stage: "uat");
+        var rendered = await RenderAsync(
+            request, DemoCollection(defaultAuth: null), env: (EnvFile)UatEnv);
 
         Assert.Equal("http://uat.demo.test/ping", rendered.Url);
     }

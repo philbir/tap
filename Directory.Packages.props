@@ -3,7 +3,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <AspireVersion>13.4.6</AspireVersion>
-    <AspNetCoreVersion>10.0.10</AspNetCoreVersion>
+    <AspNetCoreVersion>10.0.11</AspNetCoreVersion>
   </PropertyGroup>
   <ItemGroup>
     <PackageVersion Include="Aspire.AppHost.Sdk" Version="$(AspireVersion)" />
@@ -47,7 +47,7 @@
     <!-- Test dependencies — only consumed by src/backend/Tap.Tests. -->
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
 
     <!-- Demo.Api dependencies — only consumed by samples/Demo.Api. -->
     <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.0" />

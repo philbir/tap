@@ -33,6 +33,11 @@ app.Configure(cfg =>
         .WithExample(["ui", "--ui-port", "5050"])
         .WithExample(["ui", "--no-open"]);
 
+    cfg.AddCommand<McpCommand>("mcp")
+        .WithDescription("Serve a running inspector's captured traffic to a coding agent over MCP (stdio). Finds the inspector itself; requires Inspector:Agent:Enabled on it.")
+        .WithExample(["mcp"])
+        .WithExample(["mcp", "--ui-port", "5298"]);
+
     cfg.AddCommand<DocsCommand>("docs")
         .WithDescription($"Open the tap CLI documentation ({DocsCommand.Url}) in your browser.")
         .WithExample(["docs"])

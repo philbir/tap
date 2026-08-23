@@ -26,6 +26,10 @@
     <PackageReference Include="Spectre.Console.Cli" />
     <ProjectReference Include="..\Tap.Core\Tap.Core.csproj" />
     <ProjectReference Include="..\Tap.Server\Tap.Server.csproj" />
+    <ProjectReference Include="..\Tap.Inspector.Mcp\Tap.Inspector.Mcp.csproj" />
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
   </ItemGroup>
 
   <!-- Tap.Server is a Web SDK project that ships its UI as static web assets via a runtime

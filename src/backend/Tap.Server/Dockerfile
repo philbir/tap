@@ -24,6 +24,9 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY src/backend/Tap.Core/ ./src/Tap.Core/
+# Tap.Server references Tap.Inspector.Mcp to serve the agent surface at /mcp, so the
+# project has to be here or the restore cannot resolve it.
+COPY src/backend/Tap.Inspector.Mcp/ ./src/Tap.Inspector.Mcp/
 COPY src/backend/Tap.Server/ ./src/Tap.Server/
 COPY --from=ui /ui/dist ./src/Tap.Server/wwwroot/
 RUN dotnet publish src/Tap.Server/Tap.Server.csproj \

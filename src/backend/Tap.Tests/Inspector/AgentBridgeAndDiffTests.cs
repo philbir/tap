@@ -13,6 +13,13 @@ public class AgentBridgeAndDiffTests
 {
     private static readonly CaptureRedactor Redactor = new();
 
+    // Invented Stripe-shaped values, assembled rather than written out: see the note in
+    // CaptureRedactorTests. Nothing here was ever a real key.
+    private const string StripePrefix = "sk" + "_live_";
+    private const string TokenA = StripePrefix + "goodtoken1234567890";
+    private const string TokenB = StripePrefix + "staletoken098765432";
+    private const string TokenSame = StripePrefix + "abcdef1234567890";
+
     private static string TempRoot()
     {
         var path = Path.Combine(Path.GetTempPath(), "tap-bridge-tests", Guid.NewGuid().ToString("n"));
@@ -132,7 +139,7 @@ public class AgentBridgeAndDiffTests
     [Fact]
     public void Identical_exchanges_report_no_differences()
     {
-        var headers = new Dictionary<string, string> { ["Authorization"] = "Bearer sk_live_abcdef1234567890" };
+        var headers = new Dictionary<string, string> { ["Authorization"] = "Bearer " + TokenSame };
         var diff = CaptureDiff.Compare(
             Detail(Record(1, headers: headers, body: """{"a":1}""")),
             Detail(Record(2, headers: headers, body: """{"a":1}""")));
@@ -147,11 +154,11 @@ public class AgentBridgeAndDiffTests
         var diff = CaptureDiff.Compare(
             Detail(Record(1, status: 200, headers: new Dictionary<string, string>
             {
-                ["Authorization"] = "Bearer sk_live_goodtoken1234567890",
+                ["Authorization"] = "Bearer " + TokenA,
             })),
             Detail(Record(2, status: 401, headers: new Dictionary<string, string>
             {
-                ["Authorization"] = "Bearer sk_live_staletoken098765432",
+                ["Authorization"] = "Bearer " + TokenB,
             })));
 
         var auth = Assert.Single(diff.Differences, d => d.What == "request.header:Authorization");
@@ -166,7 +173,7 @@ public class AgentBridgeAndDiffTests
     [Fact]
     public void The_same_credential_on_both_sides_is_not_a_difference()
     {
-        var headers = new Dictionary<string, string> { ["Authorization"] = "Bearer sk_live_abcdef1234567890" };
+        var headers = new Dictionary<string, string> { ["Authorization"] = "Bearer " + TokenSame };
 
         var diff = CaptureDiff.Compare(
             Detail(Record(1, headers: headers)),

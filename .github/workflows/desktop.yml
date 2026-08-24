@@ -245,48 +245,12 @@ jobs:
           uploadUpdaterJson: false
           args: --target ${{ matrix.target }} --bundles ${{ steps.bundles.outputs.value }}
 
-      # tauri-action uploads the user-facing bundles (.dmg / .msi / .exe /
-      # .deb / .app.tar.gz) but not the .sig files needed for the updater
-      # manifest. Upload them here, renaming so each sig matches the
-      # release-asset name tauri-action picked.
-      - name: Attach updater signatures to release
-        if: github.ref_type == 'tag'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GH_REPO: ${{ github.repository }}
-          TARGET: ${{ matrix.target }}
-          VERSION: ${{ github.ref_name }}
-        run: |
-          set -euo pipefail
-          BUNDLE="src/desktop/src-tauri/target/${TARGET}/release/bundle"
-          case "${TARGET}" in
-            aarch64-apple-darwin)
-              # tauri-action 1.0.0 added the app version to .app.tar.gz[.sig]
-              # names, so match the suffix instead of the literal filename and
-              # fail loudly rather than uploading nothing.
-              shopt -s nullglob
-              SIGS=("${BUNDLE}"/macos/*.app.tar.gz.sig)
-              if [ ${#SIGS[@]} -eq 0 ]; then
-                echo "No .app.tar.gz.sig under ${BUNDLE}/macos" >&2
-                ls -la "${BUNDLE}/macos" >&2 || true
-                exit 1
-              fi
-              cp "${SIGS[0]}" "Tap-Studio_aarch64.app.tar.gz.sig"
-              gh release upload "${VERSION}" \
-                "Tap-Studio_aarch64.app.tar.gz.sig" --clobber
-              ;;
-            x86_64-pc-windows-msvc)
-              # With createUpdaterArtifacts on, tauri-action uploads the NSIS
-              # installer (_x64-setup.exe) AND its .exe.sig itself — the Windows
-              # updater installs from the .exe directly (there's no .nsis.zip in
-              # Tauri v2). Nothing to attach here.
-              echo "Windows updater .exe + .sig uploaded by tauri-action — skipping."
-              ;;
-            x86_64-unknown-linux-gnu)
-              echo "Linux ships .deb only — no updater bundle, skipping."
-              ;;
-          esac
+      # No sig-attaching step here on purpose. With createUpdaterArtifacts on,
+      # tauri-action 1.0.0 uploads every artifact's .sig alongside the artifact
+      # itself, under the same (version-stamped) name. The step that used to
+      # re-upload the macOS sig under a hand-written name is what broke the
+      # 0.7.0 updater: publish-updater keyed off that name and emitted a URL for
+      # an asset the release never carried. Derive names, never invent them.
 
       # Runner disks are wiped between jobs, but a cancelled or failed run can
       # leave the notarization key readable to any later step in this one.
@@ -296,8 +260,8 @@ jobs:
         shell: bash
         run: rm -rf "$HOME/.private_keys"
 
-  # Compose latest.json from the per-platform sigs the matrix attached and
-  # publish it to the release. The updater client at
+  # Compose latest.json from the per-platform .sig assets tauri-action attached
+  # to the release, and publish it there too. The updater client at
   # github.com/philbir/tap/releases/latest/download/latest.json reads this.
   publish-updater:
     needs: bundle
@@ -323,26 +287,55 @@ jobs:
 
           PLATFORMS='{}'
 
-          MAC_SIG_PATH="sigs/Tap-Studio_aarch64.app.tar.gz.sig"
-          if [ -f "${MAC_SIG_PATH}" ]; then
-            MAC_SIG=$(cat "${MAC_SIG_PATH}")
-            PLATFORMS=$(jq -n \
-              --arg sig "${MAC_SIG}" \
-              --arg url "${BASE}/Tap-Studio_aarch64.app.tar.gz" \
-              '{ "darwin-aarch64": { signature: $sig, url: $url } }')
-          fi
+          # Every download URL is DERIVED from the .sig asset tauri-action
+          # actually uploaded — `<name>.sig` always sits next to `<name>`. Never
+          # hardcode a bundle filename here: tauri-action version-stamps and
+          # renames assets on upload, and a literal name that drifts produces a
+          # manifest which passes the signature check and then 404s mid-install
+          # (exactly what 0.7.0 shipped with).
+          #
+          # A release can carry more than one sig matching a pattern (0.7.0 has
+          # a leftover hand-named macOS one), so candidates are ranked by whether
+          # the asset they name actually resolves — not by glob order. The HEAD
+          # check is the whole point: the updater otherwise discovers a bad URL
+          # only after the user has clicked "Install & restart".
+          add_platform() {
+            local key="$1" pattern="$2" sig_path url code
+            local matched=0
+            for sig_path in ${pattern}; do
+              [ -f "${sig_path}" ] || continue
+              matched=1
+              url="${BASE}/$(basename "${sig_path}" .sig)"
+              code=$(curl -sIL -o /dev/null -w '%{http_code}' "${url}")
+              if [ "${code}" != "200" ]; then
+                echo "${key}: HTTP ${code} — ignoring ${url}" >&2
+                continue
+              fi
+              echo "${key}: HTTP 200 ${url}"
+              PLATFORMS=$(echo "${PLATFORMS}" | jq \
+                --arg key "${key}" \
+                --arg sig "$(cat "${sig_path}")" \
+                --arg url "${url}" \
+                '. + { ($key): { signature: $sig, url: $url } }')
+              return
+            done
+            if [ "${matched}" -eq 0 ]; then
+              echo "No updater signature matching '${pattern}' — skipping ${key}." >&2
+            else
+              echo "No resolvable asset for any '${pattern}' candidate — skipping ${key}." >&2
+            fi
+          }
 
-          # Tauri v2's NSIS updater artifact is the setup .exe + its .exe.sig
-          # (uploaded by tauri-action). Glob it so we don't hardcode the product
-          # name, and point the manifest URL at the .exe.
-          WIN_SIG_PATH=$(ls sigs/*_x64-setup.exe.sig 2>/dev/null | head -1 || true)
-          if [ -n "${WIN_SIG_PATH}" ] && [ -f "${WIN_SIG_PATH}" ]; then
-            WIN_SIG=$(cat "${WIN_SIG_PATH}")
-            WIN_EXE=$(basename "${WIN_SIG_PATH}" .sig)
-            PLATFORMS=$(echo "${PLATFORMS}" | jq \
-              --arg sig "${WIN_SIG}" \
-              --arg url "${BASE}/${WIN_EXE}" \
-              '. + { "windows-x86_64": { signature: $sig, url: $url } }')
+          add_platform "darwin-aarch64" 'sigs/*_aarch64.app.tar.gz.sig'
+          # Tauri v2's NSIS updater artifact is the setup .exe + its .exe.sig;
+          # the Windows updater installs from the .exe directly.
+          add_platform "windows-x86_64" 'sigs/*_x64-setup.exe.sig'
+
+          if [ "$(echo "${PLATFORMS}" | jq 'length')" -eq 0 ]; then
+            echo "No updater platforms resolved — refusing to publish an empty manifest." >&2
+            ls -la sigs >&2 || true
+            gh release view "${VERSION}" --json assets --jq '.assets[].name' >&2
+            exit 1
           fi
 
           jq -n \

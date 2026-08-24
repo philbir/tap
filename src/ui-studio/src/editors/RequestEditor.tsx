@@ -805,6 +805,11 @@ export function RequestEditor({ path }: Props) {
             path={httpBacked ? httpFilePath : path}
             source={detail.source}
             language={httpBacked ? 'http' : 'yaml'}
+            deletable={httpBacked
+              // The source here is the whole .http file, so Delete removes the file and every
+              // request in it — name the file, not this one request.
+              ? { kind: 'httpfile', path: httpFilePath, name: basename(httpFilePath) }
+              : { kind: 'request', path, name: spec.name || basename(path) }}
           />
         </Tabs.Panel>
       </Tabs>

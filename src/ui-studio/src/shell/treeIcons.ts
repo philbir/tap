@@ -118,19 +118,12 @@ const TAP_TREE_UNSAFE_CSS = `
     color: inherit;
   }
 
-  /* Context-menu trigger visibility: pierre only renders the dots icon when
-     buttonVisibility is set to always, so we ask for always and then hide the
-     lane ourselves until the row is hovered / focused / its menu is open. */
-  [data-type="item"] [data-item-section="action"] {
-    opacity: 0;
-    transition: opacity 120ms ease;
-  }
-  [data-type="item"]:hover [data-item-section="action"],
-  [data-type="item"]:focus [data-item-section="action"],
-  [data-type="item"]:focus-within [data-item-section="action"],
-  [data-type="item"][data-item-context-menu-open="true"] [data-item-section="action"] {
-    opacity: 1;
-  }
+  /* No rule for [data-item-section="action"] here on purpose. With pierre's default
+     buttonVisibility ('when-needed') that lane is an empty 18px spacer, and the ⋯ the
+     user sees and clicks is the single floating button in pierre's context-menu-anchor,
+     which pierre already shows only for the hovered / focused / menu-open row. Asking
+     for buttonVisibility 'always' to style a per-row copy instead puts two ellipses on
+     the same row — see the note in PierreFileTree.tsx. */
 
   [data-item-type="folder"] [data-item-section="icon"]::after {
     content: '';

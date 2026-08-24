@@ -1,5 +1,5 @@
 import {
-  ActionIcon, Badge, Box, Center, Code, Group, Loader, Modal, Paper, Progress, Stack, Table, Text, TextInput, Textarea, Tooltip, UnstyledButton,
+  ActionIcon, Badge, Box, Center, Code, Group, Loader, Modal, Paper, Progress, ScrollArea, Stack, Table, Text, TextInput, Textarea, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import { useDebouncedValue } from '@mantine/hooks'
 import {
@@ -15,11 +15,11 @@ import { ProviderTypeIcon } from './providerMeta'
 const SCOPE_ORDER: VariableScope[] = ['provider', 'portable', 'workspace', 'collection', 'env', 'request']
 
 // The first cascade tier is the configured-provider layer (system.json, azkv, file,
-// env, …). Providers can be declared at system OR workspace scope, so the tier is
-// labelled PROVIDERS and its detail view groups variables per provider with an origin
-// badge — a flat "SYSTEM" pile hid which vault a value came from.
+// env, …) — the machine's own variables, hence SYSTEM. Providers can be declared at
+// system OR workspace scope, so the tier's detail view groups variables per provider
+// with an origin badge; a flat pile would hide which vault a value came from.
 const SCOPE_LABEL: Record<VariableScope, string> = {
-  provider: 'PROVIDERS',
+  provider: 'SYSTEM',
   portable: 'FILE',
   workspace: 'WORKSPACE',
   collection: 'COLLECTION',
@@ -78,17 +78,48 @@ export function VariablesPanel({ opened, onClose, context }: Props) {
   if (!everOpened && !opened) return null
 
   return (
+    /* Pinned height. The body swaps between a two-row provider group and a hundred-row
+       RESULT table, and sizing the dialog to its content made every cascade click resize
+       and re-centre the modal under the cursor. The frame stays put; the two columns
+       scroll inside it instead. */
     <Modal
       opened={opened}
       onClose={onClose}
       size="xl"
-      title={<Text fw={600}>Variables</Text>}
+      title={
+        /* The provider bindings ride in the title bar rather than in a row of their own.
+           The modal's height is pinned, so every row above the columns is a row the
+           RESULT table doesn't get — and this is one line of standing context, not
+           content. */
+        <Group gap={8} wrap="nowrap">
+          <Text fw={600}>Variables</Text>
+          {view?.defaultProvider && (
+            <Tooltip label="Bare {{name}} tokens resolve against this provider first." withArrow>
+              <Badge size="sm" variant="light" color="blue">default · {view.defaultProvider}</Badge>
+            </Tooltip>
+          )}
+          {view?.aliases && Object.entries(view.aliases).map(([alias, target]) => (
+            <Tooltip key={alias} label={`{{${alias}:name}} resolves against '${target}' in the active env.`} withArrow>
+              <Badge size="sm" variant="light" color="grape">{alias} → {target}</Badge>
+            </Tooltip>
+          ))}
+        </Group>
+      }
+      styles={{
+        content: {
+          height: 'min(80dvh, 780px)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
+        },
+        body: { flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' },
+      }}
     >
       {/* Top-of-modal progress bar — indeterminate. Shows whenever the view is still being
           assembled (slow providers like Azure Key Vault dominate the first call; later
           calls land instantly thanks to the server-side provider cache). */}
       {loading && (
-        <Stack gap={6} mb="md">
+        <Stack gap={6} mb="md" style={{ flexShrink: 0 }}>
           <Progress value={100} striped animated size="xs" radius="xs" color="tap" />
           <Group gap={6} c="dimmed">
             <Loader size="xs" />
@@ -96,37 +127,41 @@ export function VariablesPanel({ opened, onClose, context }: Props) {
           </Group>
         </Stack>
       )}
-      {/* Active provider binding — which provider bare tokens hit first, and any env
-          alias → provider bindings (kv → kv-prod). Only shown when a binding exists. */}
-      {view && (view.defaultProvider || (view.aliases && Object.keys(view.aliases).length > 0)) && (
-        <Group gap={6} mb="sm">
-          {view.defaultProvider && (
-            <Tooltip label="Bare {{name}} tokens resolve against this provider first." withArrow>
-              <Badge size="sm" variant="light" color="blue">default · {view.defaultProvider}</Badge>
-            </Tooltip>
-          )}
-          {view.aliases && Object.entries(view.aliases).map(([alias, target]) => (
-            <Tooltip key={alias} label={`{{${alias}:name}} resolves against '${target}' in the active env.`} withArrow>
-              <Badge size="sm" variant="light" color="grape">{alias} → {target}</Badge>
-            </Tooltip>
-          ))}
-        </Group>
-      )}
-      <Box style={{ display: 'grid', gridTemplateColumns: '160px 1fr', gap: 24 }}>
+      {/* `minmax(0, 1fr)` on the row is what lets the two columns own their own
+          overflow — with the default `auto` row the tallest column would size the
+          grid and push past the pinned modal height instead of scrolling. */}
+      <Box
+        style={{
+          flex: 1,
+          minHeight: 0,
+          display: 'grid',
+          gridTemplateColumns: '160px 1fr',
+          gridTemplateRows: 'minmax(0, 1fr)',
+          gap: 24,
+        }}
+      >
         {/* Cascade renders immediately. While loading, counts are zero (we don't know
             them yet) but the structure is on screen so the user sees what they're
             waiting for. Once view arrives, badges fill in. */}
-        <ScopeCascade view={view} selected={selectedScope} onSelect={setSelectedScope} />
-        <Stack gap="md">
-          {loading ? (
-            <Center mih={140}><Loader size="sm" /></Center>
-          ) : view ? (
-            <SelectedScopeTable view={view} scope={selectedScope} />
-          ) : (
-            <Text size="sm" c="dimmed">Open a request or env to see variables.</Text>
-          )}
-          <TestItSection context={context} loading={loading} />
-        </Stack>
+        <ScrollArea h="100%" type="auto" scrollbarSize={6} offsetScrollbars="y">
+          <ScopeCascade view={view} selected={selectedScope} onSelect={setSelectedScope} />
+        </ScrollArea>
+        <Box style={{ height: '100%', minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <ScopeHeader scope={selectedScope} />
+          <ScrollArea style={{ flex: 1, minHeight: 0 }} type="auto" scrollbarSize={6} offsetScrollbars="y">
+            {loading ? (
+              <Center mih={140}><Loader size="sm" /></Center>
+            ) : view ? (
+              <SelectedScopeTable view={view} scope={selectedScope} />
+            ) : (
+              <Text size="sm" c="dimmed">Open a request or env to see variables.</Text>
+            )}
+          </ScrollArea>
+          {/* Pinned below the scroller so it stays reachable whatever the scope holds. */}
+          <Box mt="md" style={{ flexShrink: 0 }}>
+            <TestItSection context={context} loading={loading} />
+          </Box>
+        </Box>
       </Box>
     </Modal>
   )
@@ -223,27 +258,31 @@ function ScopePill({ label, count, color, active, onClick, outline }: {
 // Right column — selected scope's variable table.
 // -----------------------------------------------------------------------------------------
 
+/** Pinned above the scroller — scope name on the left, refresh on the right. */
+function ScopeHeader({ scope }: { scope: VariableScope | 'result' }) {
+  const reload = useTapStore((s) => s.reload)
+  return (
+    <Group justify="space-between" mb="xs" style={{ flexShrink: 0 }}>
+      <Text fw={700} size="sm" tt="uppercase" lts={0.5}>
+        {scope === 'result' ? 'RESULT' : SCOPE_LABEL[scope]}
+      </Text>
+      <Tooltip label="Refresh">
+        <ActionIcon variant="subtle" color="gray" size="sm" onClick={() => void reload()} aria-label="Refresh">
+          <IconRefresh size={14} />
+        </ActionIcon>
+      </Tooltip>
+    </Group>
+  )
+}
+
 function SelectedScopeTable({ view, scope }: { view: VariableView; scope: VariableScope | 'result' }) {
   const variables = useMemo(() => {
     if (scope === 'result') return view.result
     return view.sets.filter((s) => s.scope === scope).flatMap((s) => s.variables)
   }, [view, scope])
 
-  const header = scope === 'result' ? 'RESULT' : SCOPE_LABEL[scope]
-  const generation = useTapStore((s) => s.generation)
-  const [, force] = useState(0)
-
   return (
     <Box>
-      <Group justify="space-between" mb="xs">
-        <Text fw={700} size="sm" tt="uppercase" lts={0.5}>{header}</Text>
-        <Tooltip label="Refresh">
-          <ActionIcon variant="subtle" color="gray" size="sm" onClick={() => force(generation)} aria-label="Refresh">
-            <IconRefresh size={14} />
-          </ActionIcon>
-        </Tooltip>
-      </Group>
-
       {scope === 'provider' ? (
         <ProviderSetGroups view={view} />
       ) : variables.length === 0 ? (
@@ -396,7 +435,7 @@ function TestItSection({ context, loading }: { context: VariableContext | null; 
           <Box>
             <Textarea
               value={result.value}
-              readOnly autosize minRows={2}
+              readOnly autosize minRows={2} maxRows={6}
               styles={{ input: { fontFamily: 'var(--mono)', fontSize: 12 } }}
             />
             {result.replacements.length > 0 && (

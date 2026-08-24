@@ -24,13 +24,23 @@
 
 html, body, #root { height: 100%; margin: 0; }
 
+/* The brand mark is a button (it opens the app menu), so it needs the flex box the old
+   wrapper got for free, plus a hint that it is clickable. */
 .tap-brand {
   min-width: max-content;
   padding-right: 4px;
+  display: flex;
+  align-items: center;
+}
+
+.tap-brand:hover .tap-brand__icon,
+.tap-brand:focus-visible .tap-brand__icon {
+  opacity: 0.82;
 }
 
 .tap-brand__icon {
   display: block;
+  transition: opacity 120ms ease;
   width: 26px;
   height: 26px;
   border-radius: 8px;

@@ -177,6 +177,8 @@ public static class CollectionEndpoints
                     "Collection does not exist.", null, null));
 
             Directory.Delete(dirAbs, recursive: true);
+            // The client refetches immediately; don't make it wait for the watcher.
+            svc.ReloadNow();
             return Results.NoContent();
         });
     }

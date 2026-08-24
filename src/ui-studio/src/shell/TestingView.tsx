@@ -15,9 +15,15 @@ interface Props {
   search: string
   activePath: string | null
   onOpen: (path: string, kind: 'test' | 'flow', name: string) => void
+  /** Right-click on a row. A test set and a flow are each one file, so the host renders the
+   *  same cursor-anchored menu the request tree gets — just with only the file actions on it. */
+  onContextMenu: (
+    item: { path: string; kind: 'test' | 'flow'; name: string },
+    event: { clientX: number; clientY: number },
+  ) => void
 }
 
-export function TestingView({ search, activePath, onOpen }: Props) {
+export function TestingView({ search, activePath, onOpen, onContextMenu }: Props) {
   const testSets = useTapStore((s) => s.testSets)
   const flows = useTapStore((s) => s.flows)
 
@@ -66,6 +72,10 @@ export function TestingView({ search, activePath, onOpen }: Props) {
                 active={activePath === t.path}
                 icon={<IconChecklist size={14} color="var(--mantine-color-teal-6)" />}
                 onClick={() => onOpen(t.path, 'test', t.name)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  onContextMenu({ path: t.path, kind: 'test', name: t.name }, e)
+                }}
               />
             ))}
           </Section>
@@ -82,6 +92,10 @@ export function TestingView({ search, activePath, onOpen }: Props) {
                 active={activePath === f.path}
                 icon={<IconArrowsSplit2 size={14} color="var(--mantine-color-violet-6)" />}
                 onClick={() => onOpen(f.path, 'flow', f.name)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  onContextMenu({ path: f.path, kind: 'flow', name: f.name }, e)
+                }}
               />
             ))}
           </Section>
@@ -103,7 +117,7 @@ function Section({ label, children }: { label: string; children: React.ReactNode
 }
 
 function Row({
-  name, detail, tags, active, icon, onClick,
+  name, detail, tags, active, icon, onClick, onContextMenu,
 }: {
   name: string
   detail: string
@@ -111,10 +125,12 @@ function Row({
   active: boolean
   icon: React.ReactNode
   onClick: () => void
+  onContextMenu: (e: React.MouseEvent) => void
 }) {
   return (
     <UnstyledButton
       onClick={onClick}
+      onContextMenu={onContextMenu}
       px="sm"
       py={5}
       className="tap-tree-row"

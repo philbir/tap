@@ -18,6 +18,8 @@ export interface WorkspaceInfo {
   defaultEnv: string | null
   providers: string[]
   errors: WorkspaceErrorDto[]
+  /** The studio build serving this UI — shown in the brand menu. Null on an older server. */
+  version: string | null
 }
 
 export interface KnownWorkspace {

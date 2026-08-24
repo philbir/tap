@@ -26,7 +26,8 @@ public static class WorkspaceEndpoints
                 Errors: ws.Errors.Select(e => new WorkspaceErrorDto(
                     e.Code, e.Message, e.RelativePath, e.Line,
                     e.Severity.ToString().ToLowerInvariant())).ToArray(),
-                Mode: svc.Mode.ToString().ToLowerInvariant());
+                Mode: svc.Mode.ToString().ToLowerInvariant(),
+                Version: StudioVersion.Value);
             return Results.Ok(info);
         });
 
@@ -104,6 +105,9 @@ public static class WorkspaceEndpoints
                 return Results.BadRequest(new { code = "protected", message = "Cannot delete the workspace root." });
 
             Directory.Delete(full, recursive: true);
+            // The client refetches the tree as soon as we return — the watcher's debounced
+            // reload would lose that race and serve a workspace that still lists the folder.
+            svc.ReloadNow();
             return Results.NoContent();
         });
 
@@ -119,6 +123,9 @@ public static class WorkspaceEndpoints
             if (!File.Exists(full))
                 return Results.BadRequest(new { code = "not-found", message = "File does not exist." });
             File.Delete(full);
+            // Same race as above: the sidebar and the editor's Source tab both refetch
+            // immediately after a delete, and would otherwise redraw the deleted file.
+            svc.ReloadNow();
             return Results.NoContent();
         });
 

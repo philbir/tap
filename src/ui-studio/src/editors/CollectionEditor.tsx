@@ -356,7 +356,11 @@ export function CollectionEditor({ path }: Props) {
 
         <Tabs.Panel value="source">
           {detail.exists
-            ? <SourceTab path={collectionFilePath} source={detail.source} />
+            ? <SourceTab
+                path={collectionFilePath}
+                source={detail.source}
+                deletable={{ kind: 'collection', path, name: spec.name || slug, slug }}
+              />
             : <Text size="sm" c="dimmed">Save the collection first to view the source file.</Text>}
         </Tabs.Panel>
       </Tabs>

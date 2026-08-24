@@ -18,7 +18,10 @@ public sealed record WorkspaceInfoDto(
     IReadOnlyList<WorkspaceErrorDto> Errors,
     /// <summary>"normal" or "aspire". Aspire means the workspace is pinned by the host —
     /// the UI locks the switcher and badges the header instead of offering an action that 409s.</summary>
-    string Mode = "normal");
+    string Mode = "normal",
+    /// <summary>The running studio's own version — what the brand menu's "About" line shows.
+    /// Same string the User-Agent carries, so a screenshot and a server log agree.</summary>
+    string? Version = null);
 
 /// <summary>Entry in the workspace switcher dropdown. <c>Name</c> is the manifest's
 /// <c>name:</c> — what the switcher shows — and <c>Label</c> is the folder name, shown

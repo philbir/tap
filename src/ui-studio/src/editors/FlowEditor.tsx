@@ -231,7 +231,11 @@ export function FlowEditor({ path }: Props) {
           </Tabs.Panel>
 
           <Tabs.Panel value="source" pt="md">
-            <SourceTab path={path} source={detail?.source ?? ''} />
+            <SourceTab
+              path={path}
+              source={detail?.source ?? ''}
+              deletable={{ kind: 'flow', path, name: spec.name || basename(path) }}
+            />
           </Tabs.Panel>
         </Tabs>
       </EditorShell>

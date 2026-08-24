@@ -261,7 +261,11 @@ export function TestSetEditor({ path }: Props) {
           </Tabs.Panel>
 
           <Tabs.Panel value="source" pt="md">
-            <SourceTab path={path} source={detail?.source ?? ''} />
+            <SourceTab
+              path={path}
+              source={detail?.source ?? ''}
+              deletable={{ kind: 'test', path, name: spec.name || basename(path) }}
+            />
           </Tabs.Panel>
         </Tabs>
       </EditorShell>

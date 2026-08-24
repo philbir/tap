@@ -1,7 +1,7 @@
-import { ActionIcon, Anchor, Badge, Box, Button, Divider, Group, Modal, Select, Stack, Text, TextInput, Tooltip } from '@mantine/core'
+import { ActionIcon, Anchor, Badge, Box, Button, Divider, Group, Menu, Modal, Select, Stack, Text, TextInput, Tooltip, UnstyledButton } from '@mantine/core'
 import type { ComboboxItem, ComboboxLikeRenderOptionInput } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
-import { IconBrandGit, IconCheck, IconChevronDown, IconDeviceDesktop, IconFolders, IconPencil, IconPlugConnected, IconPlus, IconStack2 } from '@tabler/icons-react'
+import { IconBook, IconBrandGit, IconBrandGithub, IconCheck, IconChevronDown, IconDeviceDesktop, IconExternalLink, IconFolders, IconPencil, IconPlugConnected, IconPlus, IconStack2 } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
 import { MANIFEST_TAB_PATH, useActiveCollection, useEnvSelection, useTapStore } from '../store'
@@ -142,9 +142,7 @@ export function Header({ rightAction }: Props) {
   return (
     <Group h="100%" px="md" gap="md" justify="space-between" wrap="nowrap">
       <Group gap="md" wrap="nowrap">
-        <Group gap={8} className="tap-brand" wrap="nowrap">
-          <img className="tap-brand__icon" src="/tap-studio-icon.svg" alt="Tap Studio" />
-        </Group>
+        <BrandMenu version={info?.version ?? null} />
 
         <Divider orientation="vertical" />
 
@@ -350,6 +348,58 @@ function nameToSlug(name: string): string {
     .replace(/^-+|-+$/g, '')
     .replace(/-+/g, '-')
     .slice(0, 60)
+}
+
+const GITHUB_URL = 'https://github.com/philbir/tap'
+const DOCS_URL = 'https://philbir.github.io/tap/'
+
+/**
+ * The brand mark, doubling as the app menu: which build is running, and the two places to
+ * read about it. It is the one control in the header that talks about Tap itself rather than
+ * about the workspace, so it stays out of the workspace/environment run of controls beside it.
+ *
+ * <p>The version comes from the server (`/api/workspace`), not from the bundle — the UI can be
+ * a `yarn dev` build talking to any studio, and the number worth quoting in a bug report is the
+ * one the process reports for itself. A server too old to send it simply shows no version line
+ * rather than a wrong one.</p>
+ */
+function BrandMenu({ version }: { version: string | null }) {
+  return (
+    <Menu shadow="md" width={230} position="bottom-start" withArrow>
+      <Menu.Target>
+        <UnstyledButton className="tap-brand" aria-label="About Tap Studio">
+          <img className="tap-brand__icon" src="/tap-studio-icon.svg" alt="Tap Studio" />
+        </UnstyledButton>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Box px="sm" py={8}>
+          <Text size="sm" fw={600}>Tap Studio</Text>
+          {version && <Text size="xs" c="dimmed">Version {version}</Text>}
+        </Box>
+        <Menu.Divider />
+        <Menu.Item
+          component="a"
+          href={GITHUB_URL}
+          target="_blank"
+          rel="noreferrer noopener"
+          leftSection={<IconBrandGithub size={15} stroke={1.7} />}
+          rightSection={<IconExternalLink size={12} stroke={1.6} style={{ color: 'var(--mantine-color-dimmed)' }} />}
+        >
+          GitHub
+        </Menu.Item>
+        <Menu.Item
+          component="a"
+          href={DOCS_URL}
+          target="_blank"
+          rel="noreferrer noopener"
+          leftSection={<IconBook size={15} stroke={1.7} />}
+          rightSection={<IconExternalLink size={12} stroke={1.6} style={{ color: 'var(--mantine-color-dimmed)' }} />}
+        >
+          Documentation
+        </Menu.Item>
+      </Menu.Dropdown>
+    </Menu>
+  )
 }
 
 /** Where the download lives. Points at the docs' install section rather than straight at the

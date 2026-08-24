@@ -1,8 +1,9 @@
 import { Alert, Button, Code, Group, Stack, Text } from '@mantine/core'
-import { IconAlertCircle, IconDeviceFloppy, IconRotateClockwise } from '@tabler/icons-react'
+import { IconAlertCircle, IconDeviceFloppy, IconRotateClockwise, IconTrash } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { WorkspaceErrorDto } from '../api/types'
+import { confirmDelete, type DeleteTarget, KIND_LABELS } from '../workspace/deleteWorkspaceItem'
 import { SourceCodeEditor } from './SourceCodeEditor'
 
 interface Props {
@@ -15,6 +16,11 @@ interface Props {
   /** Monaco language id. `.http` files are raw-first — they have no canonical YAML form —
    *  so they reuse this whole editor with their own highlighting. */
   language?: 'yaml' | 'http'
+  /** When set, the tab offers to delete what this source belongs to — usually the file
+   *  itself, but a collection deletes the whole directory its `_collection.tap` describes.
+   *  Left unset where the file is not the user's to remove from here: `workspace.tap` IS
+   *  the workspace, so deleting it from a tab inside that workspace pulls the floor out. */
+  deletable?: DeleteTarget
 }
 
 /**
@@ -34,7 +40,7 @@ interface Props {
  * with a line number we pin a Monaco marker on that line so the squiggle + gutter
  * indicator point straight at the problem.
  */
-export function SourceTab({ path, source, label, language = 'yaml' }: Props) {
+export function SourceTab({ path, source, label, language = 'yaml', deletable }: Props) {
   const [draft, setDraft] = useState(source)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<WorkspaceErrorDto | null>(null)
@@ -70,7 +76,19 @@ export function SourceTab({ path, source, label, language = 'yaml' }: Props) {
   return (
     <Stack gap="xs">
       <Group justify="space-between" align="center">
-        <Code>{fileName}</Code>
+        <Group gap="xs" align="center">
+          <Code>{fileName}</Code>
+          {deletable && (
+            <Button
+              variant="subtle" color="red" size="compact-xs"
+              leftSection={<IconTrash size={12} />}
+              onClick={() => confirmDelete(deletable)}
+              disabled={saving}
+            >
+              Delete {KIND_LABELS[deletable.kind]}
+            </Button>
+          )}
+        </Group>
         <Group gap="xs">
           {dirty && (
             <Button

@@ -265,7 +265,11 @@ export function AuthEditor({ path }: Props) {
         </Tabs.Panel>
 
         <Tabs.Panel value="source">
-          <SourceTab path={path} source={detail.source} />
+          <SourceTab
+            path={path}
+            source={detail.source}
+            deletable={{ kind: 'auth', path, name: spec.name || basename(path) }}
+          />
         </Tabs.Panel>
       </Tabs>
     </EditorShell>

@@ -117,12 +117,16 @@ export function PierreFileTree(props: Props) {
       contextMenu: {
         enabled: true,
         triggerMode: 'both',
-        // 'always' is required for pierre to actually render the ⋯ icon in the row's
-        // action lane — with 'when-needed' it leaves the lane empty and only marks
-        // a `data-…-visibility="when-needed"` attribute for the consumer to style.
-        // We still want hover-only display, so TAP_TREE_UNSAFE_CSS hides the lane
-        // by default and fades it in on row hover.
-        buttonVisibility: 'always',
+        // Leave this at pierre's default 'when-needed'. The ⋯ the user clicks is a single
+        // floating button in pierre's `context-menu-anchor`, which it already positions over
+        // whichever row is hovered or focused — hover-only display comes for free. 'always'
+        // additionally stamps a *decorative* copy of the same glyph into every row's action
+        // lane, and the two are only pixel-coincident while the anchor's inline offset (a
+        // constant, measured off the tree root) happens to agree with the row's right padding
+        // (measured off the scroller, minus its scrollbar gutter). WKWebView reserves that
+        // gutter differently from Chromium, so in the Tauri build the copies separated and the
+        // ⋯ rendered as two overlapping ellipses.
+        buttonVisibility: 'when-needed',
         onOpen: (item, context) => {
           // Close pierre's empty surface synchronously — we never want it visible.
           context.close({ restoreFocus: false })

@@ -2,7 +2,6 @@ import {
   ActionIcon, Alert, Box, Center, Group, MultiSelect, Paper, ScrollArea, SegmentedControl, Stack,
   Text, TextInput, Tooltip, UnstyledButton,
 } from '@mantine/core'
-import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
 import {
   IconAlertCircle, IconBrandGit, IconChecklist, IconCopy, IconEdit, IconFilePlus, IconFolderPlus,
@@ -13,6 +12,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api } from '../api/client'
 import type { HistorySummary, TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
 import { useTapStore } from '../store'
+import { confirmDelete, KIND_LABELS, type WorkspaceItemKind } from '../workspace/deleteWorkspaceItem'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { DuplicateRequestDialog } from './DuplicateRequestDialog'
 import { buildAuthView, buildRequestsView, filterExplorerTree, type ExplorerNode } from './explorerTree'
@@ -51,7 +51,6 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   const errors = useTapStore((s) => s.info?.errors ?? EMPTY_ERRORS)
   const activePath = useTapStore((s) => s.activeTab)
   const reload = useTapStore((s) => s.reload)
-  const closeTab = useTapStore((s) => s.closeTab)
   const openTab = useTapStore((s) => s.openTab)
   const renameTab = useTapStore((s) => s.renameTab)
   const setTabView = useTapStore((s) => s.setTabView)
@@ -178,65 +177,10 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
     { x: number; y: number; row: RowContext; canCreateRequest: boolean } | null
   >(null)
 
-  const confirmDeleteDir = useCallback((dir: DirContext) => {
-    modals.openConfirmModal({
-      title: <Text fw={600}>Delete {dir.kind}</Text>,
-      children: (
-        <Text size="sm">
-          Delete <Text component="span" fw={600}>{dir.name}</Text> and everything inside it?
-          This can't be undone.
-        </Text>
-      ),
-      labels: { confirm: 'Delete', cancel: 'Cancel' },
-      confirmProps: { color: 'red' },
-      onConfirm: async () => {
-        try {
-          if (dir.kind === 'collection' && dir.slug) await api.deleteCollection(dir.slug)
-          else await api.deleteFolder(dir.realPath)
-          await reload()
-          // Close any tabs that referenced files under the removed directory.
-          const prefix = dir.realPath.endsWith('/') ? dir.realPath : dir.realPath + '/'
-          for (const t of useTapStore.getState().tabs) {
-            if (t.path === dir.realPath || t.path.startsWith(prefix)) closeTab(t.path)
-          }
-        } catch (e) {
-          notifications.show({
-            color: 'red',
-            title: 'Delete failed',
-            message: e instanceof Error ? e.message : String(e),
-          })
-        }
-      },
-    })
-  }, [reload, closeTab])
-
-  const confirmDeleteFile = useCallback((file: FileContext) => {
-    modals.openConfirmModal({
-      title: <Text fw={600}>Delete {file.kind}</Text>,
-      children: (
-        <Text size="sm">
-          Delete <Text component="span" fw={600}>{file.name}</Text>? This can't be undone.
-        </Text>
-      ),
-      labels: { confirm: 'Delete', cancel: 'Cancel' },
-      confirmProps: { color: 'red' },
-      onConfirm: async () => {
-        try {
-          await api.deleteFile(file.realPath)
-          await reload()
-          for (const t of useTapStore.getState().tabs) {
-            if (t.path === file.realPath) closeTab(t.path)
-          }
-        } catch (e) {
-          notifications.show({
-            color: 'red',
-            title: 'Delete failed',
-            message: e instanceof Error ? e.message : String(e),
-          })
-        }
-      },
-    })
-  }, [reload, closeTab])
+  const deleteRow = useCallback(
+    (row: RowContext) => confirmDelete({ ...row, path: row.realPath }),
+    [],
+  )
 
   /** Build an `onContextMenuRequest` handler for one tree. Resolves the row's
    *  display path back to either a directory or file context and opens our own
@@ -257,6 +201,24 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
 
   const requestsContextMenu = useMemo(() => makeContextMenuHandler(requestsLookup, true), [makeContextMenuHandler, requestsLookup])
   const authContextMenu = useMemo(() => makeContextMenuHandler(authLookup, false), [makeContextMenuHandler, authLookup])
+
+  /** The Testing tab builds its own rows rather than a pierre tree, so it reports right-clicks
+   *  directly. A test set and a flow are each a single file with nothing nested inside, so the
+   *  menu that opens carries only Delete. */
+  const testingContextMenu = useCallback(
+    (
+      item: { path: string; kind: 'test' | 'flow'; name: string },
+      event: { clientX: number; clientY: number },
+    ) => {
+      setCtxMenu({
+        x: event.clientX,
+        y: event.clientY,
+        row: { row: 'file', kind: item.kind, realPath: item.path, name: item.name },
+        canCreateRequest: false,
+      })
+    },
+    [],
+  )
   const editCollection = useCallback((dir: DirContext) => {
     if (dir.kind !== 'collection') return
     openTab({ path: dir.realPath, kind: 'collection', label: dir.name })
@@ -470,6 +432,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
           search={search}
           activePath={activePath}
           onOpen={(path, kind, name) => openTab({ path, kind, label: name })}
+          onContextMenu={testingContextMenu}
         />
       )}
 
@@ -503,8 +466,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         onClose={() => setCtxMenu(null)}
         onNewRequest={(dir) => { setCtxMenu(null); void newRequest(dir) }}
         onNewFolder={(dir) => { setCtxMenu(null); setNewFolderState({ open: true, parentDir: dir.realPath }) }}
-        onDeleteDir={(dir) => { setCtxMenu(null); confirmDeleteDir(dir) }}
-        onDeleteFile={(file) => { setCtxMenu(null); confirmDeleteFile(file) }}
+        onDelete={(row) => { setCtxMenu(null); deleteRow(row) }}
         onDuplicateFile={(file) => { setCtxMenu(null); setDuplicateState({ open: true, source: { realPath: file.realPath, name: file.name } }) }}
         onEditCollection={(dir) => { setCtxMenu(null); editCollection(dir) }}
         onEditHttpFile={(dir) => { setCtxMenu(null); editHttpFile(dir) }}
@@ -526,15 +488,14 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
  *  otherwise overflow the viewport, so rows near the bottom of the tree still get a
  *  fully visible menu. Item set depends on whether the row is a directory or a file. */
 function FloatingCtxMenu({
-  ctx, onClose, onNewRequest, onNewFolder, onDeleteDir, onDeleteFile, onDuplicateFile, onEditCollection,
+  ctx, onClose, onNewRequest, onNewFolder, onDelete, onDuplicateFile, onEditCollection,
   onEditHttpFile,
 }: {
   ctx: { x: number; y: number; row: RowContext; canCreateRequest: boolean } | null
   onClose: () => void
   onNewRequest: (dir: DirContext) => void
   onNewFolder: (dir: DirContext) => void
-  onDeleteDir: (dir: DirContext) => void
-  onDeleteFile: (file: FileContext) => void
+  onDelete: (row: RowContext) => void
   onDuplicateFile: (file: FileContext) => void
   onEditCollection: (dir: DirContext) => void
   onEditHttpFile: (dir: DirContext) => void
@@ -654,15 +615,10 @@ function FloatingCtxMenu({
           px={10} py={6}
           className="tap-tree-row"
           style={{ fontSize: 13, borderRadius: 4, color: 'var(--mantine-color-red-6)' }}
-          onClick={() => {
-            // A .http row is a dir-shaped row over a single file: deleting it has to go
-            // through deleteFile, or the server is handed a file path and told it's a folder.
-            if (ctx.row.row === 'dir' && !isHttpFile) onDeleteDir(ctx.row)
-            else onDeleteFile({ kind: 'request', realPath: ctx.row.realPath, name: ctx.row.name })
-          }}
+          onClick={() => onDelete(ctx.row)}
         >
           <Group gap={8} wrap="nowrap">
-            <IconTrash size={14} />Delete {isHttpFile ? 'file' : ctx.row.kind}
+            <IconTrash size={14} />Delete {KIND_LABELS[ctx.row.kind]}
           </Group>
         </UnstyledButton>
       </Stack>
@@ -670,8 +626,6 @@ function FloatingCtxMenu({
   )
 }
 
-
-type RowKind = 'collection' | 'folder' | 'httpfile' | 'request' | 'auth' | 'env'
 
 /** A row that renders with children. Usually a real directory — except `httpfile`, which is a
  *  single file that happens to contain several requests, so its actions are file actions. */
@@ -686,7 +640,9 @@ interface DirContext {
 }
 
 interface FileContext {
-  kind: 'request' | 'auth' | 'env'
+  /** `httpfile` renders as a directory but deletes as the single file it is. `test` / `flow`
+   *  come from the Testing tab's own list rather than from a pierre tree. */
+  kind: 'request' | 'auth' | 'env' | 'test' | 'flow' | 'httpfile'
   /** Real workspace path of the file (used for `api.deleteFile`). */
   realPath: string
   /** Display name (basename without the kind suffix). */
@@ -709,7 +665,7 @@ interface TreeLookup {
   /** displayPath → kind for context-menu dispatch. Files use the underlying TreeNode
    *  kind ('request' / 'auth'); directories surface as 'collection' or 'folder' so the
    *  menu can route deletes to the right API. */
-  kindByDisplayPath: Map<string, RowKind>
+  kindByDisplayPath: Map<string, WorkspaceItemKind>
   /** displayPath → directory metadata for collections + folders (real path, name,
    *  optional slug). Used to wire the menu actions to the right API call. */
   dirsByDisplayPath: Map<string, DirContext>
@@ -787,7 +743,7 @@ function newTreeLookup(): TreeLookup {
     realToDisplay: new Map<string, string>(),
     activators: new Map<string, () => void>(),
     iconByBasename: {},
-    kindByDisplayPath: new Map<string, RowKind>(),
+    kindByDisplayPath: new Map<string, WorkspaceItemKind>(),
     dirsByDisplayPath: new Map<string, DirContext>(),
     filesByDisplayPath: new Map<string, FileContext>(),
   }

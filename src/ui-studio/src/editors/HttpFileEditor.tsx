@@ -1,13 +1,15 @@
 import {
-  ActionIcon, Alert, Badge, Group, Loader, Paper, Stack, Text, Tooltip, UnstyledButton,
+  ActionIcon, Alert, Badge, Button, Group, Loader, Paper, Stack, Text, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import {
   IconAlertCircle, IconAlertTriangle, IconExternalLink, IconPlayerPlayFilled, IconPlayerStopFilled,
+  IconTrash,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { HttpRequestSummary, TreeNode, VariableContext, WorkspaceErrorDto } from '../api/types'
 import { useEffectiveEnv, useTapStore } from '../store'
+import { confirmDelete } from '../workspace/deleteWorkspaceItem'
 import { CollectionLinkChip } from './CollectionLinkChip'
 import { EditorShell } from './EditorShell'
 import { ResponsePanel } from './ResponsePanel'
@@ -335,10 +337,23 @@ export function HttpFileEditor({ path }: Props) {
               )}
             </Paper>
 
-            <Text size="xs" c="dimmed">
-              This file is the source of truth and is never reformatted by Tap. Send runs the text
-              as it is on screen, saved or not.
-            </Text>
+            {/* This editor has no Source tab to hang Delete off — the whole pane IS the file's
+                source — so the action sits with the identity line above the code, exactly where
+                `SourceTab` puts it. */}
+            <Group justify="space-between" align="center" wrap="nowrap">
+              <Text size="xs" c="dimmed">
+                This file is the source of truth and is never reformatted by Tap. Send runs the text
+                as it is on screen, saved or not.
+              </Text>
+              <Button
+                variant="subtle" color="red" size="compact-xs"
+                leftSection={<IconTrash size={12} />}
+                onClick={() => confirmDelete({ kind: 'httpfile', path, name: fileName })}
+                style={{ flexShrink: 0 }}
+              >
+                Delete file
+              </Button>
+            </Group>
 
             <SourceCodeEditor
               value={draft}

@@ -2,6 +2,7 @@ using Tap.Execution.Auth;
 using Tap.Workspace;
 using Tap.Workspace.Asserts;
 using Tap.Workspace.Model;
+using Tap.Workspace.Parsing;
 using Tap.Workspace.Rendering;
 
 namespace Tap.Execution.Workspace;
@@ -26,22 +27,28 @@ public sealed class RequestPipeline(IWorkspaceHost host)
     /// <param name="templateOverrides">Overrides whose values are themselves templates,
     /// expanded in order against everything below them. A flow step's <c>vars:</c> arrive
     /// here.</param>
+    /// <param name="declaredOverrides">Which of <paramref name="overrides"/> came out of a
+    /// <c>vars:</c> block — a test set's or a flow's own variables, as opposed to a value a
+    /// step extracted from a response. Only those may hold a reference to another variable.</param>
     public async ValueTask<ResolvedRequest> RenderAsync(
         RequestFile request,
         string? envPath,
         IReadOnlyDictionary<string, string>? overrides,
         CancellationToken ct,
-        string? stageName = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         var env = ResolveEnv(envPath);
         var renderer = new WorkspaceRenderer(host.Workspace, host.CreateRegistry(env));
         var rendered = await renderer
-            .RenderAsync(request, env, overrides, ct, stageName, templateOverrides)
+            .RenderAsync(request, env, overrides, ct, templateOverrides, declaredOverrides)
             .ConfigureAwait(false);
 
         rendered = ResolveBinaryRef(request, rendered);
-        return await InjectAuthTokenAsync(request, rendered, env?.RelativePath, ct).ConfigureAwait(false);
+        // The renderer reports the env that actually applied — a scoped env out of range for this
+        // request's collection drops out there, and the token has to be keyed the same way or the
+        // send would carry a token minted under an env the request never saw.
+        return await InjectAuthTokenAsync(request, rendered, rendered.Metadata.EnvPath, ct).ConfigureAwait(false);
     }
 
     /// <summary>
@@ -52,24 +59,25 @@ public sealed class RequestPipeline(IWorkspaceHost host)
         IReadOnlyList<AssertSpec> assertions,
         string? requestPath,
         string? envPath,
-        string? stageName,
         CancellationToken ct,
         bool tolerant = false,
         IReadOnlyDictionary<string, string>? overrides = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         if (assertions.Count == 0) return [];
 
         // An unsaved request has no file yet, but the *path* is enough to place it in the right
-        // collection and stage — which is what the cascade resolves from.
+        // collection — which is what the cascade resolves from.
         var request = requestPath is not null && host.Workspace.FindByPath(requestPath) is RequestFile found
             ? found
-            : new RequestFile { Kind = WorkspaceKind.Request, RelativePath = requestPath ?? "unsaved.req.md" };
+            : new RequestFile { Kind = WorkspaceKind.Request, RelativePath = requestPath ?? "unsaved" + KindResolver.SuffixFor(WorkspaceKind.Request) };
 
         var env = ResolveEnv(envPath);
         var renderer = new WorkspaceRenderer(host.Workspace, host.CreateRegistry(env));
         return await renderer
-            .RenderAssertionsAsync(request, env, assertions, ct, stageName, tolerant, overrides, templateOverrides)
+            .RenderAssertionsAsync(
+                request, env, assertions, ct, tolerant, overrides, templateOverrides, declaredOverrides)
             .ConfigureAwait(false);
     }
 
@@ -135,13 +143,13 @@ public sealed class RequestPipeline(IWorkspaceHost host)
     private async ValueTask<ResolvedRequest> InjectAuthTokenAsync(
         RequestFile request, ResolvedRequest rendered, string? envPath, CancellationToken ct)
     {
-        var auth = ResolveAuth(host.Workspace, request, rendered.Metadata.StageName);
+        var auth = ResolveAuth(host.Workspace, request, envPath);
         if (auth is null || !NeedsRuntimeToken(auth)) return rendered;
 
-        // A profile has one token per stage and env — read the one minted for the stage and env
-        // this render resolved to, not whichever entry happens to exist.
+        // A profile has one token per env — read the one minted for the env this render resolved
+        // to, not whichever entry happens to exist.
         var scope = AuthScopeResolver
-            .ContextFor(host.Workspace, auth.RelativePath, request.RelativePath, rendered.Metadata.StageName, envPath)
+            .ContextFor(host.Workspace, auth.RelativePath, envPath)
             .ScopeFor(auth.RelativePath);
 
         var token = await host.Tokens.GetAsync(auth, scope, ct).ConfigureAwait(false);
@@ -172,21 +180,28 @@ public sealed class RequestPipeline(IWorkspaceHost host)
     }
 
     /// <summary>
-    /// Mirrors the renderer's auth resolution order — request &lt; stage &lt; collection — so
-    /// the token injector targets the same profile the renderer's static pass saw.
+    /// Mirrors the renderer's auth resolution order — request &lt; env &lt; collection — so the
+    /// token injector targets the same profile the renderer's static pass saw.
     /// </summary>
-    public static AuthFile? ResolveAuth(LoadedWorkspace workspace, RequestFile request, string? stageName)
+    /// <param name="envPath">The environment in effect. Its <c>defaultAuth</c> only counts when
+    /// the env is in scope for the request's collection, exactly as in the renderer.</param>
+    public static AuthFile? ResolveAuth(LoadedWorkspace workspace, RequestFile request, string? envPath)
     {
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
         if (workspace.Resolve(request.Auth, requestDir) is AuthFile direct) return direct;
 
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         if (collection is null) return null;
 
+        var slug = CollectionLocator.SlugForFile(collection.RelativePath);
+        if (envPath is not null && workspace.FindByPath(envPath) is EnvFile env
+            && env.BindingFor(slug)?.DefaultAuth is { } envRef
+            && workspace.Resolve(envRef, Path.GetDirectoryName(env.RelativePath) ?? string.Empty) is AuthFile envAuth)
+        {
+            return envAuth;
+        }
+
         var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-        var stage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
-        if (stage?.DefaultAuth is { } stageRef && workspace.Resolve(stageRef, collectionDir) is AuthFile stageAuth)
-            return stageAuth;
         if (collection.DefaultAuth is { } collectionRef && workspace.Resolve(collectionRef, collectionDir) is AuthFile collectionAuth)
             return collectionAuth;
         return null;

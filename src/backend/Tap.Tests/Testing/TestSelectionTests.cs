@@ -34,7 +34,7 @@ public class TestSelectionTests
     {
         Name = name,
         // Points at nothing on purpose — selection happens before resolution.
-        Request = WorkspaceRef.FromPath("./missing.req.md"),
+        Request = WorkspaceRef.FromPath("./missing.req.tap"),
     };
 
     private static LoadedWorkspace WorkspaceWith(params string[] testNames)
@@ -42,7 +42,7 @@ public class TestSelectionTests
         var set = new TestSetFile
         {
             Kind = WorkspaceKind.Test,
-            RelativePath = "tests/orders.test.md",
+            RelativePath = "tests/orders.test.tap",
             Name = "Order API",
             Tests = [.. testNames.Select(Entry)],
         };
@@ -70,8 +70,8 @@ public class TestSelectionTests
         }
     }
 
-    private static RunTestRequestDto Request(int? only = null, string? filter = null, string path = "tests/orders.test.md")
-        => new(path, Env: null, Stage: null, Only: only, Overrides: null, FailFast: false, Filter: filter);
+    private static RunTestRequestDto Request(int? only = null, string? filter = null, string path = "tests/orders.test.tap")
+        => new(path, Env: null, Only: only, Overrides: null, FailFast: false, Filter: filter);
 
     [Fact]
     public async Task Every_test_runs_when_nothing_narrows_it()
@@ -151,13 +151,13 @@ public class TestSelectionTests
         var flow = new FlowFile
         {
             Kind = WorkspaceKind.Flow,
-            RelativePath = "tests/checkout.flow.md",
+            RelativePath = "tests/checkout.flow.tap",
             Name = "Checkout",
-            Steps = [new FlowStep { Request = WorkspaceRef.FromPath("./missing.req.md") }],
+            Steps = [new FlowStep { Request = WorkspaceRef.FromPath("./missing.req.tap") }],
         };
         var workspace = new LoadedWorkspace("/ws", "/ws", [flow], []);
 
-        var (_, failure) = await PlanAsync(workspace, Request(filter: "anything", path: "tests/checkout.flow.md"));
+        var (_, failure) = await PlanAsync(workspace, Request(filter: "anything", path: "tests/checkout.flow.tap"));
         Assert.IsType<ArgumentException>(failure);
         Assert.Contains("run as one sequence", failure!.Message, StringComparison.Ordinal);
     }

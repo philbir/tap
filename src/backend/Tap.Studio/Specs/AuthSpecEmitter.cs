@@ -14,7 +14,7 @@ public static class AuthSpecEmitter
     {
         var fm = new YamlMappingNode();
         fm.Set("kind", "auth");
-        fm.SetIfNotEmpty("id", spec.Id);
+        fm.Set("id", SpecIds.Ensure(spec.Id));
         fm.Set("name", spec.Name);
         fm.Set("type", spec.Type);
 

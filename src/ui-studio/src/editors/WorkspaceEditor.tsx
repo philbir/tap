@@ -1,23 +1,28 @@
 import {
-  ActionIcon, Anchor, Badge, Box, Button, Code, Collapse, Group, Select, Stack, Tabs, Text, TextInput, Tooltip,
-  UnstyledButton,
+  ActionIcon, Anchor, Badge, Box, Button, Code, Collapse, Divider, Group, NumberInput, Select, SimpleGrid, Stack,
+  Tabs, Text, TextInput, Tooltip, UnstyledButton,
 } from '@mantine/core'
 import {
   IconBrandGit, IconChevronDown, IconChevronRight, IconCode, IconFolder, IconLayoutDashboard, IconPlug, IconX,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { KnownWorkspace, ProviderConfig, ProviderTypeDescriptor, WorkspaceDetail, WorkspaceSpec } from '../api/types'
+import type {
+  KnownWorkspace, ProviderConfig, ProviderTypeDescriptor, ResponseLimits, WorkspaceDetail, WorkspaceSpec,
+} from '../api/types'
 import { modeForProviderType } from '../api/types'
-import { useTapStore } from '../store'
+import { MANIFEST_TAB_PATH, useTapStore } from '../store'
 import { EditorShell, TabCount } from './EditorShell'
+import { HistorySettings } from './HistorySettings'
 import { SourceTab } from './SourceTab'
+import { restoreDraft, usePublishDraft } from './useDraft'
+import { useTabView } from './useTabView'
 import {
   BrowseProviderControl, ProviderSettingsFields, ProviderTypeIcon, ProviderTypeSelect,
   TestProviderControl, descriptorFor, useProviderTypes,
 } from './providerMeta'
 
-/** Workspace manifest editor — `tap.md`. Typed state; server emits canonical YAML. */
+/** Workspace manifest editor — `workspace.tap`. Typed state; server emits canonical YAML. */
 export function WorkspaceEditor() {
   const generation = useTapStore((s) => s.generation)
   const envs = useTapStore((s) => s.envs)
@@ -27,7 +32,7 @@ export function WorkspaceEditor() {
   const [detail, setDetail] = useState<WorkspaceDetail | null>(null)
   const [spec, setSpec] = useState<WorkspaceSpec | null>(null)
   const [savedSpec, setSavedSpec] = useState<WorkspaceSpec | null>(null)
-  const [tab, setTab] = useState<string | null>('general')
+  const [tab, setTab] = useTabView<string | null>(MANIFEST_TAB_PATH, 'tab', 'general')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
   const { types: providerTypes } = useProviderTypes()
@@ -43,13 +48,17 @@ export function WorkspaceEditor() {
       if (cancelled) return
       setDetail(d)
       const initial = specFromDetail(d)
-      setSpec(initial); setSavedSpec(initial)
-      setExpandedRows(initialExpandedRows(initial))
+      // Keeps unsaved edits across a tab switch and across the re-fetch a `generation`
+      // bump forces; `savedSpec` stays whatever is actually on disk.
+      const restored = restoreDraft(MANIFEST_TAB_PATH, initial)
+      setSpec(restored); setSavedSpec(initial)
+      setExpandedRows(initialExpandedRows(restored))
     }).catch((e: Error) => !cancelled && setError(e.message))
     return () => { cancelled = true }
   }, [generation])
 
   const dirty = useMemo(() => JSON.stringify(spec) !== JSON.stringify(savedSpec), [spec, savedSpec])
+  usePublishDraft(MANIFEST_TAB_PATH, spec, dirty)
 
   function update<K extends keyof WorkspaceSpec>(key: K, value: WorkspaceSpec[K]) {
     setSpec((cur) => cur ? { ...cur, [key]: value } : cur)
@@ -86,7 +95,7 @@ export function WorkspaceEditor() {
   async function save() {
     if (!spec) return
     // A provider row without a name would be silently skipped by the parser on the next
-    // load — block the save instead of letting the row vanish from tap.md.
+    // load — block the save instead of letting the row vanish from workspace.tap.
     if ((spec.variableProviders ?? []).some((p) => p.origin !== 'system' && !p.name.trim())) {
       setError('Every variable provider needs a name — fill in the empty Name field before saving.')
       return
@@ -109,7 +118,7 @@ export function WorkspaceEditor() {
 
   const providers = spec.variableProviders ?? []
   // Filter out system-origin providers from the workspace editor — they're managed in
-  // app config, not tap.md. Workspace-origin providers stay editable.
+  // app config, not workspace.tap. Workspace-origin providers stay editable.
   const workspaceProviders = providers.filter(p => p.origin !== 'system')
   const isWritable = (p: ProviderConfig) =>
     (descriptorFor(providerTypes, p.type)?.mode ?? modeForProviderType(p.type)) === 'readwrite'
@@ -160,6 +169,28 @@ export function WorkspaceEditor() {
               value={spec.defaultVariableProvider ?? ''}
               onChange={(v) => update('defaultVariableProvider', v && v !== '' ? v : null)}
               allowDeselect={false}
+            />
+            <Divider label="Response limits" labelPosition="left" />
+            <Text size="xs" c="dimmed" mt={-8}>
+              A big response is shown up to the first limit and kept up to the second, so the
+              body pane stays responsive while <Code fz="xs">Show all</Code> and Download can
+              still reach the rest. Leave both empty for the defaults.
+            </Text>
+            <ResponseLimitFields
+              value={spec.response}
+              onChange={(next) => update('response', next)}
+            />
+
+            <Divider label="History" labelPosition="left" />
+            <Text size="xs" c="dimmed" mt={-8}>
+              Recording writes each exchange to <Code fz="xs">.tap-history/</Code> — off unless
+              you turn it on. These are the workspace-wide defaults; a collection or a single
+              request overrides them one key at a time.
+            </Text>
+            <HistorySettings
+              value={spec.history}
+              onChange={(next) => update('history', next)}
+              showOrphanRetention
             />
           </Stack>
         </Tabs.Panel>
@@ -212,7 +243,7 @@ export function WorkspaceEditor() {
         </Tabs.Panel>
 
         <Tabs.Panel value="source">
-          <SourceTab path="tap.md" source={detail.source} label="tap.md" />
+          <SourceTab path="workspace.tap" source={detail.source} label="workspace.tap" />
         </Tabs.Panel>
       </Tabs>
     </EditorShell>
@@ -438,7 +469,12 @@ function ProviderRow({
             type={provider.type}
             settings={provider.settings}
           />
-          {provider.name && <BrowseProviderControl providerName={provider.name} />}
+          {provider.name && (
+            <BrowseProviderControl
+              providerName={provider.name}
+              writable={descriptor?.mode === 'readwrite'}
+            />
+          )}
           {!readOnly && (
             <ActionIcon variant="subtle" color="red" size="sm" onClick={onRemove} title="Remove variable provider" aria-label="Remove variable provider">
               <IconX size={14} />
@@ -502,5 +538,60 @@ function specFromDetail(d: WorkspaceDetail): WorkspaceSpec {
     vars: Object.keys(vars).length > 0 ? vars : undefined,
     tags: d.tags && d.tags.length > 0 ? d.tags : undefined,
     body: d.body && d.body.trim().length > 0 ? d.body : undefined,
+    response: d.response ?? undefined,
+    history: d.history ?? undefined,
   }
+}
+
+/** Defaults the server applies when `workspace.tap` says nothing — shown as the placeholder
+ *  so the fields read as "this is what you get" rather than as empty boxes. Mirrors
+ *  `ResponseLimits` in Tap.Workspace; keep the two in step. */
+const DEFAULT_MAX_MB = 2
+const DEFAULT_MAX_RETAINED_MB = 64
+const BYTES_PER_MB = 1024 * 1024
+
+/**
+ * The two response caps, in MB because that is the unit anyone reasons about them in.
+ * Clearing a field drops it from the manifest rather than writing a zero — an unset cap is
+ * "use Tap's default", which is a different statement from "keep nothing".
+ */
+function ResponseLimitFields({ value, onChange }: {
+  value: ResponseLimits | undefined
+  onChange: (next: ResponseLimits | undefined) => void
+}) {
+  function set(key: keyof ResponseLimits, mb: number | null) {
+    const next: ResponseLimits = { ...value, [key]: mb == null ? null : Math.round(mb * BYTES_PER_MB) }
+    // Both cleared means the block is gone from the file entirely.
+    onChange(next.maxBytes == null && next.maxRetainedBytes == null ? undefined : next)
+  }
+
+  const toMb = (bytes: number | null | undefined) =>
+    bytes == null ? '' : Math.round((bytes / BYTES_PER_MB) * 100) / 100
+
+  return (
+    <SimpleGrid cols={{ base: 1, sm: 2 }} spacing="md">
+      <NumberInput
+        label="Response shown"
+        description="How much of a response body reaches the panel and the assertions."
+        suffix=" MB"
+        min={0}
+        step={1}
+        decimalScale={2}
+        placeholder={`${DEFAULT_MAX_MB} (default)`}
+        value={toMb(value?.maxBytes)}
+        onChange={(v) => set('maxBytes', v === '' || v == null ? null : Number(v))}
+      />
+      <NumberInput
+        label="Response kept"
+        description="Held back for Show all and the full download. Never sent unless asked for."
+        suffix=" MB"
+        min={0}
+        step={8}
+        decimalScale={2}
+        placeholder={`${DEFAULT_MAX_RETAINED_MB} (default)`}
+        value={toMb(value?.maxRetainedBytes)}
+        onChange={(v) => set('maxRetainedBytes', v === '' || v == null ? null : Number(v))}
+      />
+    </SimpleGrid>
+  )
 }

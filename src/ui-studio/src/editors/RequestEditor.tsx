@@ -1,20 +1,20 @@
 import {
-  Badge, ActionIcon, Box, Button, Code, Group, Loader, Menu, Modal, NumberInput, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip, UnstyledButton,
+  Alert, Badge, ActionIcon, Box, Button, Code, Group, Loader, Modal, NumberInput, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconBolt, IconBraces, IconCheck, IconChevronDown, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileText, IconFlag, IconFolders, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
+  IconAlertTriangle, IconBolt, IconBraces, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileCode, IconFileText, IconFlag, IconHistory, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError, type AssertResponseSnapshot } from '../api/client'
 import type {
-  AssertResult, AssertSummary, CollectionDetail, CollectionSummary, ExecutionResult, HttpHeaderSpec, RenderedRequest, RequestDetail, RequestProtocol, RequestSpec, SseEvent, TlsDiagnosis, VariableContext, WsFrame,
+  AssertResult, AssertSummary, ExecutionResult, HistoryEntry, HttpHeaderSpec, RequestDetail,
+  RequestSpec, TlsDiagnosis, VariableContext,
 } from '../api/types'
-import { useActiveEnv, useTapStore } from '../store'
+import { useEffectiveEnv, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
-import { useVariableView, variableMap } from '../workspace/useVariables'
 import {
   BODY_MODE_LABELS, contentTypeForBodyMode, detectBodyMode, detectRawSubType, looksLikeGraphql,
   parseFormBody, parseGraphQLBody, parseMultipartBody, serializeFormBody, serializeGraphQLBody,
@@ -22,9 +22,12 @@ import {
   RAW_SUB_LABELS, type BodyMode, type RawSubType,
 } from './body-mode'
 import { AdaptiveTabsList } from './AdaptiveTabsList'
+import { CollectionLinkChip } from './CollectionLinkChip'
 import { authSelectGroups, relativizeFrom } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
+import { HistoryPanel } from './HistoryPanel'
+import { HistorySettings } from './HistorySettings'
 import { GraphQLEditor } from './GraphQLEditor'
 import { AssertsPanel } from './AssertsPanel'
 import { KvTable, type KvRow } from './KvTable'
@@ -33,10 +36,14 @@ import { RawBodyEditor } from './RawBodyEditor'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { ResponsePanel } from './ResponsePanel'
 import { SourceTab } from './SourceTab'
+import { restoreDraft, usePublishDraft } from './useDraft'
+import { useTabView } from './useTabView'
+import { moveExecution, useExecution } from './useExecution'
 import { joinUrl, splitUrl } from './url-utils'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
 import { AssistantPane } from '../features/assistant/AssistantPane'
+import { fileNameFor, isHttpBackedRequest, splitHttpFragment, stripTapSuffix } from '../shell/tapFiles'
 
 interface Props { path: string }
 
@@ -50,24 +57,23 @@ export function RequestEditor({ path }: Props) {
   const auths = useTapStore((s) => s.auths)
   const openTab = useTapStore((s) => s.openTab)
   const renameTab = useTapStore((s) => s.renameTab)
+  const clearDraft = useTapStore((s) => s.clearDraft)
   const reload = useTapStore((s) => s.reload)
-  const activeEnv = useActiveEnv()
   const tagSuggestions = useTagDictionary()
 
   const [detail, setDetail] = useState<RequestDetail | null>(null)
   const [spec, setSpec] = useState<RequestSpec | null>(null)
   const [savedSpec, setSavedSpec] = useState<RequestSpec | null>(null)
-  const [tab, setTab] = useState<string | null>('params')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'params')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
-  const [rendered, setRendered] = useState<RenderedRequest | null>(null)
-  const [execution, setExecution] = useState<ExecutionResult | null>(null)
-  const [actionError, setActionError] = useState<string | null>(null)
-  const [busy, setBusy] = useState<'send' | null>(null)
-  // Set when the user aborts an in-flight Send — keeps the partial result on screen but
-  // tags it so the panel can show a "cancelled" marker instead of pretending it finished.
-  const [stopped, setStopped] = useState(false)
-  const [stage, setStage] = useState<string | null>(null)
+  // Sending, and everything the response pane renders. Shared with the .http editor, which
+  // sends the same way from its own request list. Keyed by tab path, so the response — and a
+  // stream still arriving — outlives a trip to another tab.
+  const {
+    rendered, execution, error: actionError, sending, stopped,
+    send: startSend, stop, clear: clearExecution, setError: setActionError,
+  } = useExecution(path)
   const [diagnosis, setDiagnosis] = useState<TlsDiagnosis | null>(null)
   const [diagnosing, setDiagnosing] = useState(false)
   const [varsOpened, varsCtl] = useDisclosure(false)
@@ -78,25 +84,46 @@ export function RequestEditor({ path }: Props) {
   // The assertions the last Send actually evaluated — re-checking those would just
   // recompute what the server already told us.
   const sentAssertionsRef = useRef<string>('')
-  // Holds the in-flight stream controller so we can abort on Send-again / close.
-  const streamCtrlRef = useRef<AbortController | null>(null)
-  // Wall-clock start of the current Send — lets stop() fill in an approximate duration
-  // since the server's `done` event (which carries the real timing) never arrives on abort.
-  const sendStartRef = useRef(0)
+  // A recorded exchange the user opened from the History tab. Kept apart from the live
+  // execution so picking one doesn't overwrite the response you just got — and so closing it
+  // puts the live one straight back.
+  const [replay, setReplay] = useState<HistoryEntry | null>(null)
+  const [historyCount, setHistoryCount] = useState(0)
+  // Which entry is open, as tab state rather than local state. Two things need that: the
+  // sidebar timeline, which selects an entry in a tab whose editor isn't mounted yet, and a
+  // tab switch, which unmounts this editor and would otherwise drop the selection.
+  const [openEntryId, setOpenEntryId] = useTabView<string | null>(path, 'historyEntry', null)
+  // The id we last asked the server for. Guards the fetch effect against re-running for an
+  // entry that is already open — or that failed to open, which is not worth retrying on
+  // every `generation` bump.
+  const requestedEntryRef = useRef<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
-    setError(null); setRendered(null); setExecution(null); setActionError(null); setStopped(false)
+    setError(null)
     api.request(path).then((d) => {
       if (cancelled) return
       setDetail(d)
       const initial = specFromDetail(d, path)
-      setSpec(initial); setSavedSpec(initial)
+      // `restoreDraft` keeps unsaved edits across a tab switch and across the re-fetch a
+      // `generation` bump forces; `savedSpec` is always what is actually on disk.
+      setSpec(restoreDraft(path, initial)); setSavedSpec(initial)
     }).catch((e: Error) => !cancelled && setError(e.message))
     return () => { cancelled = true }
   }, [path, generation])
 
   const dirty = useMemo(() => JSON.stringify(spec) !== JSON.stringify(savedSpec), [spec, savedSpec])
+  usePublishDraft(path, spec, dirty)
+
+  /**
+   * This request lives inside a `.http` file, which has no spec form on disk: the raw text is
+   * the document and Tap never rewrites it. So this editor can *show* the request — reading it
+   * is exactly what the parser is for — but it cannot write one back, and a draft spec has
+   * nowhere to be emitted to. Saving and draft-sending are therefore turned off here and the
+   * header points at the `.http` editor, which does both on the raw text.
+   */
+  const httpBacked = useMemo(() => isHttpBackedRequest(path), [path])
+  const httpFilePath = useMemo(() => splitHttpFragment(path).path, [path])
 
   function update<K extends keyof RequestSpec>(key: K, value: RequestSpec[K]) {
     setSpec((cur) => cur ? { ...cur, [key]: value } : cur)
@@ -105,40 +132,56 @@ export function RequestEditor({ path }: Props) {
   async function save() {
     if (!spec) return
     setSaving(true); setError(null)
+    let saved: { id: string }
     try {
-      await api.saveRequestSpec(spec)
+      saved = await api.saveRequestSpec(spec)
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
       setSaving(false)
       return
     }
 
-    // The spec is on disk from here on. Renaming the file that holds it is a separate,
-    // best-effort step — a collision on the target name must not leave the editor looking
-    // unsaved, so it reports through a notification instead of the save error bar.
-    const label = spec.name || basename(spec.path)
+    // A request created without an id gets one from the server. Adopting it here rather than
+    // waiting for the watcher-driven refetch is what lets a just-created request be sent
+    // straight away and still land in history — the send carries the draft spec, and a draft
+    // with no id has nothing durable to file the exchange under.
+    const stored: RequestSpec = spec.id === saved.id ? spec : { ...spec, id: saved.id }
+    if (stored !== spec) setSpec(stored)
+
+    // The spec is on disk from here on, so the draft has done its job. Dropping it here
+    // rather than leaving it to the publish effect matters for the rename branch below:
+    // that one re-keys the tab and unmounts this editor, so the effect never gets to run
+    // and a stale draft would come back as a phantom dirty marker on the renamed tab.
+    clearDraft(path)
+
+    // Renaming the file that holds it is a separate, best-effort step — a collision on the
+    // target name must not leave the editor looking unsaved, so it reports through a
+    // notification instead of the save error bar.
+    const label = stored.name || basename(stored.path)
     try {
       // When the request was renamed, keep the on-disk filename in step with the new
       // name (the explorer shows the spec name, so a stale filename would only surface
       // in git / the filesystem view). Falls back to a no-op when the slug is unchanged
       // or empty.
-      const renamedPath = await syncFilenameToName(spec, savedSpec)
-      if (renamedPath && renamedPath !== spec.path) {
-        const moved = { ...spec, path: renamedPath }
+      const renamedPath = await syncFilenameToName(stored, savedSpec)
+      if (renamedPath && renamedPath !== stored.path) {
+        const moved = { ...stored, path: renamedPath }
         // Rename before the reload: the tab (and the editor keyed off it) has to follow the
         // file to its new path in the same commit the explorer learns about the move, or the
-        // editor refetches a path that no longer exists.
-        renameTab(spec.path, renamedPath, label)
+        // editor refetches a path that no longer exists. The response moves first — dropping
+        // the old tab is what prunes its entry.
+        moveExecution(stored.path, renamedPath)
+        renameTab(stored.path, renamedPath, label)
         setSpec(moved); setSavedSpec(moved)
         await reload()
       } else {
         // Same file, possibly a new name — the tab still carries the old label.
-        renameTab(spec.path, spec.path, label)
-        setSavedSpec(spec)
+        renameTab(stored.path, stored.path, label)
+        setSavedSpec(stored)
       }
     } catch (e) {
-      renameTab(spec.path, spec.path, label)
-      setSavedSpec(spec)
+      renameTab(stored.path, stored.path, label)
+      setSavedSpec(stored)
       notifications.show({
         color: 'yellow',
         title: 'Saved, but the file kept its name',
@@ -147,7 +190,7 @@ export function RequestEditor({ path }: Props) {
     } finally { setSaving(false) }
   }
 
-  /** If the request's name changed this session, rename the underlying `*.req.md` file to
+  /** If the request's name changed this session, rename the underlying `*.req.tap` file to
    *  a slug derived from the new name (kept in the same folder). Returns the new path, or
    *  null when no rename is needed (slug unchanged / empty). */
   async function syncFilenameToName(next: RequestSpec, prev: RequestSpec | null): Promise<string | null> {
@@ -155,9 +198,9 @@ export function RequestEditor({ path }: Props) {
     const slug = nameToSlug(next.name)
     if (!slug) return null
     const dir = next.path.includes('/') ? next.path.slice(0, next.path.lastIndexOf('/')) : ''
-    const currentBase = basename(next.path).replace(/\.req\.md$/i, '')
+    const currentBase = stripTapSuffix(basename(next.path))
     if (slug === currentBase) return null
-    const targetPath = dir ? `${dir}/${slug}.req.md` : `${slug}.req.md`
+    const targetPath = dir ? `${dir}/${fileNameFor('req', slug)}` : fileNameFor('req', slug)
     await api.moveItem(next.path, targetPath)
     return targetPath
   }
@@ -171,14 +214,18 @@ export function RequestEditor({ path }: Props) {
     return collections.find((c) => c.slug === slug) ?? null
   }, [collections, path])
 
-  useEffect(() => { setStage(null) }, [linkedCollection?.slug])
-  const effectiveStage = stage ?? linkedCollection?.defaultStage ?? null
+  // The environment this request resolves under: the collection's own choice when it has
+  // one, else the workspace default. Unlike the stage override it replaced, this is a
+  // property of the collection rather than of the tab — every request under `demo` follows
+  // the same pick, and it survives a reload.
+  const slug = linkedCollection?.slug ?? null
+  const env = useEffectiveEnv(slug)
+  const setCollectionEnv = useTapStore((s) => s.setCollectionEnv)
 
   const variableContext = useMemo<VariableContext>(() => ({
     requestPath: path,
-    envPath: activeEnv ?? undefined,
-    stage: effectiveStage ?? undefined,
-  }), [path, activeEnv, effectiveStage])
+    envPath: env ?? undefined,
+  }), [path, env])
 
   const assertions = useMemo(() => spec?.assertions ?? [], [spec?.assertions])
   const assertionsKey = useMemo(() => JSON.stringify(assertions), [assertions])
@@ -188,15 +235,13 @@ export function RequestEditor({ path }: Props) {
   // Send uses — so the pass/fail you tune against is the one a real run will produce.
   // Skipped when the assertions still match what the last Send already evaluated.
   useEffect(() => {
-    if (tab !== 'asserts' || busy || !execution) return
+    if (tab !== 'asserts' || sending || !execution) return
     if (assertionsKey === sentAssertionsRef.current) { setLiveAsserts(null); return }
     if (assertions.length === 0) { setLiveAsserts(null); return }
 
     let cancelled = false
     const timer = setTimeout(() => {
-      api.evaluateAssertions(assertions, assertSnapshot(execution), {
-        path, env: activeEnv, stage: effectiveStage,
-      })
+      api.evaluateAssertions(assertions, assertSnapshot(execution), { path, env })
         .then((r) => { if (!cancelled) setLiveAsserts({ results: r.results, summary: r.summary }) })
         // A failed re-check is not worth an error bar — the next keystroke retries, and the
         // authoritative verdict still arrives on the next Send.
@@ -204,119 +249,96 @@ export function RequestEditor({ path }: Props) {
     }, 300)
 
     return () => { cancelled = true; clearTimeout(timer) }
-  }, [tab, busy, execution, assertions, assertionsKey, path, activeEnv, effectiveStage])
+  }, [tab, sending, execution, assertions, assertionsKey, path, env])
 
   // Verdicts to paint on the editor rows: the live re-check when it applies, otherwise
   // whatever the last Send returned.
   const assertResults = liveAsserts?.results ?? execution?.assertions ?? null
   const assertSummary = liveAsserts?.summary ?? execution?.assertSummary ?? null
 
-  function abortStream() {
-    streamCtrlRef.current?.abort()
-    streamCtrlRef.current = null
+  /**
+   * Loads whichever entry `openEntryId` names into the response panel. Fetched on demand — the
+   * History list holds summaries, and the bodies stay on disk until someone actually wants one.
+   *
+   * <p>Driven by an effect rather than by the click handler so both routes in behave the same:
+   * picking a row in the History tab, and arriving from the sidebar timeline with the entry
+   * already chosen for a tab this editor was not yet mounted for.</p>
+   *
+   * <p>A locked entry (encrypted, no key on this machine) fails with 423 rather than 404, which
+   * is a different thing to tell the user: the entry is there, it just can't be opened here.</p>
+   */
+  useEffect(() => {
+    const requestId = detail?.id
+    if (!openEntryId || !requestId) return
+    if (requestedEntryRef.current === openEntryId) return
+    requestedEntryRef.current = openEntryId
+
+    let cancelled = false
+    setActionError(null)
+    api.historyEntry(requestId, openEntryId)
+      .then((entry) => { if (!cancelled) setReplay(entry) })
+      .catch((e) => {
+        if (cancelled) return
+        setReplay(null)
+        setActionError(e instanceof ApiError && e.status === 423
+          ? 'This entry is encrypted and this machine has no key that opens it.'
+          : e instanceof Error ? e.message : String(e))
+      })
+    return () => { cancelled = true }
+  }, [openEntryId, detail?.id, setActionError])
+
+  /** Puts the live response back. Clears the selection too — leaving it set would have the
+   *  effect above re-open the entry the moment this tab is revisited. */
+  function closeHistoryEntry() {
+    requestedEntryRef.current = null
+    setReplay(null)
+    setOpenEntryId(null)
   }
 
-  // User-initiated cancel of an in-flight Send. Unlike Close, this keeps the partial
-  // response visible — we just abort the stream, stamp an approximate duration, and flip
-  // the panel out of its "streaming…" state into a "cancelled" one.
-  function stop() {
-    if (busy !== 'send') return
-    abortStream()
-    const elapsed = sendStartRef.current ? Math.max(0, Date.now() - sendStartRef.current) : 0
-    setExecution((cur) => (cur ? { ...cur, durationMs: cur.durationMs || elapsed } : cur))
-    setStopped(true)
-    setBusy(null)
-  }
+  /** A recorded entry rendered in the shapes the response panel already speaks. Assembled here
+   *  rather than stored that way so the on-disk format stays its own thing. */
+  const replayed = useMemo(() => {
+    if (!replay) return null
+    const result: ExecutionResult = {
+      status: replay.response?.status ?? 0,
+      statusText: replay.response?.statusText ?? null,
+      url: replay.request.url,
+      method: replay.request.method,
+      requestHeaders: replay.request.headers,
+      requestBody: replay.request.body,
+      responseHeaders: replay.response?.headers ?? {},
+      responseBody: replay.response?.body ?? null,
+      contentType: replay.response?.contentType ?? null,
+      responseBodyBytes: replay.response?.bodyBytes ?? 0,
+      // What was stored is all there is — there is no retained copy to expand into, so the
+      // inline count is the body's own length and "Show all" correctly offers nothing.
+      responseBodyInlineBytes: replay.response?.body?.length ?? 0,
+      durationMs: replay.durationMs,
+      variablesUsed: replay.variablesUsed.map((v) => ({
+        variableProvider: v.provider, name: v.name, resolved: true, isSecret: v.secret, durationMs: 0,
+      })),
+      env: replay.env,
+      error: replay.error,
+      protocol: replay.request.protocol === 'websocket' ? 'websocket' : 'http',
+      assertions: replay.assertions,
+      assertSummary: replay.assertSummary,
+    }
+    return result
+  }, [replay])
 
-  // Cancel any in-flight stream on unmount or when the request file changes.
-  useEffect(() => () => abortStream(), [path])
-
-  async function send() {
-    abortStream()
+  function send() {
+    // Record what this Send evaluates, so the Asserts tab's live re-check knows not to
+    // recompute a verdict the server just handed us.
     sentAssertionsRef.current = JSON.stringify(spec?.assertions ?? [])
     setLiveAsserts(null)
-    sendStartRef.current = Date.now()
-    setBusy('send'); setActionError(null); setExecution(null); setStopped(false)
-
-    // Build up the ExecutionResult progressively as `meta`, `body`/`sse`/`ws`, and `done`
-    // events flow in. We hand the UI the latest snapshot on every event so SSE/WS frames
-    // appear in the panel as the upstream emits them.
-    const snapshot: ExecutionResult = {
-      status: 0, statusText: null, url: '', method: '',
-      requestHeaders: {}, requestBody: null,
-      responseHeaders: {}, responseBody: null,
-      contentType: null, responseBodyBytes: 0, durationMs: 0,
-      variablesUsed: [], stage: null, error: null,
-      protocol: (spec?.protocol ?? 'http') as RequestProtocol,
-    }
-    const sseAccum: SseEvent[] = []
-    const wsAccum: WsFrame[] = []
-
-    streamCtrlRef.current = api.executeStream(path, activeEnv, effectiveStage, (ev) => {
-      switch (ev.kind) {
-        case 'meta':
-          Object.assign(snapshot, {
-            method: ev.payload.method,
-            url: ev.payload.url,
-            status: ev.payload.status,
-            statusText: ev.payload.statusText,
-            requestHeaders: ev.payload.requestHeaders,
-            requestBody: ev.payload.requestBody,
-            responseHeaders: ev.payload.responseHeaders,
-            contentType: ev.payload.contentType,
-            protocol: ev.payload.protocol,
-            authStatus: ev.payload.authStatus,
-          })
-          setRendered({
-            method: ev.payload.method,
-            url: ev.payload.url,
-            headers: ev.payload.requestHeaders,
-            body: ev.payload.requestBody,
-            variablesUsed: [],
-            stage: null,
-            protocol: ev.payload.protocol,
-          })
-          setExecution({ ...snapshot })
-          break
-        case 'body':
-          snapshot.responseBody = ev.payload.responseBody
-          snapshot.responseBodyBytes = ev.payload.responseBodyBytes
-          setExecution({ ...snapshot })
-          break
-        case 'sse':
-          sseAccum.push(ev.payload)
-          // New array reference so React notices the change.
-          setExecution({ ...snapshot, sseEvents: [...sseAccum] })
-          break
-        case 'ws':
-          wsAccum.push(ev.payload)
-          setExecution({ ...snapshot, wsFrames: [...wsAccum] })
-          break
-        case 'done':
-          snapshot.durationMs = ev.payload.durationMs
-          snapshot.responseBodyBytes = ev.payload.responseBodyBytes || snapshot.responseBodyBytes
-          snapshot.variablesUsed = ev.payload.variablesUsed
-          snapshot.stage = ev.payload.stage
-          snapshot.assertions = ev.payload.assertions
-          snapshot.assertSummary = ev.payload.assertSummary
-          if (ev.payload.error) snapshot.error = ev.payload.error
-          setExecution({
-            ...snapshot,
-            sseEvents: sseAccum.length > 0 ? [...sseAccum] : undefined,
-            wsFrames: wsAccum.length > 0 ? [...wsAccum] : undefined,
-          })
-          setBusy(null)
-          streamCtrlRef.current = null
-          break
-        case 'error':
-          snapshot.error = ev.payload.message
-          setActionError(ev.payload.message)
-          setExecution({ ...snapshot })
-          setBusy(null)
-          streamCtrlRef.current = null
-          break
-      }
-    }, undefined, dirty && spec ? spec : undefined)
+    startSend({
+      path,
+      env,
+      // No draft for a .http-backed request: there is no spec to emit, so sending one is a
+      // parse error rather than a run. Its drafts are raw text, sent from the .http editor.
+      spec: !httpBacked && dirty && spec ? spec : undefined,
+      protocol: spec?.protocol ?? 'http',
+    })
   }
 
   if (!detail || !spec) {
@@ -350,7 +372,7 @@ export function RequestEditor({ path }: Props) {
   }
   async function diagnoseTls() {
     setDiagnosing(true); setActionError(null)
-    try { setDiagnosis(await api.diagnoseTls(path, activeEnv, effectiveStage, spec ?? undefined)) }
+    try { setDiagnosis(await api.diagnoseTls(path, env, spec ?? undefined)) }
     catch (e) { setActionError(e instanceof Error ? e.message : String(e)) }
     finally { setDiagnosing(false) }
   }
@@ -360,22 +382,41 @@ export function RequestEditor({ path }: Props) {
     <EditorShell
       title={spec.name || basename(path)}
       kindLabel="Request"
-      dirty={dirty} saving={saving} errorMessage={errorMessage}
+      // A .http-backed request can be read and sent here, never written — so it never reports
+      // itself as dirty, which is what keeps Save (and the title's rename) from firing at a
+      // file that has no spec to write.
+      dirty={dirty && !httpBacked} saving={saving} errorMessage={errorMessage}
       onSave={save}
-      onDiscard={() => setSpec(savedSpec)}
-      onTitleChange={(n) => update('name', n)}
+      onDiscard={httpBacked ? undefined : () => setSpec(savedSpec)}
+      onTitleChange={httpBacked ? undefined : (n) => update('name', n)}
       toolbarExtras={
-        <Tooltip label="Open the AI assistant to craft or edit this request">
-          <ActionIcon
-            variant={assistantOpened ? 'light' : 'default'}
-            color="tap"
-            size="lg"
-            onClick={assistantCtl.toggle}
-            aria-label="Open the AI assistant to craft or edit this request"
-          >
-            <IconSparkles size={16} />
-          </ActionIcon>
-        </Tooltip>
+        <Group gap="xs" wrap="nowrap">
+          {httpBacked && (
+            <Tooltip
+              label={`Defined in ${basename(httpFilePath)}. Edit and send it there — this view reads it, but never rewrites the file.`}
+              withArrow multiline w={280}
+            >
+              <Button
+                variant="light" color="blue" size="xs"
+                leftSection={<IconFileCode size={13} />}
+                onClick={() => openTab({ path: httpFilePath, kind: 'httpfile', label: basename(httpFilePath) })}
+              >
+                {basename(httpFilePath)}
+              </Button>
+            </Tooltip>
+          )}
+          <Tooltip label="Open the AI assistant to craft or edit this request">
+            <ActionIcon
+              variant={assistantOpened ? 'light' : 'default'}
+              color="tap"
+              size="lg"
+              onClick={assistantCtl.toggle}
+              aria-label="Open the AI assistant to craft or edit this request"
+            >
+              <IconSparkles size={16} />
+            </ActionIcon>
+          </Tooltip>
+        </Group>
       }
       rightPane={
         assistantOpened ? (
@@ -391,18 +432,23 @@ export function RequestEditor({ path }: Props) {
         // Only mount the response pane when there's actually something to show — keeps
         // the request editor full-height until the user clicks Send, and lets
         // the × close button collapse it back.
-        (execution || rendered || actionError || busy !== null) ? (
+        (replayed || execution || rendered || actionError || sending) ? (
           <ResponsePanel
-            rendered={rendered}
-            execution={execution}
+            tabPath={path}
+            // A recorded entry takes the pane while it is open; closing it puts the live
+            // response — which was never discarded — straight back.
+            rendered={replayed ? null : rendered}
+            execution={replayed ?? execution}
             error={actionError}
-            busy={busy !== null}
-            stopped={stopped}
-            onStop={busy === 'send' ? stop : undefined}
+            busy={replayed ? false : sending}
+            stopped={replayed ? false : stopped}
+            onStop={!replayed && sending ? stop : undefined}
             requestPath={path}
             requestName={spec.name || basename(path)}
             requestAuth={spec.auth ?? null}
-            onClose={() => { abortStream(); setExecution(null); setRendered(null); setActionError(null); setBusy(null); setStopped(false) }}
+            replayedAt={replay?.at ?? null}
+            replayRedacted={replay ? replay.redacted : undefined}
+            onClose={replayed ? closeHistoryEntry : clearExecution}
           />
         ) : undefined
       }
@@ -439,8 +485,8 @@ export function RequestEditor({ path }: Props) {
         {linkedCollection && (
           <CollectionLinkChip
             summary={linkedCollection}
-            stage={effectiveStage}
-            onStageChange={setStage}
+            env={env}
+            onEnvChange={(next) => setCollectionEnv(linkedCollection.slug, next)}
             variableContext={variableContext}
             onOpen={() => openTab({ path: `collections/${linkedCollection.slug}`, kind: 'collection', label: linkedCollection.name })}
           />
@@ -454,7 +500,7 @@ export function RequestEditor({ path }: Props) {
             onOpenVariables={varsCtl.open}
           />
         </Box>
-        {busy === 'send' ? (
+        {sending ? (
           // In-flight: a red, spinner-led button that doubles as the cancel control. The
           // spinner shows the request is running; clicking it aborts (Mantine's `loading`
           // prop would disable the button, so we render the Loader ourselves to keep it
@@ -471,13 +517,37 @@ export function RequestEditor({ path }: Props) {
           <Button
             leftSection={<IconPlayerPlayFilled size={14} />}
             onClick={send}
-            disabled={busy !== null}
-            title={dirty ? 'Send the request (using unsaved changes)' : 'Send the request'}
+            disabled={sending}
+            title={
+              httpBacked ? 'Send the request as defined in the .http file'
+                : dirty ? 'Send the request (using unsaved changes)'
+                : 'Send the request'
+            }
           >
             Send
           </Button>
         )}
       </Group>
+
+      {/* Editing a .http-backed request here changes nothing on disk and nothing on the wire.
+          Saying so beats letting Send quietly run something other than what is on screen —
+          the one failure this whole feature exists to rule out. */}
+      {httpBacked && dirty && (
+        <Alert color="yellow" variant="light" icon={<IconAlertTriangle size={14} />} mb="md" py="xs">
+          <Group gap="xs" wrap="nowrap" justify="space-between">
+            <Text size="xs">
+              Changes here aren't saved or sent — this request is defined in{' '}
+              <Text component="span" ff="var(--mono)" fz="xs">{basename(httpFilePath)}</Text>.
+            </Text>
+            <Button
+              size="compact-xs" variant="light" color="yellow"
+              onClick={() => openTab({ path: httpFilePath, kind: 'httpfile', label: basename(httpFilePath) })}
+            >
+              Edit there
+            </Button>
+          </Group>
+        </Alert>
+      )}
 
       <Tabs value={tab} onChange={setTab}>
         {/* Ordered left-to-right by how often a section is touched: the tail (Meta, Docs,
@@ -502,6 +572,7 @@ export function RequestEditor({ path }: Props) {
             },
             { value: 'transport', label: 'Transport', icon: <IconShieldCheck size={14} /> },
             { value: 'vars', label: 'Variables', icon: <IconVariable size={14} />, adornment: <TabCount count={Object.keys(spec.vars ?? {}).length} /> },
+            { value: 'history', label: 'History', icon: <IconHistory size={14} />, adornment: <TabCount count={historyCount} /> },
             { value: 'meta', label: 'Meta', icon: <IconFlag size={14} /> },
             { value: 'docs', label: 'Docs', icon: <IconFileText size={14} />, adornment: <TabDot active={!!spec.body && spec.body.trim().length > 0} /> },
             { value: 'source', label: 'Source', icon: <IconCode size={14} /> },
@@ -549,8 +620,7 @@ export function RequestEditor({ path }: Props) {
             variableContext={variableContext}
             onOpenVariables={varsCtl.open}
             requestPath={path}
-            env={activeEnv}
-            stage={effectiveStage}
+            env={env}
             dirty={dirty}
           />
         </Tabs.Panel>
@@ -671,6 +741,19 @@ export function RequestEditor({ path }: Props) {
           </Box>
         </Tabs.Panel>
 
+        <Tabs.Panel value="history">
+          <Box maw={880}>
+            <HistoryPanel
+              requestId={detail.id}
+              enabled={detail.effectiveHistory?.enabled ?? false}
+              selectedId={openEntryId}
+              onSelect={(row) => setOpenEntryId(row.id)}
+              onCountChange={setHistoryCount}
+              onOpenSettings={() => setTab('meta')}
+            />
+          </Box>
+        </Tabs.Panel>
+
         <Tabs.Panel value="meta">
           <Stack gap="md" maw={760}>
             <TextInput label="Name" value={spec.name} onChange={(e) => update('name', e.currentTarget.value)} />
@@ -686,9 +769,22 @@ export function RequestEditor({ path }: Props) {
             {linkedCollection && (
               <Text size="xs" c="dimmed">
                 Inherits from collection <Code fz="xs">{linkedCollection.name}</Code> — base URL,
-                stages, default auth, and default headers come from there.
+                default auth, and default headers come from there.
               </Text>
             )}
+
+            <Box>
+              <Text fw={600} size="sm" mb={2}>History</Text>
+              <Text size="xs" c="dimmed" mb="sm">
+                Overrides this request's collection and the workspace, one key at a time.
+              </Text>
+              <HistorySettings
+                value={spec.history}
+                onChange={(v) => update('history', v)}
+                inherited={detail.effectiveHistory}
+                inheritedFrom={linkedCollection?.name}
+              />
+            </Box>
           </Stack>
         </Tabs.Panel>
 
@@ -701,7 +797,15 @@ export function RequestEditor({ path }: Props) {
         </Tabs.Panel>
 
         <Tabs.Panel value="source">
-          <SourceTab path={path} source={detail.source} />
+          {/* For a .http-backed request the source is the whole file, in its own format —
+              so it edits as http against the file path. Passing the fragment path here would
+              claim the text is canonical YAML and hand Save a path with a '#' in it, which
+              the server rejects as an unrecognized suffix. */}
+          <SourceTab
+            path={httpBacked ? httpFilePath : path}
+            source={detail.source}
+            language={httpBacked ? 'http' : 'yaml'}
+          />
         </Tabs.Panel>
       </Tabs>
     </EditorShell>
@@ -711,126 +815,7 @@ export function RequestEditor({ path }: Props) {
   )
 }
 
-function CollectionLinkChip({ summary, stage, onStageChange, variableContext, onOpen }: {
-  summary: CollectionSummary
-  stage: string | null
-  onStageChange: (next: string | null) => void
-  variableContext: VariableContext
-  onOpen: () => void
-}) {
-  const generation = useTapStore((s) => s.generation)
-  const view = useVariableView(variableContext)
-  const vars = useMemo(() => variableMap(view), [view])
-  // Stage can override the collection-level baseUrl entirely. Fetch CollectionDetail to
-  // pick up per-stage overrides so changing the stage actually moves the URL.
-  const [detail, setDetail] = useState<CollectionDetail | null>(null)
-  useEffect(() => {
-    let cancelled = false
-    api.collectionDetail(summary.slug).then((d) => { if (!cancelled) setDetail(d) }).catch(() => {})
-    return () => { cancelled = true }
-  }, [summary.slug, generation])
-  const baseTemplate = useMemo(() => {
-    if (!stage || !detail) return summary.baseUrl
-    const s = detail.stages.find((x) => x.name === stage)
-    return s?.baseUrl ?? summary.baseUrl
-  }, [detail, stage, summary.baseUrl])
-  const display = useMemo(() => resolveTokens(baseTemplate, vars), [baseTemplate, vars])
-  const hasUnresolved = /\{\{[^}]+\}\}/.test(display)
-  // The chip is width-capped so a long base URL can't crowd out the path input, so the
-  // tooltip carries the full URL (and the raw template when tokens were substituted).
-  const tooltip = (
-    <Stack gap={2}>
-      <Text size="xs">Open collection · {summary.name}</Text>
-      <Text size="xs" ff="var(--mono)">{display || '(no baseUrl)'}</Text>
-      {baseTemplate !== display && (
-        <Text size="xs" c="dimmed" ff="var(--mono)">template: {baseTemplate}</Text>
-      )}
-    </Stack>
-  )
-
-  return (
-    <Group
-      gap={0}
-      wrap="nowrap"
-      style={{
-        border: '1px solid var(--mantine-color-default-border)',
-        borderRadius: 'var(--mantine-radius-sm)',
-        overflow: 'hidden',
-      }}
-    >
-      <Tooltip label={tooltip} withArrow openDelay={400}>
-        <UnstyledButton
-          onClick={onOpen}
-          px="sm"
-          style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            height: 34, color: 'var(--mantine-color-text)',
-          }}
-        >
-          <IconFolders size={13} opacity={0.6} style={{ flexShrink: 0 }} />
-          <Text
-            component="span"
-            size="sm"
-            ff="var(--mono)"
-            w={100}
-            truncate
-            c={hasUnresolved ? 'dimmed' : undefined}
-          >
-            {display || '(no baseUrl)'}
-          </Text>
-        </UnstyledButton>
-      </Tooltip>
-      {summary.stageNames.length > 0 && (
-        <Menu shadow="md" position="bottom-end" withinPortal>
-          <Menu.Target>
-            <UnstyledButton
-              aria-label="Select stage"
-              title={stage ? `Stage: ${stage}` : 'Select stage'}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 4,
-                height: 34, padding: '0 8px',
-                borderLeft: '1px solid var(--mantine-color-default-border)',
-                color: 'var(--mantine-color-dimmed)',
-              }}
-            >
-              {stage && <Text size="xs" c="dimmed" ff="var(--mono)">{stage}</Text>}
-              <IconChevronDown size={12} />
-            </UnstyledButton>
-          </Menu.Target>
-          <Menu.Dropdown>
-            <Menu.Label>Stage</Menu.Label>
-            <Menu.Item
-              onClick={() => onStageChange(null)}
-              rightSection={stage === null ? <IconCheck size={12} /> : null}
-            >
-              (no stage)
-            </Menu.Item>
-            {summary.stageNames.map((s) => (
-              <Menu.Item
-                key={s}
-                onClick={() => onStageChange(s)}
-                rightSection={stage === s ? <IconCheck size={12} /> : null}
-              >
-                {s}
-              </Menu.Item>
-            ))}
-          </Menu.Dropdown>
-        </Menu>
-      )}
-    </Group>
-  )
-}
-
-function resolveTokens(text: string, vars: Map<string, { value: string | null; isSensitive: boolean }>): string {
-  return text.replace(/(\$?)\{\{\s*([^}]+?)\s*\}\}/g, (_, dollar: string, name: string) => {
-    if (dollar === '$') return '***'
-    const v = vars.get(name)
-    if (!v) return `{{${name}}}`
-    return v.isSensitive ? '***' : (v.value ?? '')
-  })
-}
-
-function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariables, requestPath, env, stage, dirty }: {
+function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariables, requestPath, env, dirty }: {
   body: string
   contentType: string | null
   onChange: (body: string | undefined, ct: string | null) => void
@@ -838,7 +823,6 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
   onOpenVariables?: () => void
   requestPath: string
   env: string | null
-  stage: string | null
   dirty: boolean
 }) {
   const [mode, setMode] = useState<BodyMode>(() => detectBodyMode(contentType, body))
@@ -932,7 +916,6 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
         <GraphQLEditor
           requestPath={requestPath}
           env={env}
-          stage={stage}
           body={body}
           dirty={dirty}
           onChange={(b) => onChange(b, contentTypeForBodyMode('graphql'))}
@@ -1077,17 +1060,17 @@ function parseBinaryRef(body: string): { ref: string; relPath: string; name: str
   return { ref: refForDisplay, relPath: rest, name }
 }
 
-/** The 2 MiB capture cap the server applies. Past it the body on screen is a prefix, and
- *  body assertions refuse to run rather than match one. */
-const BODY_CAP_BYTES = 2 * 1024 * 1024
-
-/** Repackage an on-screen result as the snapshot the re-check endpoint evaluates against. */
+/** Repackage an on-screen result as the snapshot the re-check endpoint evaluates against.
+ *  Truncation is whatever the server reported for this response — the cap is the workspace's
+ *  `response.maxBytes`, not a constant the client can assume. Past it the body on screen is a
+ *  prefix, and body assertions refuse to run rather than match one. */
 function assertSnapshot(execution: ExecutionResult): AssertResponseSnapshot {
+  const inline = execution.responseBodyInlineBytes ?? 0
   return {
     status: execution.status,
     headers: Object.entries(execution.responseHeaders ?? {}).map(([name, value]) => ({ name, value })),
     body: execution.responseBody,
-    bodyTruncated: execution.responseBodyBytes > BODY_CAP_BYTES,
+    bodyTruncated: inline > 0 && execution.responseBodyBytes > inline,
     durationMs: execution.durationMs,
   }
 }

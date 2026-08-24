@@ -87,7 +87,6 @@ public sealed class SendCommand : AsyncCommand<SendCommand.Settings>
         var request = new RunTestRequestDto(
             Path: target.Path,
             Env: envPath,
-            Stage: settings.Stage,
             Only: null,
             Overrides: variables.Count > 0 ? variables : null);
 

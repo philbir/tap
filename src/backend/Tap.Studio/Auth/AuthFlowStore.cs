@@ -106,12 +106,9 @@ public sealed class AuthFlow
     public required string Id { get; init; }
     /// <summary>Workspace-relative path of the auth profile this flow is for.</summary>
     public required string AuthPath { get; init; }
-    /// <summary>Collection stage in effect when the flow started, or <c>null</c> for a
-    /// workspace-scoped profile. Carried so the callback caches the resulting token under the
-    /// same key <see cref="AuthRunner.ExecuteAsync"/> would have read it from.</summary>
-    public string? Stage { get; init; }
     /// <summary>Env in effect when the flow started, or <c>null</c> when the workspace has
-    /// none. Carried for the same reason as <see cref="Stage"/>: the callback runs minutes
+    /// none. Carried so the callback caches the resulting token under the same key
+    /// <see cref="AuthRunner.ExecuteAsync"/> would have read it from: the callback runs minutes
     /// later on a different request, and the token it mints belongs to the env that produced
     /// the authorize URL — not to whatever env happens to be selected by then.</summary>
     public string? Env { get; init; }

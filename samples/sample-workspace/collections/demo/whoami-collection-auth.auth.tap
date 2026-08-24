@@ -1,0 +1,32 @@
+---
+kind: auth
+name: Demo OAuth2 (collection-scoped)
+type: oauth2
+flow: client_credentials
+tokenUrl: 'http://{{DEMO_API_URL}}{{OAUTH_TOKEN_PATH}}'
+clientId: '{{OAUTH_CLIENT_ID}}'
+clientSecret: tap-demo-secret
+scopes:
+  - api
+tags:
+  - demo
+  - oauth2
+---
+
+# Demo OAuth2 — collection-scoped
+
+Same client-credentials grant as `auth/demo-oauth-cc.auth.md`, but this file lives
+*inside* the Demo collection instead of the shared `auth/` folder. That's what lets it
+reference `{{OAUTH_TOKEN_PATH}}` and `{{OAUTH_CLIENT_ID}}` — variables defined on
+`_collection.tap` next door. A profile under `auth/` only sees workspace + environment
+variables, so those two names would fail to resolve there.
+
+(`{{DEMO_API_URL}}` is different: it comes from the `env` variable provider, which every
+profile can reach regardless of scope.)
+
+The practical payoff shows up with environments: override `OAUTH_CLIENT_ID` in `uat.env.tap`
+or `prod.env.tap` and this profile follows, with no edit here. Tokens are cached per
+environment, so a `uat` token is never handed to a `prod` request.
+
+Hit **Execute** in the right pane to try it — the runner POSTs to `/connect/token` and
+decodes the access token inline.

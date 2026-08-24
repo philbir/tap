@@ -1,38 +1,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
-  <title id="title">Tap icon</title>
-  <desc id="desc">A chrome tap over a soft cloud and glowing tunnel.</desc>
+  <title id="title">Tap Platform icon</title>
+  <desc id="desc">A central platform distributing one HTTP flow into Studio and Tunnels.</desc>
   <defs>
-    <linearGradient id="bg" x1="8" x2="56" y1="7" y2="58" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset=".5" stop-color="#F4ECFF"/>
-      <stop offset="1" stop-color="#D7CCFF"/>
+    <linearGradient id="platform-bg" x1="8" x2="56" y1="6" y2="58" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4058D8"/>
+      <stop offset="1" stop-color="#252A78"/>
     </linearGradient>
-    <linearGradient id="tunnel" x1="8" x2="56" y1="34" y2="34" gradientUnits="userSpaceOnUse">
+    <linearGradient id="platform-flow" x1="7" x2="57" y1="32" y2="32" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#2DD4BF"/>
-      <stop offset=".46" stop-color="#2563EB"/>
-      <stop offset="1" stop-color="#7B2FF7"/>
+      <stop offset=".52" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#A88BFF"/>
     </linearGradient>
-    <linearGradient id="metal" x1="20" x2="45" y1="16" y2="51" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#FFFFFF"/>
-      <stop offset=".44" stop-color="#C8C0EC"/>
-      <stop offset="1" stop-color="#5C4AA5"/>
-    </linearGradient>
-    <filter id="shadow" x="-30%" y="-30%" width="160%" height="160%">
-      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#3A0CA3" flood-opacity=".24"/>
-    </filter>
   </defs>
-  <rect width="64" height="64" rx="16" fill="url(#bg)"/>
-  <path d="M14 32c0-6 5-11 11-11 2-8 10-13 19-10 7 2 11 8 11 15 4 2 6 5 6 10 0 6-5 10-11 10H17C9 46 4 41 4 34c0-7 5-12 10-12Z" fill="#FFFFFF" opacity=".86"/>
-  <path d="M8 35c10-9 18-9 26 0s15 9 22 0" fill="none" stroke="url(#tunnel)" stroke-linecap="round" stroke-width="10" opacity=".24"/>
-  <path d="M8 35c10-9 18-9 26 0s15 9 22 0" fill="none" stroke="url(#tunnel)" stroke-linecap="round" stroke-width="5.2"/>
-  <g filter="url(#shadow)">
-    <path d="M29 16h7v11h-7z" fill="url(#metal)"/>
-    <rect x="21" y="14" width="23" height="8" rx="4" fill="url(#metal)"/>
-    <circle cx="21" cy="18" r="4.3" fill="#F3EFFF"/>
-    <circle cx="44" cy="18" r="4.3" fill="#F3EFFF"/>
-    <path d="M23 28h19a6 6 0 0 1 6 6v1a6 6 0 0 1-6 6h-6v8a4 4 0 0 1-8 0v-8h-5a6 6 0 0 1-6-6v-1a6 6 0 0 1 6-6z" fill="url(#metal)"/>
-    <path d="M36 41c8 2 12 6 12 13" fill="none" stroke="#2DD4BF" stroke-linecap="round" stroke-width="5"/>
-    <path d="M36 41c8 2 12 6 12 13" fill="none" stroke="#FFFFFF" stroke-linecap="round" stroke-width="1.7" opacity=".85"/>
-  </g>
-  <circle cx="52" cy="55" r="3.2" fill="#F38020"/>
+  <rect width="64" height="64" rx="16" fill="url(#platform-bg)"/>
+  <path d="M8 32h15M41 28c6 0 7-10 15-10M41 36c6 0 7 10 15 10" fill="none" stroke="url(#platform-flow)" stroke-linecap="round" stroke-width="4.5"/>
+  <rect x="21" y="20" width="22" height="24" rx="7" fill="#FFFFFF"/>
+  <path d="M27 27h10M27 32h10M27 37h6" fill="none" stroke="#5367D8" stroke-linecap="round" stroke-width="2.5"/>
+  <circle cx="8" cy="32" r="3" fill="#2DD4BF"/>
+  <circle cx="56" cy="18" r="3" fill="#A88BFF"/>
+  <circle cx="56" cy="46" r="3" fill="#2DD4BF"/>
+  <circle cx="39" cy="24" r="2.2" fill="#F38020"/>
 </svg>

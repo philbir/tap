@@ -22,15 +22,17 @@ public static partial class AiRequestAssistant
         IReadOnlyList<VariableInfo> Variables);
 
     /// <summary>The collection that owns the current request — its base URL, default auth,
-    /// shared headers, and stages all influence how a request should be crafted.</summary>
+    /// shared headers, and the environments it can be sent under all influence how a request
+    /// should be crafted.</summary>
     public sealed record CollectionInfo(
         string Name,
         string Path,
         string? BaseUrl,
         string? DefaultAuth,
         IReadOnlyList<string> DefaultHeaderNames,
-        IReadOnlyList<string> StageNames,
-        string? DefaultStage);
+        /// <summary>Names of the environments in scope here — the globals plus the ones scoped
+        /// to this collection.</summary>
+        IReadOnlyList<string> EnvNames);
 
     /// <summary>A reusable auth profile the request can point at via its <c>auth</c> field.</summary>
     public sealed record AuthProfileInfo(
@@ -53,7 +55,7 @@ public static partial class AiRequestAssistant
     {
         var sb = new StringBuilder();
         sb.AppendLine("You are Tap Studio's request assistant — you help craft and edit HTTP requests for the Tap workbench.");
-        sb.AppendLine("Tap stores each request as a `*.req.md` file. You never write files; instead you propose a structured request that the user previews and applies.");
+        sb.AppendLine("Tap stores each request as a `*.req.tap` file. You never write files; instead you propose a structured request that the user previews and applies.");
         sb.AppendLine();
         sb.AppendLine("## How to respond");
         sb.AppendLine("Write a short, friendly markdown explanation of what you changed and why (1-3 sentences).");
@@ -68,7 +70,7 @@ public static partial class AiRequestAssistant
         sb.AppendLine("  \"url\": \"string — may contain {{variables}}; absolute or collection-relative\",");
         sb.AppendLine("  \"headers\": [ { \"name\": \"Header-Name\", \"value\": \"value, may use {{vars}}\" } ],");
         sb.AppendLine("  \"requestBody\": \"string | null — raw request body (JSON/text/etc.)\",");
-        sb.AppendLine("  \"auth\": \"string | null — relative path to a .auth.md profile, or 'none' to opt out\",");
+        sb.AppendLine("  \"auth\": \"string | null — relative path to a .auth.tap profile, or 'none' to opt out\",");
         sb.AppendLine("  \"protocol\": \"http | websocket — omit or 'http' for normal requests\",");
         sb.AppendLine("  \"tags\": [ \"optional\", \"labels\" ],");
         sb.AppendLine("  \"body\": \"markdown documentation shown under the request — see the Docs rule below\"");
@@ -122,8 +124,8 @@ public static partial class AiRequestAssistant
                 sb.AppendLine($"Default auth: {Clean(col.DefaultAuth)} is applied automatically — only set the request `auth` to override it or set `none` to opt out.");
             if (col.DefaultHeaderNames.Count > 0)
                 sb.AppendLine($"Collection headers added to every request (don't duplicate these unless overriding): {CleanJoin(", ", col.DefaultHeaderNames)}.");
-            if (col.StageNames.Count > 0)
-                sb.AppendLine($"Stages (environments) available: {CleanJoin(", ", col.StageNames)}{(col.DefaultStage is { } ds ? $" (default: {Clean(ds)})" : "")}. Vary host/values across stages with stage-scoped variables, not by hardcoding.");
+            if (col.EnvNames.Count > 0)
+                sb.AppendLine($"Environments available here: {CleanJoin(", ", col.EnvNames)}. Vary host/values across environments with env-scoped variables, not by hardcoding.");
             sb.AppendLine();
         }
 
@@ -164,37 +166,14 @@ public static partial class AiRequestAssistant
         return sb.ToString();
     }
 
-    /// <summary>Marks the workspace-derived section of the prompt. <see cref="Clean"/> strips it
-    /// out of every interpolated value, so nothing read off disk can forge the closing marker
-    /// and continue as if it were our own instructions.</summary>
-    private const string FenceToken = "UNTRUSTED-WORKSPACE-DATA";
+    /// <summary>Shared with every other assistant so the hardening cannot drift. See
+    /// <see cref="AiPromptSafety"/> for what these do and why.</summary>
+    private const string FenceToken = AiPromptSafety.FenceToken;
 
-    /// <summary>Flattens one workspace-derived string into something safe to interpolate: no
-    /// control characters (a newline plus a `##` heading is all it takes to look like a new
-    /// section), no backticks (which would break out of a fenced block), no fence marker, and
-    /// a hard length cap so a single description can't crowd out the real instructions.</summary>
-    private static string Clean(string? value, int max = 200)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return string.Empty;
-
-        var sb = new StringBuilder(Math.Min(value.Length, max));
-        foreach (var ch in value)
-        {
-            if (sb.Length >= max) break;
-            if (char.IsControl(ch))
-            {
-                if (sb.Length > 0 && sb[^1] != ' ') sb.Append(' ');
-                continue;
-            }
-            sb.Append(ch == '`' ? '\'' : ch);
-        }
-
-        var cleaned = sb.ToString().Replace(FenceToken, "", StringComparison.OrdinalIgnoreCase).Trim();
-        return value.Length > max ? cleaned + "…" : cleaned;
-    }
+    private static string Clean(string? value, int max = 200) => AiPromptSafety.Clean(value, max);
 
     private static string CleanJoin(string separator, IReadOnlyList<string> values)
-        => string.Join(separator, values.Take(40).Select(v => Clean(v, 120)));
+        => AiPromptSafety.CleanJoin(separator, values);
 
     [GeneratedRegex("```tap-request\\s*\\n(.*?)```", RegexOptions.Singleline | RegexOptions.IgnoreCase)]
     private static partial Regex TapRequestBlock();

@@ -6,12 +6,13 @@
     <RootNamespace>Tap.Studio.Cli</RootNamespace>
     <AssemblyName>tap-studio</AssemblyName>
 
-    <!-- .NET tool packaging. Deliberately a different package and command from the `tap`
-         tunnel/inspector CLI: different product, and both should be installable together. -->
+    <!-- .NET tool packaging. Deliberately a different package and command from the Tap Tunnels
+         `tap` CLI: different product, and both should be installable together. -->
     <PackAsTool>true</PackAsTool>
     <ToolCommandName>tap-studio</ToolCommandName>
     <IsPackable>true</IsPackable>
     <PackageId>Tap.Studio.Cli</PackageId>
+    <TapProductIcon>Studio</TapProductIcon>
     <Title>Tap Studio CLI</Title>
     <Description>Run Tap workspace requests, flows, and test sets from a terminal or from CI. Install as a global .NET tool: `dotnet tool install -g Tap.Studio.Cli`, then `tap-studio test &lt;name&gt;`. Reports to the console, JUnit, TRX, or JSON, and exits non-zero when a test fails.</Description>
     <PackageTags>tap;http-client;api-testing;ci;dotnet-tool;junit</PackageTags>

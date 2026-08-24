@@ -1,3 +1,4 @@
+import { useCallback, useMemo } from 'react'
 import { create } from 'zustand'
 import { persist, createJSONStorage } from 'zustand/middleware'
 import { api, subscribeWorkspaceChanges } from '../api/client'
@@ -5,10 +6,28 @@ import type {
   AuthSummary, CollectionSummary, EnvSummary, FlowSummary, KnownWorkspace, TestSetSummary, TreeNode,
   WorkspaceFileKind, WorkspaceInfo,
 } from '../api/types'
+import { envAppliesTo } from '../api/types'
+import { toCanonicalPath } from '../shell/tapFiles'
+
+/** Per-tab state that outlives the editor's mount. See `TapStore.tabState`. */
+export interface TabState {
+  /**
+   * The editor's unsaved value, in whatever shape that editor works in. Present exactly
+   * while the tab has unsaved changes — saving or discarding drops it — so it doubles as
+   * the dirty flag the tab strip marks up.
+   */
+  draft?: unknown
+  /**
+   * View state by slot name: which sub-tab is open, which body view, and so on. Losing
+   * these on a tab switch is small but constant friction — you come back to the request you
+   * were reading and it has snapped from Body back to Params.
+   */
+  view?: Record<string, unknown>
+}
 
 /** One open file in the tab bar. */
 export interface OpenTab {
-  /** Workspace-relative path; '__manifest__' is reserved for the tap.md workspace editor. */
+  /** Workspace-relative path; '__manifest__' is reserved for the workspace.tap workspace editor. */
   path: string
   kind: WorkspaceFileKind
   /** Display label for the tab header. */
@@ -18,6 +37,13 @@ export interface OpenTab {
 export const MANIFEST_TAB_PATH = '__manifest__'
 /** Reserved path for the Settings tab — not a real workspace file. */
 export const SETTINGS_TAB_PATH = '__settings__'
+
+/** Reserved tab path for one variable provider's editor. Providers aren't workspace files —
+ *  a system-scope one has no path at all — so the name is carried in the token itself. */
+export const PROVIDER_TAB_PREFIX = '__provider__:'
+export const providerTabPath = (name: string) => `${PROVIDER_TAB_PREFIX}${name}`
+export const providerNameFromTab = (path: string) =>
+  path.startsWith(PROVIDER_TAB_PREFIX) ? path.slice(PROVIDER_TAB_PREFIX.length) : null
 
 /**
  * Single global app store. Holds server-derived state (workspace info, tree, catalogs,
@@ -49,13 +75,40 @@ export interface TapStore {
   // -- UI state (persisted) --------------------------------------------------
   tabs: OpenTab[]
   activeTab: string | null
-  /** Per-workspace active env path. Keyed by workspace root so switching workspaces
-   *  doesn't smuggle one workspace's env into another. */
+  /** Per-workspace active env path — the workspace default, chosen in the header from the
+   *  global environments. Keyed by workspace root so switching workspaces doesn't smuggle one
+   *  workspace's env into another. */
   activeEnvByRoot: Record<string, string | null>
+  /** Per-collection env override, keyed by `${root}::${slug}` — what the baseUrl chip sets.
+   *  This is where a collection-scoped environment is selected, and it is remembered rather
+   *  than held per tab: "this collection points at UAT right now" is a decision about the
+   *  collection, and re-picking it in every request that belongs to it is the friction the
+   *  merge of stages into environments exists to remove. */
+  envByCollection: Record<string, string | null>
+
+  // -- UI state (in-memory) --------------------------------------------------
+  /**
+   * Everything about a tab that has to outlive its editor, keyed by tab path.
+   *
+   * Only the active tab's editor is mounted, so without this a tab switch unmounted the form
+   * and took its in-progress state with it; the same re-seed happens on every `generation`
+   * bump (the file watcher, or saving any *other* file). Editors hand this over on the way
+   * out and pick it back up on the way in.
+   *
+   * Deliberately NOT persisted: an auth profile's draft can hold a client secret, and the
+   * persisted slice goes to localStorage. Tab state survives a tab switch, not a page
+   * reload. Responses are the third member of this family and live in their own registry
+   * (`editors/useExecution`) — a streaming body writes far too often to belong in a store
+   * every component subscribes to.
+   */
+  tabState: Record<string, TabState>
 
   // -- Actions ---------------------------------------------------------------
   reload: () => Promise<void>
   setActiveEnv: (path: string | null) => void
+  /** Point one collection at an environment, or pass null to fall back to the workspace
+   *  default. */
+  setCollectionEnv: (slug: string, path: string | null) => void
   openTab: (tab: OpenTab) => void
   closeTab: (path: string) => void
   closeOtherTabs: (path: string) => void
@@ -65,6 +118,12 @@ export interface TapStore {
    *  in the tab strip and active state. Used by the git-diff editor to switch
    *  Working ↔ Staged without leaving an orphan tab behind. */
   renameTab: (oldPath: string, newPath: string, newLabel: string) => void
+  /** Store (or replace) a tab's unsaved editor state. */
+  setDraft: (path: string, value: unknown) => void
+  /** Drop a tab's unsaved editor state — it was saved, or discarded. */
+  clearDraft: (path: string) => void
+  /** Remember one slot of a tab's view state (an open sub-tab, a body view, …). */
+  setTabView: (path: string, slot: string, value: unknown) => void
   activateWorkspace: (path: string) => Promise<void>
   addAndActivateWorkspace: (path: string) => Promise<void>
 }
@@ -75,6 +134,18 @@ interface PersistedSlice {
   tabs: OpenTab[]
   activeTab: string | null
   activeEnvByRoot: Record<string, string | null>
+  envByCollection: Record<string, string | null>
+}
+
+/** Key for {@link TapStore.envByCollection}. Root-qualified for the same reason
+ *  `activeEnvByRoot` is: two workspaces can both have a `demo` collection. */
+const collectionEnvKey = (root: string, slug: string) => `${root}::${slug}`
+
+/** A copy of `tabState` without the entry for one tab path. */
+function withoutTab(tabState: Record<string, TabState>, path: string): Record<string, TabState> {
+  const next = { ...tabState }
+  delete next[path]
+  return next
 }
 
 export const useTapStore = create<TapStore>()(
@@ -94,6 +165,8 @@ export const useTapStore = create<TapStore>()(
       tabs: [],
       activeTab: null,
       activeEnvByRoot: {},
+      envByCollection: {},
+      tabState: {},
 
       reload: async () => {
         try {
@@ -110,8 +183,36 @@ export const useTapStore = create<TapStore>()(
           const previousRoot = get().info?.root ?? null
           const prevActiveEnv = previousRoot ? get().activeEnvByRoot[previousRoot] : null
 
+          // Open tabs and the selected env are persisted by path, so a workspace that has just
+          // been through `tap-studio migrate` would restore a screenful of dead .md paths.
+          // Repoint anything whose canonical twin is now on disk.
+          const livePaths = new Set<string>()
+          const collectPaths = (nodes: typeof t) => {
+            for (const n of nodes) {
+              livePaths.add(n.path)
+              collectPaths(n.children ?? [])
+            }
+          }
+          collectPaths(t)
+          // Generic over the input so a non-null path stays non-null: tab paths are `string`,
+          // the active env is `string | null`, and both go through here.
+          const heal = <T extends string | null>(path: T): T => {
+            if (!path || livePaths.has(path)) return path
+            const canonical = toCanonicalPath(path)
+            return (canonical !== path && livePaths.has(canonical) ? canonical : path) as T
+          }
+
           set((state) => {
-            const nextActiveEnv = state.activeEnvByRoot[w.root] ?? prevActiveEnv ?? w.defaultEnv
+            const rawActiveEnv = state.activeEnvByRoot[w.root] ?? prevActiveEnv ?? w.defaultEnv
+            const nextActiveEnv = heal(rawActiveEnv)
+            const healedTabs = state.tabs.map((tab) => {
+              const path = heal(tab.path)
+              return path === tab.path ? tab : { ...tab, path }
+            })
+            // Tab state is keyed by tab path, so it follows its tab through the same rename.
+            const healedTabState = Object.fromEntries(
+              Object.entries(state.tabState).map(([path, st]) => [heal(path), st]),
+            )
             return {
               info: w,
               tree: t,
@@ -123,6 +224,9 @@ export const useTapStore = create<TapStore>()(
               flows: fl,
               generation: state.generation + 1,
               loadError: null,
+              tabs: healedTabs,
+              activeTab: heal(state.activeTab),
+              tabState: healedTabState,
               activeEnvByRoot: { ...state.activeEnvByRoot, [w.root]: nextActiveEnv },
             }
           })
@@ -137,6 +241,12 @@ export const useTapStore = create<TapStore>()(
         return { activeEnvByRoot: { ...state.activeEnvByRoot, [root]: path } }
       }),
 
+      setCollectionEnv: (slug, path) => set((state) => {
+        const root = state.info?.root
+        if (!root) return {}
+        return { envByCollection: { ...state.envByCollection, [collectionEnvKey(root, slug)]: path } }
+      }),
+
       openTab: (tab) => set((state) => ({
         tabs: state.tabs.some((t) => t.path === tab.path) ? state.tabs : [...state.tabs, tab],
         activeTab: tab.path,
@@ -149,16 +259,21 @@ export const useTapStore = create<TapStore>()(
         const nextActive = state.activeTab !== path
           ? state.activeTab
           : (next.length === 0 ? null : next[Math.min(idx, next.length - 1)].path)
-        return { tabs: next, activeTab: nextActive }
+        return { tabs: next, activeTab: nextActive, tabState: withoutTab(state.tabState, path) }
       }),
 
       closeOtherTabs: (path) => set((state) => {
         const keep = state.tabs.find((t) => t.path === path)
         if (!keep) return {}
-        return { tabs: [keep], activeTab: path }
+        const kept = state.tabState[path]
+        return {
+          tabs: [keep],
+          activeTab: path,
+          tabState: kept === undefined ? {} : { [path]: kept },
+        }
       }),
 
-      closeAllTabs: () => set({ tabs: [], activeTab: null }),
+      closeAllTabs: () => set({ tabs: [], activeTab: null, tabState: {} }),
 
       selectTab: (path) => set({ activeTab: path }),
 
@@ -179,14 +294,43 @@ export const useTapStore = create<TapStore>()(
               ? { ...t, path: newPath, label: newLabel }
               : t)
         const activeTab = state.activeTab === oldPath ? newPath : state.activeTab
-        return { tabs, activeTab }
+        // The editor remounts under the new path (App keys it on the tab path), so unsaved
+        // work has to move with the tab or it would be orphaned under the old key.
+        const carried = state.tabState[oldPath]
+        const tabState = carried === undefined
+          ? state.tabState
+          : { ...withoutTab(state.tabState, oldPath), [newPath]: carried }
+        return { tabs, activeTab, tabState }
+      }),
+
+      setDraft: (path, value) => set((state) => {
+        const current = state.tabState[path]
+        if (current?.draft === value) return {}
+        return { tabState: { ...state.tabState, [path]: { ...current, draft: value } } }
+      }),
+
+      clearDraft: (path) => set((state) => {
+        const current = state.tabState[path]
+        if (current?.draft === undefined) return {}
+        return { tabState: { ...state.tabState, [path]: { ...current, draft: undefined } } }
+      }),
+
+      setTabView: (path, slot, value) => set((state) => {
+        const current = state.tabState[path]
+        if (current?.view?.[slot] === value) return {}
+        return {
+          tabState: {
+            ...state.tabState,
+            [path]: { ...current, view: { ...current?.view, [slot]: value } },
+          },
+        }
       }),
 
       activateWorkspace: async (path) => {
         await api.activateWorkspace(path)
         // The open tabs reference paths in the OLD workspace; clearing avoids 404 loops on
         // refetch. activeEnvByRoot is preserved so jumping back keeps your selection.
-        set({ tabs: [], activeTab: null })
+        set({ tabs: [], activeTab: null, tabState: {} })
         await get().reload()
       },
 
@@ -204,6 +348,7 @@ export const useTapStore = create<TapStore>()(
         tabs: state.tabs,
         activeTab: state.activeTab,
         activeEnvByRoot: state.activeEnvByRoot,
+        envByCollection: state.envByCollection,
       }),
     },
   ),
@@ -220,6 +365,103 @@ export const useActiveEnv = (): string | null => useTapStore((s) => {
   const root = s.info?.root
   return root ? (s.activeEnvByRoot[root] ?? null) : null
 })
+
+/**
+ * The collection a tab belongs to, or null when it belongs to none. Covers both a file under
+ * `collections/<slug>/…` and the collection's own tab, whose path is the bare directory.
+ */
+export function collectionOfTab(path: string | null): string | null {
+  if (!path) return null
+  const parts = path.split('/')
+  if (parts.length < 2 || parts[0].toLowerCase() !== 'collections') return null
+  return parts[1] || null
+}
+
+/** The collection whose editor is in front of the user right now, or null. This is the context
+ *  every environment control narrows by. */
+export const useActiveCollection = (): string | null =>
+  useTapStore((s) => collectionOfTab(s.activeTab))
+
+/** The environments offerable while a file owned by `slug` is in front of the user: every
+ *  global one, plus the ones assigned to that collection. Mirrors
+ *  `LoadedWorkspace.EnvironmentsFor`.
+ *
+ *  <p>`slug === null` means "no collection in front of us", and then there is nothing to
+ *  narrow by — every environment is offered, assigned ones included. Filtering to globals
+ *  there would hide environments the user has no other way to reach.</p> */
+export const useEnvsFor = (slug: string | null): EnvSummary[] => {
+  const envs = useTapStore((s) => s.envs)
+  return useMemo(() => (slug === null ? envs : envs.filter((e) => envAppliesTo(e, slug))), [envs, slug])
+}
+
+/**
+ * The environment a request in `slug` actually resolves under: the collection's own override
+ * when one is set and still valid, else the workspace default when it is in scope here, else
+ * none.
+ *
+ * <p>Both fallbacks matter. An override can go stale — the env file gets deleted, or its
+ * `collections:` list stops naming this collection — and silently keeping it would send the
+ * request somewhere the picker no longer offers. And the workspace default is frequently a
+ * global env that every collection should honour without being told.</p>
+ */
+export const useEffectiveEnv = (slug: string | null): string | null => {
+  const envs = useTapStore((s) => s.envs)
+  const root = useTapStore((s) => s.info?.root ?? null)
+  const override = useTapStore((s) => (root && slug ? s.envByCollection[`${root}::${slug}`] ?? null : null))
+  const workspaceDefault = useActiveEnv()
+
+  return useMemo(() => {
+    const usable = (path: string | null) => {
+      if (!path) return null
+      const env = envs.find((e) => e.path === path)
+      return env && envAppliesTo(env, slug) ? path : null
+    }
+    return usable(override) ?? usable(workspaceDefault)
+  }, [envs, slug, override, workspaceDefault])
+}
+
+/**
+ * The single environment control, in whichever context the user is in.
+ *
+ * <p>With a collection in front of you it reads and writes *that collection's* environment;
+ * with none, the workspace default. One meaning per context, so the header and the base-URL
+ * chip are two surfaces on the same choice rather than two competing ones.</p>
+ */
+export function useEnvSelection(slug: string | null): {
+  value: string | null
+  options: EnvSummary[]
+  select: (path: string | null) => void
+} {
+  const options = useEnvsFor(slug)
+  const workspaceDefault = useActiveEnv()
+  const effective = useEffectiveEnv(slug)
+  const setActiveEnv = useTapStore((s) => s.setActiveEnv)
+  const setCollectionEnv = useTapStore((s) => s.setCollectionEnv)
+
+  const select = useCallback(
+    (path: string | null) => {
+      if (slug === null) setActiveEnv(path)
+      else setCollectionEnv(slug, path)
+    },
+    [slug, setActiveEnv, setCollectionEnv],
+  )
+
+  return { value: slug === null ? workspaceDefault : effective, options, select }
+}
+
+/**
+ * Tab paths that currently hold unsaved edits. Selected as a stable joined string rather
+ * than `tabState` itself: a draft is rewritten on every keystroke, and subscribers (the tab
+ * strip) only care when the *set* of dirty tabs changes.
+ */
+export const useDirtyTabPaths = (): ReadonlySet<string> => {
+  const joined = useTapStore((s) => Object.entries(s.tabState)
+    .filter(([, st]) => st.draft !== undefined)
+    .map(([path]) => path)
+    .sort()
+    .join('\n'))
+  return useMemo(() => new Set(joined ? joined.split('\n') : []), [joined])
+}
 
 /** Has a usable workspace been loaded (info + at least one known workspace marked active)? */
 export const useHasActiveWorkspace = (): boolean => useTapStore(

@@ -1,0 +1,292 @@
+# Demo.Api
+# Generated from an OpenAPI description by Tap Studio.
+#
+# An ordinary .http file — it opens and sends in Visual Studio, VS Code REST Client,
+# JetBrains, httpyac, and Kulala. The '# @tap-*' lines are inert comments there and
+# Tap features here.
+
+### GET /
+# tap-openapi GET /
+# @name get
+# @tap-tag Demo.Api
+GET /
+Accept: application/json
+
+### GET /demo/index
+# tap-openapi GET /demo/index
+# @name get-demo-index
+# @tap-tag Demo.Api
+GET /demo/index
+Accept: application/json
+
+### GET /demo/stream/sse
+# tap-openapi GET /demo/stream/sse
+# @name get-demo-stream-sse
+# @tap-tag Demo.Api
+GET /demo/stream/sse
+Accept: application/json
+
+### POST /connect/token
+# tap-openapi POST /connect/token
+# @name post-connect-token
+# @tap-tag Demo.Api
+POST /connect/token
+Accept: application/json
+
+### GET /connect/authorize
+# tap-openapi GET /connect/authorize
+# @name get-connect-authorize
+# @tap-tag Demo.Api
+GET /connect/authorize
+Accept: application/json
+
+### POST /connect/authorize
+# tap-openapi POST /connect/authorize
+# @name post-connect-authorize
+# @tap-tag Demo.Api
+POST /connect/authorize
+Accept: application/json
+
+### GET /connect/userinfo
+# tap-openapi GET /connect/userinfo
+# @name get-connect-userinfo
+# @tap-tag Demo.Api
+GET /connect/userinfo
+Accept: application/json
+
+### GET /demo/auth/whoami
+# tap-openapi GET /demo/auth/whoami
+# @name get-demo-auth-whoami
+# @tap-tag Demo.Api
+GET /demo/auth/whoami
+Accept: application/json
+
+### OPTIONS /demo/methods
+# tap-openapi methods-options
+# @name methods-options
+# @tap-tag Demo.Api
+OPTIONS /demo/methods
+Accept: application/json
+
+### GET /demo/methods/status/{code}
+# tap-openapi GET /demo/methods/status/{code}
+# @name methods-status
+# @tap-tag Demo.Api
+# {{code}} (path, required)
+GET /demo/methods/status/{{code}}
+Accept: application/json
+
+### POST /demo/methods/status/{code}
+# tap-openapi POST /demo/methods/status/{code}
+# @name methods-status
+# @tap-tag Demo.Api
+# {{code}} (path, required)
+POST /demo/methods/status/{{code}}
+Accept: application/json
+
+### PUT /demo/methods/status/{code}
+# tap-openapi PUT /demo/methods/status/{code}
+# @name methods-status
+# @tap-tag Demo.Api
+# {{code}} (path, required)
+PUT /demo/methods/status/{{code}}
+Accept: application/json
+
+### PATCH /demo/methods/status/{code}
+# tap-openapi PATCH /demo/methods/status/{code}
+# @name methods-status
+# @tap-tag Demo.Api
+# {{code}} (path, required)
+PATCH /demo/methods/status/{{code}}
+Accept: application/json
+
+### DELETE /demo/methods/status/{code}
+# tap-openapi DELETE /demo/methods/status/{code}
+# @name methods-status
+# @tap-tag Demo.Api
+# {{code}} (path, required)
+DELETE /demo/methods/status/{{code}}
+Accept: application/json
+
+### GET /demo/methods/headers
+# tap-openapi GET /demo/methods/headers
+# @name get-demo-methods-headers
+# @tap-tag Demo.Api
+GET /demo/methods/headers
+Accept: application/json
+
+### GET /demo/methods/query
+# tap-openapi GET /demo/methods/query
+# @name get-demo-methods-query
+# @tap-tag Demo.Api
+GET /demo/methods/query
+Accept: application/json
+
+### GET /demo/content/json
+# tap-openapi GET /demo/content/json
+# @name get-demo-content-json
+# @tap-tag Demo.Api
+GET /demo/content/json
+Accept: application/json
+
+### GET /demo/content/xml
+# tap-openapi GET /demo/content/xml
+# @name get-demo-content-xml
+# @tap-tag Demo.Api
+GET /demo/content/xml
+Accept: application/json
+
+### GET /demo/content/yaml
+# tap-openapi GET /demo/content/yaml
+# @name get-demo-content-yaml
+# @tap-tag Demo.Api
+GET /demo/content/yaml
+Accept: application/json
+
+### GET /demo/content/text
+# tap-openapi GET /demo/content/text
+# @name get-demo-content-text
+# @tap-tag Demo.Api
+GET /demo/content/text
+Accept: application/json
+
+### GET /demo/content/html
+# tap-openapi GET /demo/content/html
+# @name get-demo-content-html
+# @tap-tag Demo.Api
+GET /demo/content/html
+Accept: application/json
+
+### GET /demo/content/css
+# tap-openapi GET /demo/content/css
+# @name get-demo-content-css
+# @tap-tag Demo.Api
+GET /demo/content/css
+Accept: application/json
+
+### GET /demo/content/javascript
+# tap-openapi GET /demo/content/javascript
+# @name get-demo-content-javascript
+# @tap-tag Demo.Api
+GET /demo/content/javascript
+Accept: application/json
+
+### GET /demo/content/csv
+# tap-openapi GET /demo/content/csv
+# @name get-demo-content-csv
+# @tap-tag Demo.Api
+GET /demo/content/csv
+Accept: application/json
+
+### GET /demo/content/markdown
+# tap-openapi GET /demo/content/markdown
+# @name get-demo-content-markdown
+# @tap-tag Demo.Api
+GET /demo/content/markdown
+Accept: application/json
+
+### GET /demo/content/png
+# tap-openapi GET /demo/content/png
+# @name get-demo-content-png
+# @tap-tag Demo.Api
+GET /demo/content/png
+Accept: application/json
+
+### GET /demo/content/jpeg
+# tap-openapi GET /demo/content/jpeg
+# @name get-demo-content-jpeg
+# @tap-tag Demo.Api
+GET /demo/content/jpeg
+Accept: application/json
+
+### GET /demo/content/svg
+# tap-openapi GET /demo/content/svg
+# @name get-demo-content-svg
+# @tap-tag Demo.Api
+GET /demo/content/svg
+Accept: application/json
+
+### GET /demo/content/binary
+# tap-openapi GET /demo/content/binary
+# @name get-demo-content-binary
+# @tap-tag Demo.Api
+GET /demo/content/binary
+Accept: application/json
+
+### GET /demo/content/problem
+# tap-openapi GET /demo/content/problem
+# @name get-demo-content-problem
+# @tap-tag Demo.Api
+GET /demo/content/problem
+Accept: application/json
+
+### GET /demo/content/empty
+# tap-openapi GET /demo/content/empty
+# @name get-demo-content-empty
+# @tap-tag Demo.Api
+GET /demo/content/empty
+Accept: application/json
+
+### GET /demo/content/large/{kib}
+# tap-openapi GET /demo/content/large/{kib}
+# @name get-demo-content-large-by-kib
+# @tap-tag Demo.Api
+# {{kib}} (path, required)
+GET /demo/content/large/{{kib}}
+Accept: application/json
+
+### GET /demo/content/slow/{ms}
+# tap-openapi GET /demo/content/slow/{ms}
+# @name get-demo-content-slow-by-ms
+# @tap-tag Demo.Api
+# {{ms}} (path, required)
+GET /demo/content/slow/{{ms}}
+Accept: application/json
+
+### POST /demo/upload/json
+# tap-openapi POST /demo/upload/json
+# @name post-demo-upload-json
+# @tap-tag Demo.Api
+POST /demo/upload/json
+Content-Type: application/json
+Accept: application/json
+
+{}
+
+### POST /demo/upload/form
+# tap-openapi POST /demo/upload/form
+# @name post-demo-upload-form
+# @tap-tag Demo.Api
+POST /demo/upload/form
+Content-Type: application/x-www-form-urlencoded
+Accept: application/json
+
+{}
+
+### POST /demo/upload/multipart
+# tap-openapi POST /demo/upload/multipart
+# @name post-demo-upload-multipart
+# @tap-tag Demo.Api
+POST /demo/upload/multipart
+Accept: application/json
+
+### POST /demo/upload/xml
+# tap-openapi POST /demo/upload/xml
+# @name post-demo-upload-xml
+# @tap-tag Demo.Api
+POST /demo/upload/xml
+Accept: application/json
+
+### POST /demo/upload/text
+# tap-openapi POST /demo/upload/text
+# @name post-demo-upload-text
+# @tap-tag Demo.Api
+POST /demo/upload/text
+Accept: application/json
+
+### POST /demo/upload/raw
+# tap-openapi POST /demo/upload/raw
+# @name post-demo-upload-raw
+# @tap-tag Demo.Api
+POST /demo/upload/raw
+Accept: application/json

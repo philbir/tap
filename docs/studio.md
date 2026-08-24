@@ -1,12 +1,16 @@
 # Tap Studio
 
-> The HTTP workbench: compose requests, authenticate against real identity providers, execute
-> them, and keep the whole thing in your repo as reviewable Markdown.
+![Tap Studio icon](../assets/tap-studio-icon.svg)
 
-Tap Studio is the second half of Tap. Where the [Inspector](inspector.md) watches traffic that
-someone *else* sends to your machine, Studio is where **you** author and send the traffic —
-a request composer with first-class authentication, an AI assistant, and a workspace that is
-plain text in your git repo.
+> The HTTP request and auth credential crafter: compose, authenticate, execute, and keep the whole
+> thing in your repo as reviewable Markdown.
+
+Tap Studio is the outbound half of Tap Platform. Where [Tap Tunnels](inspector.md) routes traffic
+to your machine and its built-in Inspector shows what arrived, Studio is where **you** craft and
+send the traffic—a request composer with first-class authentication, an AI assistant, and a
+workspace that is plain text in your git repo.
+
+![Tap Studio request and credential craft workbench](../assets/tap-studio-workbench-hero.png)
 
 - On-disk format: [workspace-format.md](workspace-format.md)
 - Backend: `src/backend/Tap.Studio` (ASP.NET Core, REST + SSE)
@@ -20,6 +24,7 @@ plain text in your git repo.
 
 - [Why another HTTP client](#why-another-http-client)
 - [Install and run](#install-and-run)
+- [Run it from your Aspire AppHost](#run-it-from-your-aspire-apphost)
 - [The workspace](#the-workspace)
 - [Composing a request](#composing-a-request)
 - [Assertions](#assertions)
@@ -31,6 +36,7 @@ plain text in your git repo.
 - [AI assistant](#ai-assistant)
 - [Git](#git)
 - [Importing from Postman](#importing-from-postman)
+- [Importing from OpenAPI](#importing-from-openapi)
 - [Desktop app](#desktop-app)
 - [Configuration](#configuration)
 
@@ -102,47 +108,164 @@ scripts/build-desktop.sh --dev    # publish sidecar + tauri dev
 
 ---
 
+## Run it from your Aspire AppHost
+
+If your solution already has an Aspire AppHost, Studio can run as a companion resource of it —
+started, health-checked, and linked from the dashboard alongside your APIs, pointed at a
+workspace folder that lives in the repo.
+
+```csharp
+var orders  = builder.AddProject<Projects.Orders_Api>("orders-api");
+var billing = builder.AddProject<Projects.Billing_Api>("billing-api");
+
+var studio = builder.AddTapStudio<Projects.Tap_Studio>()
+    .WithWorkspaceFolder("tap")   // default; resolved against the AppHost directory
+    .WithApi(orders)
+    .WithApi(billing);
+```
+
+That single call does the following:
+
+- Starts Studio in **aspire mode**: the workspace is pinned to `tap/`, the workspace switcher is
+  locked, and the header shows an Aspire badge. Pinning matters — without it Studio would open
+  whichever workspace that developer last used on that machine.
+- Waits for each API, health-checks Studio at `/health`, and adds it to the dashboard as
+  **Tap Studio**.
+- Injects the standard service-discovery variables for every `WithApi`, so a collection can say
+  `baseUrl: '{{aspire:orders-api}}'` and hit whatever port was allocated this run (§12.2 of
+  [workspace-format.md](workspace-format.md)).
+
+`WithApi(api, waitFor: false)` opts out of waiting for a slow-starting API.
+
+### csproj requirements
+
+Two references in the **AppHost** project:
+
+```xml
+<!-- Makes Aspire's source generator emit Projects.Tap_Studio. -->
+<ProjectReference Include="path/to/Tap.Studio.csproj" />
+
+<!-- The hosting library. IsAspireProjectResource=false because it is a library,
+     not a launchable project. -->
+<ProjectReference Include="path/to/Tap.Hosting.csproj" IsAspireProjectResource="false" />
+```
+
+Building `Tap.Studio` builds its React UI, so this route needs **yarn on PATH**.
+
+### Or run the image instead
+
+`AddTapStudioContainer` runs the published `ghcr.io/philbir/tap-studio` image in place of a
+compiled project — no `ProjectReference`, no yarn, nothing to build, and Aspire pulls the image
+as part of starting the AppHost:
+
+```csharp
+var studio = builder.AddTapStudioContainer()
+    .WithWorkspaceFolder("tap")   // bind-mounted into the container at /workspace
+    .WithApi(orders);
+```
+
+It returns the same `TapStudioHandle`, so `WithApi`, `WithWorkspaceFolder`, `CallbackUrl`, and
+the rest behave identically. Three things differ:
+
+- **The workspace is a bind mount.** `WithWorkspaceFolder` points the mount at that folder and
+  creates it if it does not exist — Docker would otherwise create it owned by root, and the
+  workspace Studio scaffolds into it would not be writable from your editor.
+- **State lives in a named volume** (`<name>-state`, mounted at `/state`), so the OAuth token
+  cache and `system.json` survive a restart. Pass `persistState: false` to make it ephemeral.
+- **A container is not your machine.** The AI assistant cannot spawn the coding CLI you have
+  installed, an interactive OAuth flow cannot open your browser, and provider back ends that
+  shell out to a local binary (1Password's `op`, the Azure CLI) are not present. Use the project
+  route when you want those; use the image for a workspace that authenticates headlessly.
+
+The endpoint is published on loopback only and the Host allowlist is pinned to match; pass
+`exposeOnAllInterfaces: true` to widen it deliberately.
+
+The image tag defaults to **the hosting library's own version**, not `latest` — the two are
+published from the same git tag, so they always pair. `latest` is only ever tagged for stable
+releases, so defaulting to it would leave `AddTapStudioContainer()` unable to pull on a preview.
+Pass `tag:` to pin something else. The default pull policy is `Missing`, so a locally-built tag
+of the same name is used as-is:
+
+```bash
+docker build -t ghcr.io/philbir/tap-studio:local -f src/backend/Tap.Studio/Dockerfile .
+StudioContainer=true StudioImageTag=local aspire run   # samples/Studio.AppHost
+```
+
+### Seeding an OAuth client
+
+Studio's redirect URI is only known once its port is allocated, so it is exposed as a
+`ReferenceExpression`:
+
+```csharp
+identity.WithEnvironment("STUDIO_CALLBACK_URL", studio.CallbackUrl);
+```
+
+### The same workspace in CI
+
+Nothing about the workspace is Aspire-specific. `{{aspire:orders-api}}` reads the standard
+`services__<resource>__<scheme>__<index>` variables, so CI runs it by exporting them:
+
+```bash
+export services__orders-api__https__0=https://staging.example.com
+tap-studio test "Orders smoke"
+```
+
+### While it's running
+
+The workspace switcher is locked and the header shows an **Aspire** badge — the folder is part of
+the solution's definition rather than a per-user preference, so changing it means changing
+`WithWorkspaceFolder(...)`.
+
+The header also links to the **desktop app**. A Studio started by an AppHost lives in a browser tab
+that goes away with `aspire run`; the desktop app opens the same workspace folder without the
+AppHost having to be up. Download it from
+[the install docs](https://philbir.github.io/tap/#studio-install) or straight from
+[GitHub Releases](https://github.com/philbir/tap/releases/latest).
+
+A worked example lives in [`samples/Studio.AppHost`](../samples/Studio.AppHost/Program.cs).
+
 ## The workspace
 
-A workspace is a directory containing a `tap.md` manifest. Everything in it is meant to be
+A workspace is a directory containing a `workspace.tap` manifest. Everything in it is meant to be
 committed. Seven file kinds, all Markdown + YAML frontmatter:
 
 | Kind | File | Owns |
 |---|---|---|
-| `workspace` | `tap.md` | Name, default environment, variable providers, workspace-wide vars. |
-| `collection` | `collections/<slug>/_collection.md` | Base URL, named stages, default auth, default headers, collection vars. |
-| `request` | `*.req.md` | One HTTP (or WebSocket) call, as a fenced `http` block. |
-| `auth` | `auth/*.auth.md` or `collections/<slug>/*.auth.md` | A reusable authentication profile — shared workspace-wide, or owned by one collection. |
-| `env` | `environments/*.env.md` | A named set of variables. |
-| `flow` | `tests/*.flow.md` | Requests run in order, passing values from one response to the next. |
-| `test` | `tests/*.test.md` | A set of checks, each running one request or one flow. |
+| `workspace` | `workspace.tap` | Name, default environment, variable providers, workspace-wide vars. |
+| `collection` | `collections/<slug>/_collection.tap` | Base URL, default auth, default headers, collection vars. |
+| `request` | `*.req.tap` | One HTTP (or WebSocket) call, as a fenced `http` block. |
+| `auth` | `auth/*.auth.tap` or `collections/<slug>/*.auth.tap` | A reusable authentication profile — shared workspace-wide, or owned by one collection. |
+| `env` | `*.env.tap` | A named set of variables — global, or assigned to collections, each assignment carrying the base URL and default auth it points that one at. |
+| `flow` | `tests/*.flow.tap` | Requests run in order, passing values from one response to the next. |
+| `test` | `tests/*.test.tap` | A set of checks, each running one request or one flow. |
 
 ```
 my-service/
 ├── src/                          ← your code
 └── .tap/
-    ├── tap.md
+    ├── workspace.tap
     ├── auth/
-    │   ├── stripe-bearer.auth.md
-    │   └── corp-entra.auth.md
+    │   ├── stripe-bearer.auth.tap
+    │   └── corp-entra.auth.tap
     ├── environments/
-    │   ├── local.env.md
-    │   └── prod.env.md
+    │   ├── local.env.tap
+    │   └── prod.env.tap
     ├── tests/
-    │   ├── billing.test.md   ← a set of checks
-    │   └── checkout.flow.md  ← requests in order, values carried across
+    │   ├── billing.test.tap   ← a set of checks
+    │   └── checkout.flow.tap  ← requests in order, values carried across
     └── collections/
         └── stripe/
-            ├── _collection.md    ← baseUrl, stages, default auth/headers
-            ├── stripe-oauth.auth.md  ← auth owned by this collection
-            ├── create-customer.req.md
+            ├── _collection.tap    ← baseUrl, default auth/headers
+            ├── stripe-test.env.tap    ← env assigned to this collection
+            ├── stripe-oauth.auth.tap  ← auth owned by this collection
+            ├── create-customer.req.tap
             └── refunds/          ← plain grouping folder, no metadata
-                └── issue.req.md
+                └── issue.req.tap
 ```
 
-A runnable request is the *composition* of workspace + collection (+ stage) + auth +
-environment + request. Sub-folders inside a collection are pure grouping — they carry no
-metadata and no inheritance.
+A runnable request is the *composition* of workspace + collection + auth + environment +
+request. Sub-folders inside a collection are pure grouping — they carry no metadata and no
+inheritance.
 
 The [workspace format spec](workspace-format.md) is the authoritative reference for every
 frontmatter field, the variable cascade, and the canonical parse-error codes.
@@ -166,10 +289,10 @@ The request editor is one URL bar plus seven tabs:
 | **Variables** | Request-scoped variables with descriptions, defaults, and `required` flags. |
 | **Meta** | Name, tags, protocol (`http` / `websocket`). |
 | **Docs** | Markdown documentation rendered under the request. This is the request file's body. |
-| **Source** | The generated `*.req.md`, read-only. |
+| **Source** | The generated `*.req.tap`, read-only. |
 
 The URL bar splits the collection's base URL from the path, so a request stores
-`/v1/customers` and picks up `https://api.stripe.com` (or the active stage's override) at
+`/v1/customers` and picks up `https://api.stripe.com` (or the active environment's override) at
 render time. `{{variable}}` tokens are highlighted inline wherever they appear.
 
 **Executing.** Send runs the composed request and opens the response panel: status, duration,
@@ -246,7 +369,7 @@ still work end to end?"* — with two file kinds, both living in `tests/`.
 
 ### Flows — requests in order, values carried across
 
-A **flow** (`*.flow.md`) runs requests in sequence and passes values from one response into
+A **flow** (`*.flow.tap`) runs requests in sequence and passes values from one response into
 the next. Each step names a request, may override its variables, and may **extract** values
 out of its response for the steps below:
 
@@ -255,12 +378,12 @@ kind: flow
 name: Checkout
 steps:
 - name: Create the order
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   extract:
   - var: orderId
     jsonpath: $.order.id
 - name: Read it back
-  request: ../collections/demo/get-order.req.md
+  request: ../collections/demo/get-order.req.tap
   vars:
     id: '{{orderId}}'
 ```
@@ -283,7 +406,7 @@ happened.
 
 ### Test sets — a group of checks
 
-A **test set** (`*.test.md`) is a list of tests, each running either one request or one whole
+A **test set** (`*.test.tap`) is a list of tests, each running either one request or one whole
 flow, plus variables that apply to the entire run:
 
 ```yaml
@@ -293,12 +416,12 @@ vars:
   customer: cus_demo
 tests:
 - name: Rejects an unknown SKU
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   vars: { item: nope }
   assertions:
   - status: 404
 - name: Full checkout
-  flow: ./checkout.flow.md
+  flow: ./checkout.flow.tap
 ```
 
 Set variables are the last word on what the requests see — above the environment, above the
@@ -362,7 +485,7 @@ stdout — the mode built for scripts and AI agents. See [agent-surface.md](agen
 
 `<name>` is a path, the `name:` from the frontmatter, or the filename stem — so the thing you
 read off the Testing tab is the thing you can type. `--list` shows what's available. The
-workspace is found by walking up from the working directory to the nearest `tap.md` — or,
+workspace is found by walking up from the working directory to the nearest `workspace.tap` — or,
 when no ancestor has one, by taking the first workspace beneath the working directory
 (shallowest first, then alphabetical, to a bounded depth). Standing at a repo root whose
 workspace lives in a subfolder therefore just works; `--workspace` pins it explicitly.
@@ -442,7 +565,7 @@ This repo runs its own sample set that way on every push — see
 | 0 | Everything that ran, passed. |
 | 1 | A test or assertion failed. |
 | 2 | Usage error — unknown or ambiguous name, bad option. |
-| 3 | Workspace error — no `tap.md`, a file that doesn't parse. |
+| 3 | Workspace error — no `workspace.tap`, a file that doesn't parse. |
 | 4 | Auth couldn't be acquired without a human. |
 | 130 | Cancelled. |
 
@@ -495,7 +618,7 @@ authoring one) — lives in [agent-surface.md](agent-surface.md).
 
 ## Authentication
 
-Studio's auth profiles are reusable files (`*.auth.md`) referenced by requests or set as a
+Studio's auth profiles are reusable files (`*.auth.tap`) referenced by requests or set as a
 collection default. Creating one starts in a three-step wizard — pick a scope + template,
 fill the required fields, review — so you don't have to know the underlying field names.
 
@@ -509,13 +632,15 @@ decides which variables it can use:
 - **Workspace** (`auth/`) — shared by every collection, resolves workspace + environment
   variables. The right choice for a credential several APIs share.
 - **A collection** (`collections/<slug>/`) — owned by that collection, and additionally
-  resolves its variables and the selected stage's. Use it when the token URL, client id, or
-  audience already lives on the collection: switching stage (`dev` → `prod`) repoints the
-  profile with no edit. Tokens are cached per stage, so the two never mix.
+  resolves its variables. Use it when the token URL, client id, or audience already lives on
+  the collection: switching environment (`dev` → `prod`) repoints the profile with no edit.
+  Tokens are cached per environment, so the two never mix. The profile's own location decides
+  its scope, so a request borrowing it from another collection never drags an environment
+  across.
 
 Collection-scoped profiles appear in the **Requests** tree under their collection, next to
 the requests that use them, and in the **Auth** tab grouped under the collection name.
-Every auth picker (request `auth:`, collection/stage `defaultAuth`) groups its options the
+Every auth picker (request `auth:`, collection and environment `defaultAuth`) groups its options the
 same way, so it's always clear which scope a profile came from.
 
 | Template | What it does |
@@ -575,20 +700,19 @@ Write `\{{` for a literal brace pair.
 
 The cascade, lowest precedence first:
 
-1. `tap.md` `vars`
-2. the owning `_collection.md` `vars`
-3. the active collection **stage**
-4. the active `*.env.md`
-5. the request's own `vars`
-6. per-run overrides
+1. `workspace.tap` `vars`
+2. the owning `_collection.tap` `vars`
+3. the active `*.env.tap`
+4. the request's own `vars`
+5. per-run overrides
 
-Providers are declared in `tap.md` under `variableProviders` (a workspace provider shadows a
+Providers are declared in `workspace.tap` under `variableProviders` (a workspace provider shadows a
 same-named system one):
 
 | Type | Source |
 |---|---|
 | `env` | Process environment, gated by two allowlists — `TAP_VARS_ALLOWED` (names whose values may be *shown*) and `TAP_SECRETS_ALLOWED` (names that stay masked but resolve at execute time). Both take comma-separated globs; unset means deny-everything. |
-| `file` | `.tap/.vars/<provider>.yml` in the workspace. Values marked `secret: true` are encrypted at rest with AES-256-GCM under a passphrase-derived key. |
+| `file` | `.tap/.vars/<provider>.yml` in the workspace. Values marked `secret: true` are encrypted at rest with AES-256-GCM under a key derived from this machine's encryption key (`TAP_ENCRYPTION_KEY`, else `~/.tap/encryption.key`). |
 | `azkv` | Azure Key Vault, via `DefaultAzureCredential`. |
 | `1password` | 1Password, via the local [`op` CLI](https://www.1password.dev/cli), which must be installed. **Read-only** — secrets are created and rotated in 1Password itself, where the audit trail and sharing rules live. `mode` picks one of three shapes: **`environment`** — a [1Password Environment](https://www.1password.dev/environments)'s variables become the provider's (needs the beta CLI, 2.38.2-beta.01+); **`item`** — one item's *fields* become the variables, named after the field labels; **`vault`** — every item in a vault becomes a variable named after its title, valued by its `field` (default: the item's password/credential). Reads use whatever session `op` already has (desktop app integration, `op signin`) — set `serviceAccountToken` only for headless hosts. The settings form switches modes, browses your vaults, and auto-detects the `op` binary. |
 | `system` | Variables stored in Studio's own `system.json`, edited from Settings. Machine-local, outside the repo. |
@@ -611,7 +735,7 @@ let it propose changes.
   dependency and your existing CLI authentication is reused as-is. Pick the provider and the
   model in Settings; `/api/ai/status` reports what was detected and what still needs setup.
 - **It sees your workspace, not just your prompt.** The system prompt carries the current
-  request spec, the owning collection (base URL, default auth, shared headers, stages), the
+  request spec, the owning collection (base URL, default auth, shared headers), the
   available auth profiles, the environment names, and the variable catalog with scopes and
   secret flags — so it references things that actually exist instead of inventing them.
 - **It proposes, you apply.** The assistant never writes files. It returns a structured request
@@ -640,8 +764,75 @@ Because requests are Markdown, a change to a request is a change to a couple of 
 ## Importing from Postman
 
 `POST /api/collections/import/postman` (Create → Collection → *Import from Postman* in the UI)
-converts a Postman collection export into a Tap collection: one `_collection.md` plus a
-`*.req.md` per request, with folders preserved as grouping directories.
+converts a Postman collection export into a Tap collection: one `_collection.tap` plus a
+`*.req.tap` per request, with folders preserved as grouping directories.
+
+---
+
+## Importing from OpenAPI
+
+Create → Collection → *From OpenAPI*, or open a collection → **OpenAPI** tab → *Import from
+OpenAPI…*. Upload a document or fetch a URL; pick the operations; choose a layout. JSON or YAML,
+OpenAPI 3.0/3.1, and Swagger 2.0 (converted on read).
+
+Two layouts, chosen per import:
+
+| Layout | Result |
+|---|---|
+| **One `.req.tap` per operation** | Structured editing, assertions, per-request docs. Grouped into folders by first tag. |
+| **One `.http` file per tag** | Portable — opens and sends in Visual Studio, VS Code REST Client, JetBrains, httpyac, Kulala. |
+
+What else comes across: `servers[0]` becomes the collection's `baseUrl` and the rest become
+environments assigned to the collection; `securitySchemes` becomes an auth profile whose credentials are `{{variables}}` you
+fill in once (**nothing secret is ever taken from a document**); a `requestBody` schema becomes
+an example body, following `$ref` and preferring the spec's own `example`. Path and query
+parameters become declared `vars`, so a request documents its own inputs.
+
+Parsing is always server-side: the browser has no YAML parser, and `$ref` / `allOf` /
+Swagger-2.0 normalization must not exist in two places that can disagree. The document is
+staged first (`POST /api/openapi/documents` or `.../documents/fetch`) and the import references
+it by id, so the operation list you picked from and the document that gets written are provably
+the same one.
+
+### Re-syncing when the API changes
+
+Each import records `collections/<slug>/_openapi.lock.json` — the document it came from, plus
+two hashes per operation. One says whether *upstream* changed; the other, compared against the
+file on disk, says whether *you* changed it. Only when both moved is there a conflict.
+
+Open the collection → **OpenAPI** tab. It shows what the collection is linked to — source,
+spec version, layout, tracked operation count, when it was last synced — and *Re-sync…*
+re-fetches the recorded URL, diffs, and shows one row per operation with a
+**non-destructive default**:
+
+| Verdict | Default |
+|---|---|
+| New upstream | Create it |
+| Changed, file untouched | Update |
+| Changed **and** edited locally | **Keep mine** |
+| Gone upstream | Tag `deprecated` — never deleted |
+| File missing (renamed or moved away) | Leave alone |
+
+Updating never regenerates a file from scratch. It reads what is on disk, projects it to its
+spec, and overwrites only the fields the importer owns — URL, generated headers, example body.
+**Assertions, variables, auth, transport and the file's `id` are preserved structurally**: no
+code path here assigns them. Headers merge by name and are never removed, so one you added
+survives. A `.http` file is edited one `###` section at a time, and untouched sections come back
+byte-for-byte.
+
+Tracking survives a rename: `.req.tap` output is anchored by the request's `id:`, not its path,
+because moving a file rewrites no refs.
+
+The lock is machine-owned and invisible to the loader (which globs only `*.tap`, `*.md` and
+`*.http`). Deleting it loses re-sync and nothing else.
+
+### Suggested values (optional, needs an AI CLI)
+
+*Suggest values with AI* on the Options step proposes a value for each generated variable —
+reusing a workspace variable when one already means the same thing (`userName` → `{{user.name}}`),
+otherwise realistic sample data. It uses the same local CLI as the request assistant, sees
+variable **names, scopes and secret flags but never values**, and proposes only: you apply.
+The import is identical without it, which is the default state.
 
 ---
 

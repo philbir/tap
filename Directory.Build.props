@@ -26,8 +26,8 @@
     <Version Condition="'$(Version)' == ''">0.1.0-local</Version>
   </PropertyGroup>
 
-  <!-- Pack the shared README + icon into every packable project so PackageReadmeFile
-       and PackageIcon resolve. The Condition keeps non-packable projects out. -->
+  <!-- Pack the shared README into every packable project. Product-specific package
+       icons are selected after each project is evaluated in Directory.Build.targets. -->
   <!-- Projects that ship their own README opt out by setting PackageReadmeFile themselves;
        packing both to the same path is an error. -->
   <ItemGroup Condition="'$(IsPackable)' == 'true' AND !Exists('$(MSBuildProjectDirectory)/README.md')">

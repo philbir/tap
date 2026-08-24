@@ -24,7 +24,7 @@ public sealed class DescribeCommand : Command<DescribeCommand.Settings>
         public string Target { get; init; } = string.Empty;
 
         [CommandOption("-w|--workspace <DIR>")]
-        [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
+        [Description("Workspace directory. Defaults to the nearest ancestor containing workspace.tap, or the first workspace found beneath the working directory.")]
         public string? WorkspaceDirectory { get; init; }
 
         [CommandOption("--json")]
@@ -74,8 +74,7 @@ public sealed class DescribeCommand : Command<DescribeCommand.Settings>
 
         if (d.Collection is not null)
         {
-            var stages = d.Stages.Count > 0 ? $" · stages: {string.Join(", ", d.Stages)}" : string.Empty;
-            console.MarkupLine($"  [dim]collection:[/] {Markup.Escape(d.Collection)}{Markup.Escape(stages)}");
+            console.MarkupLine($"  [dim]collection:[/] {Markup.Escape(d.Collection)}");
         }
         console.MarkupLine(d.Auth is null
             ? "  [dim]auth:[/] none"

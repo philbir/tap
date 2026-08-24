@@ -33,7 +33,7 @@ tap-studio test "Order API" --filter refund  # only the tests whose name contain
 
 A selection matching nothing exits 2 rather than reporting a green run over zero tests.
 
-The workspace is found by walking up from the working directory to the nearest `tap.md`, the
+The workspace is found by walking up from the working directory to the nearest `workspace.tap`, the
 way `git` finds a repo. `--workspace <dir>` overrides it.
 
 ## Input variables
@@ -75,7 +75,7 @@ collapse into a `<details>`; failing ones stay open.
 | 0 | Everything that ran, passed. |
 | 1 | A test or assertion failed. |
 | 2 | Usage error — unknown or ambiguous name, bad option. |
-| 3 | Workspace error — no `tap.md`, a file that doesn't parse. |
+| 3 | Workspace error — no `workspace.tap`, a file that doesn't parse. |
 | 4 | Auth couldn't be acquired without a human. |
 | 130 | Cancelled. |
 
@@ -102,7 +102,7 @@ test that didn't really run.
 ## Related packages
 
 - **`Tap.Execution`** — the engine, if you want to embed it.
-- **`Tap`** — the separate tunnel/inspector CLI. Different product, different command; both
+- **`Tap`** — the separate Tap Tunnels CLI, with inspection built in. Different product and command; both
   can be installed side by side.
 
 Full documentation: [docs/studio.md](https://github.com/philbir/tap/blob/main/docs/studio.md).

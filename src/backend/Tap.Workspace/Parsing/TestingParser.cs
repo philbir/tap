@@ -4,7 +4,7 @@ using YamlDotNet.RepresentationModel;
 namespace Tap.Workspace.Parsing;
 
 /// <summary>
-/// Reads the <c>steps:</c> sequence of a <c>*.flow.md</c> file (§10 of
+/// Reads the <c>steps:</c> sequence of a <c>*.flow.tap</c> file (§10 of
 /// <c>docs/workspace-format.md</c>) into <see cref="FlowStep"/> values.
 ///
 /// <para>Unlike <see cref="AssertParser"/> there is no sugar here: a step is a mapping with
@@ -221,7 +221,7 @@ internal static class FlowParser
 }
 
 /// <summary>
-/// Reads the <c>tests:</c> sequence of a <c>*.test.md</c> file (§11 of
+/// Reads the <c>tests:</c> sequence of a <c>*.test.tap</c> file (§11 of
 /// <c>docs/workspace-format.md</c>) into <see cref="TestEntry"/> values.
 /// </summary>
 internal static class TestSetParser

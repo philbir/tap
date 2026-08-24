@@ -62,8 +62,7 @@ public static class GraphQLSchemaEndpoint
         {
             try
             {
-                var rendered = await svc.RenderAsync(body.Path, body.Env, null, ct, body.Stage)
-                    .ConfigureAwait(false);
+                var rendered = await svc.RenderAsync(body.Path, body.Env, null, ct).ConfigureAwait(false);
                 HttpExecutionHelpers.ValidateScheme(rendered);
 
                 var isSdl = string.Equals(body.Mode, "sdl", StringComparison.OrdinalIgnoreCase);

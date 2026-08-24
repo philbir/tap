@@ -5,8 +5,8 @@ using Tap.Workspace.Variables;
 namespace Tap.Workspace.Rendering;
 
 /// <summary>
-/// Two-layer resolver: file-scope cascade (workspace/collection/stage/env/request +
-/// overrides) composes a flat dictionary, then <see cref="Interpolation"/> walks tokens —
+/// Two-layer resolver: file-scope cascade (workspace/collection/env/request + overrides)
+/// composes a flat dictionary, then <see cref="Interpolation"/> walks tokens —
 /// first against the cascade, then across the <see cref="VariableProviderRegistry"/>.
 ///
 /// <para>"Overwrite by name" — within the cascade, later scopes overwrite earlier ones; within
@@ -21,46 +21,57 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     /// arrive here: <c>id: '{{orderId}}'</c> has to see the value an earlier step bound, and a
     /// plain override would land in the cascade unexpanded and go out on the wire verbatim.
     /// Applied after <paramref name="overrides"/>, in order, each seeing the ones before it.</param>
+    /// <param name="declaredOverrides">Names among <paramref name="overrides"/> that came from
+    /// a <c>vars:</c> block rather than from a response or a command line — a test set's or a
+    /// flow's own variables. Only those may hold a reference to another variable.</param>
+    /// <param name="env">The environment the caller selected. Applied only when it is in scope
+    /// for the request's collection — a scoped env carried across a collection boundary (a test
+    /// set that spans two collections, say) drops out rather than contributing another
+    /// collection's variables. <see cref="ResolvedRequestMetadata.EnvPath"/> reports the one
+    /// that actually applied.</param>
     public async ValueTask<ResolvedRequest> RenderAsync(
         RequestFile request,
         EnvFile? env,
         IReadOnlyDictionary<string, string>? overrides,
         CancellationToken ct,
-        string? stageName = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         var requestDir = Path.GetDirectoryName(request.RelativePath) ?? string.Empty;
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
-        var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
+        var collection = CollectionLocator.ForRequest(workspace, request);
+        env = InScope(env, collection);
         var transport = new RequestTransportSettings
         {
             IgnoreTlsErrors = request.Transport.IgnoreTlsErrors ?? collection?.Transport.IgnoreTlsErrors,
             TimeoutMs = request.Transport.TimeoutMs ?? collection?.Transport.TimeoutMs,
         };
+        var history = HistoryOptions.Resolve(
+            workspace.Manifest?.History, collection?.History, request.History);
 
-        var auth = workspace.Resolve(request.Auth, requestDir) as AuthFile;
-        if (auth is null && stage?.DefaultAuth is not null && collection is not null)
-        {
-            var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-            auth = workspace.Resolve(stage.DefaultAuth, collectionDir) as AuthFile;
-        }
-        if (auth is null && collection?.DefaultAuth is not null)
-        {
-            var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-            auth = workspace.Resolve(collection.DefaultAuth, collectionDir) as AuthFile;
-        }
+        var auth = workspace.Resolve(request.Auth, requestDir) as AuthFile
+            ?? ResolveEnvAuth(workspace, env, collection)
+            ?? ResolveCollectionAuth(workspace, collection);
 
-        var (cascade, secretNames) = BuildCascade(request, collection, stage, env, overrides);
-        await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
+        var built = BuildCascade(request, collection, env, overrides, declaredOverrides);
+        var cascade = built.Values;
+        var secretNames = built.SecretNames;
+        var declared = built.Declared;
+        await ApplyTemplateOverridesAsync(built, templateOverrides, ct).ConfigureAwait(false);
 
-        var expandedBlock = await Interpolation.ExpandAsync(request.HttpBlock, cascade, registry, ct).ConfigureAwait(false);
+        // Resolve the effective base URL *before* the block is interpolated, so the block can
+        // refer to it as {{baseUrl}}. It only needs the cascade and the providers, never the
+        // block, so hoisting it costs nothing and buys the portable spelling.
+        var effectiveBaseUrl = await BindBaseUrlAsync(built, collection, env, request.Protocol, ct)
+            .ConfigureAwait(false);
+
+        var expandedBlock = await Interpolation.ExpandAsync(request.HttpBlock, cascade, registry, ct, declared).ConfigureAwait(false);
         var parsed = HttpBlockParser.Parse(expandedBlock);
 
         var url = parsed.Url;
         string? resolvedBaseUrl = null;
         if (!HasAnyScheme(url))
         {
-            if (collection is null || string.IsNullOrWhiteSpace(collection.BaseUrl) && string.IsNullOrWhiteSpace(stage?.BaseUrl))
+            if (effectiveBaseUrl is null)
             {
                 // The URL has already been through interpolation, so it can carry a resolved secret
                 // — name the request instead of echoing it.
@@ -69,11 +80,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
                     "The request URL is not absolute and the owning collection has no baseUrl to fall back on.",
                     request.RelativePath));
             }
-            var baseUrlSource = !string.IsNullOrWhiteSpace(stage?.BaseUrl) ? stage!.BaseUrl! : collection.BaseUrl;
-            var baseUrl = await Interpolation.ExpandAsync(baseUrlSource, cascade, registry, ct).ConfigureAwait(false);
-            baseUrl = NormalizeScheme(baseUrl, request.Protocol);
-            url = JoinUrl(baseUrl, url);
-            resolvedBaseUrl = baseUrl;
+            url = JoinUrl(effectiveBaseUrl, url);
+            resolvedBaseUrl = effectiveBaseUrl;
         }
         else
         {
@@ -90,14 +98,14 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         if (collection is not null)
         {
             foreach (var (k, v) in collection.DefaultHeaders)
-                resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct).ConfigureAwait(false);
+                resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct, declared).ConfigureAwait(false);
         }
         foreach (var (k, v) in parsed.Headers) resolvedHeaders[k] = v;
 
         var authHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         ApplyAuthHeaders(auth, authHeaders);
         foreach (var (k, v) in authHeaders)
-            resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct).ConfigureAwait(false);
+            resolvedHeaders[k] = await Interpolation.ExpandAsync(v, cascade, registry, ct, declared).ConfigureAwait(false);
 
         // Re-check the fully assembled request line and headers: the baseUrl, the collection
         // defaults and the auth-derived values never passed through HttpBlockParser's own guard.
@@ -108,7 +116,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             HttpBlockParser.EnsureNoLineBreaks($"The '{k}' header value", v);
         }
 
-        var assertions = await RenderAssertionsAsync(request.Assertions, cascade, secretNames, ct).ConfigureAwait(false);
+        var assertions = await RenderAssertionsAsync(request.Assertions, cascade, secretNames, declared, ct).ConfigureAwait(false);
 
         // Built last, after every expansion has run, so the registry's secret cache is
         // complete. Cascade secrets are collected by their winning value; the auth-derived
@@ -117,7 +125,13 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         var secretValues = new List<string>(registry.SecretValues);
         foreach (var name in secretNames)
         {
-            if (cascade.TryGetValue(name, out var secretValue)) secretValues.Add(secretValue);
+            // A declared secret that only holds a reference has nothing of its own to mask —
+            // whatever the reference resolved to came through the registry, which collected it.
+            if (cascade.TryGetValue(name, out var secretValue)
+                && !(declared.Contains(name) && secretValue.Contains("{{", StringComparison.Ordinal)))
+            {
+                secretValues.Add(secretValue);
+            }
         }
         var redactor = new SecretRedactor(secretValues, authHeaders.Keys);
 
@@ -129,13 +143,13 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             Body = parsed.Body,
             Protocol = request.Protocol,
             Transport = transport,
+            History = history,
             Assertions = assertions,
             Redactor = redactor,
             Metadata = new ResolvedRequestMetadata
             {
                 SourceRequestPath = request.RelativePath,
                 EnvPath = env?.RelativePath,
-                StageName = stage?.Name,
                 VariablesUsed = registry.Trace,
                 ResolvedBaseUrl = resolvedBaseUrl,
             },
@@ -156,16 +170,22 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         EnvFile? env,
         IReadOnlyList<AssertSpec> assertions,
         CancellationToken ct,
-        string? stageName = null,
         bool tolerant = false,
         IReadOnlyDictionary<string, string>? overrides = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
-        var stage = collection?.FindStage(stageName) ?? collection?.FindStage(collection.DefaultStage);
-        var (cascade, secretNames) = BuildCascade(request, collection, stage, env, overrides);
-        await ApplyTemplateOverridesAsync(cascade, secretNames, templateOverrides, ct).ConfigureAwait(false);
-        return await RenderAssertionsAsync(assertions, cascade, secretNames, ct, tolerant).ConfigureAwait(false);
+        var collection = CollectionLocator.ForRequest(workspace, request);
+        env = InScope(env, collection);
+        var built = BuildCascade(request, collection, env, overrides, declaredOverrides);
+        var cascade = built.Values;
+        var secretNames = built.SecretNames;
+        await ApplyTemplateOverridesAsync(built, templateOverrides, ct).ConfigureAwait(false);
+        // Same built-in the send path binds, so an assertion reading {{baseUrl}} gets the value
+        // the request was actually built against rather than an unknown-variable error.
+        await BindBaseUrlAsync(built, collection, env, request.Protocol, ct).ConfigureAwait(false);
+        return await RenderAssertionsAsync(assertions, cascade, secretNames, built.Declared, ct, tolerant)
+            .ConfigureAwait(false);
     }
 
     /// <summary>
@@ -174,8 +194,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
     /// something secret is marked so an assertion built from it reports <c>***</c>.
     /// </summary>
     private async ValueTask ApplyTemplateOverridesAsync(
-        Dictionary<string, string> cascade,
-        HashSet<string> secretNames,
+        Cascade built,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides,
         CancellationToken ct)
     {
@@ -183,56 +202,157 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
 
         foreach (var (name, template) in templateOverrides)
         {
-            var (value, secret) = await ExpandTrackingSecretsAsync(template, cascade, secretNames, ct)
-                .ConfigureAwait(false);
-            cascade[name] = value;
-            if (secret) secretNames.Add(name);
-            else secretNames.Remove(name);
+            var (value, secret) = await ExpandTrackingSecretsAsync(
+                template, built.Values, built.SecretNames, built.Declared, ct).ConfigureAwait(false);
+            built.Values[name] = value;
+            // What lands here is already expanded; leaving the name declared would put it
+            // through a second pass the next time something reads it.
+            built.Declared.Remove(name);
+            if (secret) built.SecretNames.Add(name);
+            else built.SecretNames.Remove(name);
         }
     }
 
-    /// <summary>Composes the variable cascade — workspace &lt; collection &lt; stage &lt; env
-    /// &lt; request &lt; overrides — along with the set of names whose winning definition is
-    /// marked secret.</summary>
-    private (Dictionary<string, string> Cascade, HashSet<string> SecretNames) BuildCascade(
+    /// <summary>
+    /// The env to actually apply: the caller's, unless it is scoped to collections that don't
+    /// include this request's. Returning null there — rather than throwing — is what lets a test
+    /// set spanning several collections run under one <c>--env</c> flag, with the scoped env
+    /// contributing to the collection it was written for and staying out of the others.
+    /// </summary>
+    private static EnvFile? InScope(EnvFile? env, CollectionFile? collection)
+        => env is null || env.AppliesTo(SlugOf(collection)) ? env : null;
+
+    private static string? SlugOf(CollectionFile? collection)
+        => collection is null ? null : CollectionLocator.SlugForFile(collection.RelativePath);
+
+    /// <summary>The env's <c>defaultAuth</c> <em>for this collection</em>, resolved relative to
+    /// the env file's own directory — the env declared the ref, so it owns the path it is
+    /// written against. Null for a global env, which assigns no collection and so overrides
+    /// nothing.</summary>
+    private static AuthFile? ResolveEnvAuth(LoadedWorkspace workspace, EnvFile? env, CollectionFile? collection)
+        => env?.BindingFor(SlugOf(collection))?.DefaultAuth is not { } authRef
+            ? null
+            : workspace.Resolve(authRef, Path.GetDirectoryName(env.RelativePath) ?? string.Empty) as AuthFile;
+
+    private static AuthFile? ResolveCollectionAuth(LoadedWorkspace workspace, CollectionFile? collection)
+        => collection?.DefaultAuth is null
+            ? null
+            : workspace.Resolve(collection.DefaultAuth, Path.GetDirectoryName(collection.RelativePath) ?? string.Empty) as AuthFile;
+
+    /// <summary>
+    /// Resolves the base URL for this render — the active environment's override for this
+    /// collection when it declares one, else the collection's own — and binds it into the cascade as
+    /// <see cref="BaseUrlVariable"/>. Returns the resolved value (scheme-normalized for the
+    /// protocol), or null when neither answers — which is only an error if the request line turns
+    /// out to be relative.
+    ///
+    /// <para>The binding is skipped when a Tap scope already defines the name: the built-in fills
+    /// a gap, it does not overrule an author who declared their own <c>baseUrl</c> var. The
+    /// trailing <c>/</c> is trimmed so the idiomatic <c>{{baseUrl}}/orders</c> can't produce a
+    /// doubled separator.</para>
+    /// </summary>
+    private async ValueTask<string?> BindBaseUrlAsync(
+        Cascade built, CollectionFile? collection, EnvFile? env, RequestProtocol protocol,
+        CancellationToken ct)
+    {
+        var overridden = env?.BindingFor(SlugOf(collection))?.BaseUrl;
+        var source = !string.IsNullOrWhiteSpace(overridden) ? overridden : collection?.BaseUrl;
+        if (string.IsNullOrWhiteSpace(source)) return null;
+
+        var expanded = await Interpolation.ExpandAsync(source!, built.Values, registry, ct, built.Declared)
+            .ConfigureAwait(false);
+        var normalized = NormalizeScheme(expanded, protocol);
+        if (!built.TapDefined.Contains(BaseUrlVariable))
+        {
+            built.Values[BaseUrlVariable] = normalized.TrimEnd('/');
+            // Already expanded — see ApplyTemplateOverridesAsync.
+            built.Declared.Remove(BaseUrlVariable);
+        }
+        return normalized;
+    }
+
+    /// <summary>The built-in name bound to the effective (env-resolved) base URL. Exists so
+    /// a <c>.http</c> file can write <c>GET {{baseUrl}}/orders</c> and mean the same thing in
+    /// Visual Studio — where its own <c>@baseUrl</c> answers — and in Tap, where the collection
+    /// and the selected environment answer instead.</summary>
+    public const string BaseUrlVariable = "baseUrl";
+
+    /// <summary>The assembled cascade, the names whose winning definition is secret, the names
+    /// any Tap scope defined (i.e. everything except the portable layer) — which decides whether
+    /// the built-in <see cref="BaseUrlVariable"/> is allowed to bind — and the names whose
+    /// winning value came from a <c>vars:</c> block.
+    ///
+    /// <para><see cref="Declared"/> is what tells <see cref="Interpolation"/> which values are
+    /// templates in their own right: a declared <c>'{{file:stripe.key}}'</c> resolves, while a
+    /// value a flow step extracted from a response never does. See
+    /// <see cref="BuildCascade"/>.</para></summary>
+    private readonly record struct Cascade(
+        Dictionary<string, string> Values,
+        HashSet<string> SecretNames,
+        HashSet<string> TapDefined,
+        HashSet<string> Declared);
+
+    /// <summary>Composes the variable cascade — portable &lt; workspace &lt; collection &lt; env
+    /// &lt; request &lt; overrides.
+    ///
+    /// <para>Portable vars (a <c>.http</c> file's <c>@name = value</c> lines) sit at the bottom
+    /// rather than at request scope. They are what the file resolves to when it is opened by a
+    /// tool that is not Tap, so anything configured in the workspace is by definition the more
+    /// deliberate answer. See <see cref="RequestFile.PortableVars"/>.</para></summary>
+    private Cascade BuildCascade(
         RequestFile request,
         CollectionFile? collection,
-        CollectionStage? stage,
         EnvFile? env,
-        IReadOnlyDictionary<string, string>? overrides)
+        IReadOnlyDictionary<string, string>? overrides,
+        IReadOnlySet<string>? declaredOverrides = null)
     {
         var cascade = new Dictionary<string, string>(StringComparer.Ordinal);
         // Sensitivity is tracked alongside the values because merging keeps only the value —
         // and an assertion needs to know whether the expected value it just expanded is safe
         // to echo back into a results pane.
         var secretNames = new HashSet<string>(StringComparer.Ordinal);
+        var tapDefined = new HashSet<string>(StringComparer.Ordinal);
+        var declared = new HashSet<string>(StringComparer.Ordinal);
 
-        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames);
-        if (collection is not null) MergeVars(cascade, collection.Vars, secretNames);
-        if (stage is not null) MergeVars(cascade, stage.Vars, secretNames);
-        if (env is not null) MergeVars(cascade, env.Vars, secretNames);
-        MergeVars(cascade, request.Vars, secretNames);
+        MergeVars(cascade, request.PortableVars, secretNames, declared: declared);
+        if (workspace.Manifest is not null) MergeVars(cascade, workspace.Manifest.Vars, secretNames, tapDefined, declared);
+        if (collection is not null) MergeVars(cascade, collection.Vars, secretNames, tapDefined, declared);
+        if (env is not null) MergeVars(cascade, env.Vars, secretNames, tapDefined, declared);
+        MergeVars(cascade, request.Vars, secretNames, tapDefined, declared);
 
         if (overrides is not null)
         {
             foreach (var (k, v) in overrides)
             {
                 cascade[k] = v;
+                tapDefined.Add(k);
                 // A per-run override is a literal the caller just typed, not a secret lookup.
                 secretNames.Remove(k);
+                // …and not a template either, unless the caller vouched for it: a test set's
+                // own `vars:` arrive through this tier alongside values a flow step pulled out
+                // of a response, and only the first kind may hold a reference.
+                if (declaredOverrides?.Contains(k) == true) declared.Add(k);
+                else declared.Remove(k);
             }
         }
 
-        return (cascade, secretNames);
+        return new Cascade(cascade, secretNames, tapDefined, declared);
     }
 
+    /// <param name="tapDefined">Collects the names this scope defined. Null for the portable
+    /// layer, which is deliberately not counted as a Tap-side definition.</param>
+    /// <param name="declared">Collects every name that came out of a <c>vars:</c> block,
+    /// portable layer included — those values are templates and may reference others.</param>
     private static void MergeVars(
-        Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src, HashSet<string> secretNames)
+        Dictionary<string, string> dest, IReadOnlyDictionary<string, VarSpec> src,
+        HashSet<string> secretNames, HashSet<string>? tapDefined = null, HashSet<string>? declared = null)
     {
         foreach (var (k, v) in src)
         {
             if (v.Default is not { } d) continue;
             dest[k] = d;
+            tapDefined?.Add(k);
+            declared?.Add(k);
             // A later scope redefining the name also redefines its sensitivity — an env that
             // overrides a secret with a literal test value is no longer holding a secret.
             if (v.Secret) secretNames.Add(k);
@@ -254,6 +374,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         IReadOnlyList<AssertSpec> assertions,
         IReadOnlyDictionary<string, string> cascade,
         IReadOnlySet<string> secretNames,
+        IReadOnlySet<string> declared,
         CancellationToken ct,
         bool tolerant = false)
     {
@@ -266,7 +387,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             {
                 try
                 {
-                    resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, ct).ConfigureAwait(false));
+                    resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, declared, ct).ConfigureAwait(false));
                 }
                 catch (WorkspaceParseException ex)
                 {
@@ -274,7 +395,7 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
                 }
                 continue;
             }
-            resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, ct).ConfigureAwait(false));
+            resolved.Add(await RenderOneAsync(assertion, cascade, secretNames, declared, ct).ConfigureAwait(false));
         }
         return resolved;
     }
@@ -283,18 +404,19 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         AssertSpec assertion,
         IReadOnlyDictionary<string, string> cascade,
         IReadOnlySet<string> secretNames,
+        IReadOnlySet<string> declared,
         CancellationToken ct)
     {
         var selector = assertion.Selector is null
             ? null
-            : await Interpolation.ExpandAsync(assertion.Selector, cascade, registry, ct).ConfigureAwait(false);
+            : await Interpolation.ExpandAsync(assertion.Selector, cascade, registry, ct, declared).ConfigureAwait(false);
 
         var secret = false;
         string? expected = null;
         if (assertion.Expected is not null)
         {
-            (expected, secret) = await ExpandTrackingSecretsAsync(assertion.Expected, cascade, secretNames, ct)
-                .ConfigureAwait(false);
+            (expected, secret) = await ExpandTrackingSecretsAsync(
+                assertion.Expected, cascade, secretNames, declared, ct).ConfigureAwait(false);
         }
 
         IReadOnlyList<string>? expectedList = null;
@@ -303,8 +425,8 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
             var expandedList = new List<string>(list.Count);
             foreach (var item in list)
             {
-                var (value, itemSecret) = await ExpandTrackingSecretsAsync(item, cascade, secretNames, ct)
-                    .ConfigureAwait(false);
+                var (value, itemSecret) = await ExpandTrackingSecretsAsync(
+                    item, cascade, secretNames, declared, ct).ConfigureAwait(false);
                 expandedList.Add(value);
                 secret |= itemSecret;
             }
@@ -322,10 +444,11 @@ public sealed class WorkspaceRenderer(LoadedWorkspace workspace, VariableProvide
         string input,
         IReadOnlyDictionary<string, string> cascade,
         IReadOnlySet<string> secretNames,
+        IReadOnlySet<string> declared,
         CancellationToken ct)
     {
         var traceBefore = registry.Trace.Count;
-        var value = await Interpolation.ExpandAsync(input, cascade, registry, ct).ConfigureAwait(false);
+        var value = await Interpolation.ExpandAsync(input, cascade, registry, ct, declared).ConfigureAwait(false);
 
         foreach (var name in Interpolation.ReferencedNames(input))
         {

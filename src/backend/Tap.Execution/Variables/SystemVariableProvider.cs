@@ -50,6 +50,9 @@ public sealed class SystemVariableProvider : IVariableProvider
         _store.SetVariable(name, value, isSecret);
         return ValueTask.CompletedTask;
     }
+
+    public ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
+        => ValueTask.FromResult(_store.RemoveVariable(name));
 }
 
 public sealed class SystemVariableProviderFactory : IVariableProviderFactory

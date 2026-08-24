@@ -21,8 +21,11 @@ import { EditorShell, TabDot } from './EditorShell'
 import { KvTable } from './KvTable'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
+import { restoreDraft, usePublishDraft } from './useDraft'
+import { useTabView } from './useTabView'
 import { VariableInput } from './VariableInput'
 import { VariablesPanel } from './VariablesPanel'
+import { COLLECTION_FILE } from '../shell/tapFiles'
 
 interface Props {
   path: string
@@ -53,17 +56,17 @@ export function AuthEditor({ path }: Props) {
 
   const [detail, setDetail] = useState<AuthDetail | null>(null)
   // A profile stored under `collections/<slug>/` is owned by that collection: its fields
-  // expand against the collection's (and active stage's) variables, so the variable panel
+  // expand against the collection's (and active environment's) variables, so the variable panel
   // and every VariableInput must resolve through the same context the runner uses.
   const collectionSlug = detail?.collection ?? null
   const variableContext = useMemo<VariableContext>(() => ({
     envPath: activeEnv ?? undefined,
-    collectionPath: collectionSlug ? `collections/${collectionSlug}/_collection.md` : undefined,
+    collectionPath: collectionSlug ? `collections/${collectionSlug}/${COLLECTION_FILE}` : undefined,
   }), [activeEnv, collectionSlug])
 
   const [spec, setSpec] = useState<AuthSpec | null>(null)
   const [savedSpec, setSavedSpec] = useState<AuthSpec | null>(null)
-  const [tab, setTab] = useState<string | null>('config')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'config')
   const [saving, setSaving] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
 
@@ -74,13 +77,16 @@ export function AuthEditor({ path }: Props) {
       if (cancelled) return
       setDetail(d)
       const initial = specFromDetail(d, path)
-      setSpec(initial)
+      // Keeps unsaved edits across a tab switch and across the re-fetch a `generation`
+      // bump forces; `savedSpec` stays whatever is actually on disk.
+      setSpec(restoreDraft(path, initial))
       setSavedSpec(initial)
     }).catch((e: Error) => !cancelled && setError(e.message))
     return () => { cancelled = true }
   }, [path, generation])
 
   const dirty = useMemo(() => JSON.stringify(spec) !== JSON.stringify(savedSpec), [spec, savedSpec])
+  usePublishDraft(path, spec, dirty)
 
   function update<K extends keyof AuthSpec>(key: K, value: AuthSpec[K]) {
     setSpec((cur) => cur ? { ...cur, [key]: value } : cur)
@@ -270,7 +276,7 @@ export function AuthEditor({ path }: Props) {
 
 /**
  * Where this profile lives, and therefore which variables its fields can reference. A
- * profile under `collections/<slug>/` sees workspace < collection < stage < env; one under
+ * profile under `collections/<slug>/` sees workspace < collection < env; one under
  * `auth/` only sees workspace < env, but is reusable from every collection.
  */
 function ScopeRow({ slug }: { slug: string | null }) {
@@ -299,7 +305,7 @@ function ScopeRow({ slug }: { slug: string | null }) {
         {label}
       </Anchor>
       <Text size="xs" c="dimmed">
-        — this profile can use the collection's variables and stages.
+        — this profile can use the collection's variables.
       </Text>
     </Group>
   )
@@ -607,7 +613,7 @@ function OAuth2Fields({ spec, update }: { spec: AuthSpec; update: <K extends key
     // Pass the profile path so an authority like `{{IDP_URL}}/tenant` resolves through the
     // owning collection's variables, not just the workspace's — and the active env so it
     // resolves against the same one the field's own preview highlighted.
-    api.oidcDiscovery(debouncedAuthority.trim(), spec.path, undefined, activeEnv ?? undefined).then((doc) => {
+    api.oidcDiscovery(debouncedAuthority.trim(), spec.path, activeEnv ?? undefined).then((doc) => {
       if (cancelled) return
       update('tokenUrl', doc.tokenEndpoint)
       update('authorizeUrl', doc.authorizationEndpoint)

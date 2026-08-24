@@ -12,14 +12,22 @@ namespace Tap.Workspace;
 /// </summary>
 public sealed class WorkspaceLoader
 {
-    /// <summary>Legacy folder name used by older workspace layouts.</summary>
+    /// <summary>Legacy folder name used by older workspace layouts. Note this is a *folder*
+    /// name that happens to match the canonical file extension; the two never collide because
+    /// the walk enumerates files and directories separately.</summary>
     public const string TapDirectoryName = ".tap";
-    public const string ManifestFileName = "tap.md";
+
+    /// <summary>Canonical manifest filename — what a new workspace gets.</summary>
+    public const string ManifestFileName = KindResolver.ManifestFileName;
+
+    /// <summary>Pre-0.7.0 manifest filename. Workspace *detection* must accept it for as long as
+    /// the loader reads the legacy family.</summary>
+    public const string LegacyManifestFileName = KindResolver.LegacyManifestFileName;
 
     /// <summary>
     /// Ceiling on the size of a single workspace file. A workspace is whatever the developer
-    /// cloned, so every <c>*.md</c> in it is untrusted input; without a cap a multi-gigabyte file
-    /// would be pulled into memory whole by the <c>ReadAllText</c> below.
+    /// cloned, so every candidate file in it is untrusted input; without a cap a multi-gigabyte
+    /// file would be pulled into memory whole by the <c>ReadAllText</c> below.
     /// </summary>
     public const long MaxFileBytes = 8L * 1024 * 1024;
 
@@ -50,6 +58,15 @@ public sealed class WorkspaceLoader
         "node_modules", ".git", ".hg", ".svn", ".venv", "__pycache__", "bin", "obj", "target",
     };
 
+    /// <summary>
+    /// True when <paramref name="directory"/> holds a workspace manifest under either extension
+    /// family. Workspace *detection* has to stay dual-read for the whole 0.7.x line — a user who
+    /// hasn't migrated yet must still be able to open their workspace.
+    /// </summary>
+    public static bool HasManifest(string directory)
+        => File.Exists(Path.Combine(directory, ManifestFileName))
+        || File.Exists(Path.Combine(directory, LegacyManifestFileName));
+
     /// <summary>Loads the workspace rooted at <paramref name="rootDirectory"/>.</summary>
     public LoadedWorkspace Load(string rootDirectory)
     {
@@ -60,7 +77,7 @@ public sealed class WorkspaceLoader
         var files = new List<WorkspaceFile>();
         var errors = new List<WorkspaceError>();
 
-        var scan = ScanMarkdown(tapDir);
+        var scan = ScanWorkspaceFiles(tapDir);
         if (scan.Truncated)
         {
             errors.Add(new WorkspaceError(
@@ -70,13 +87,46 @@ public sealed class WorkspaceLoader
                 "Switch to the folder that actually holds your Tap files."));
         }
 
+        // A half-finished migration leaves orders.req.md beside orders.req.tap. They are the same
+        // logical file, so loading both would double every request in the workspace. Collect the
+        // canonical paths up front so the winner is the canonical file regardless of walk order —
+        // "whichever the stack popped first" is not a rule anyone can reason about.
+        var canonicalPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var path in scan.Files)
+        {
+            if (KindResolver.Resolve(Path.GetFileName(path)) is { IsLegacy: false })
+                canonicalPaths.Add(CanonicalRelativePath(tapDir, path));
+        }
+
         foreach (var path in scan.Files)
         {
             var fileName = Path.GetFileName(path);
-            if (KindResolver.FromFileName(fileName) is null)
-                continue; // README.md etc. — silently skipped.
+            if (KindResolver.Resolve(fileName) is not { } match)
+                continue; // README.md, notes.tap etc. — silently skipped.
 
             var relative = Path.GetRelativePath(tapDir, path).Replace('\\', '/');
+
+            if (match.IsLegacy)
+            {
+                var canonical = CanonicalRelativePath(tapDir, path);
+                if (canonicalPaths.Contains(canonical))
+                {
+                    errors.Add(new WorkspaceError(
+                        WorkspaceErrorCode.E_EXTENSION_COLLISION,
+                        $"Superseded by '{canonical}' and not loaded. Delete this leftover from the migration.",
+                        relative));
+                    continue;
+                }
+
+                errors.Add(new WorkspaceError(
+                    WorkspaceErrorCode.W_LEGACY_EXTENSION,
+                    $"Uses the legacy '{KindResolver.LegacyExtension}' extension, which stops loading in 0.8.0. " +
+                    $"Run 'tap-studio migrate' to rename it to '{KindResolver.ToCanonicalFileName(fileName)}' " +
+                    "and rewrite the refs that point at it.",
+                    relative,
+                    Severity: WorkspaceErrorSeverity.Warning));
+            }
+
             try
             {
                 var length = new FileInfo(path).Length;
@@ -90,6 +140,18 @@ public sealed class WorkspaceLoader
                 }
 
                 var content = File.ReadAllText(path);
+
+                // .http files have no frontmatter and hold N requests, so they are dispatched
+                // here rather than inside FileParser — which exists to enforce the
+                // frontmatter-and-one-kind contract that this format deliberately doesn't have.
+                if (match.IsHttpFile)
+                {
+                    var result = HttpFileParser.Parse(relative, content);
+                    files.AddRange(result.Requests);
+                    errors.AddRange(result.Errors);
+                    continue;
+                }
+
                 files.Add(FileParser.Parse(relative, content));
             }
             catch (WorkspaceParseException ex)
@@ -110,7 +172,19 @@ public sealed class WorkspaceLoader
         return new LoadedWorkspace(rootDirectory, tapDir, files, errors);
     }
 
-    /// <summary>Result of the bounded folder walk: the <c>*.md</c> paths found, and whether we
+    /// <summary>
+    /// The workspace-relative path this file will have once migrated — its own path for a
+    /// canonical file, the renamed one for a legacy file. Used to pair the two families up.
+    /// </summary>
+    private static string CanonicalRelativePath(string root, string fullPath)
+    {
+        var relative = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
+        var canonicalName = KindResolver.ToCanonicalFileName(Path.GetFileName(relative));
+        var cut = relative.LastIndexOf('/');
+        return cut < 0 ? canonicalName : string.Concat(relative.AsSpan(0, cut + 1), canonicalName);
+    }
+
+    /// <summary>Result of the bounded folder walk: the candidate paths found, and whether we
     /// ran out of budget before covering the tree.</summary>
     private readonly record struct ScanResult(
         IReadOnlyList<string> Files,
@@ -119,8 +193,13 @@ public sealed class WorkspaceLoader
         bool Truncated);
 
     /// <summary>
-    /// Walks <paramref name="root"/> for <c>*.md</c> files under <see cref="ScanBudget"/> /
-    /// <see cref="MaxDirectories"/>.
+    /// Walks <paramref name="root"/> for candidate workspace files under
+    /// <see cref="ScanBudget"/> / <see cref="MaxDirectories"/>.
+    ///
+    /// <para>The globs are a cheap pre-filter, not the gate: <see cref="KindResolver"/> decides
+    /// what is actually a Tap file. That matters on Windows, where 8.3 short-name matching lets
+    /// <c>*.tap</c> also return names like <c>notes.tape</c> — harmless, because the resolver
+    /// rejects them.</para>
     ///
     /// <para>Hand-rolled rather than <c>EnumerateFiles(…, SearchOption.AllDirectories)</c> for
     /// three reasons: the budget has to be checked between directories, <see cref="SkippedDirectories"/>
@@ -129,7 +208,7 @@ public sealed class WorkspaceLoader
     /// never ends. Unreadable folders are skipped: a permission-denied subtree is not a reason
     /// to fail the whole workspace.</para>
     /// </summary>
-    private static ScanResult ScanMarkdown(string root)
+    private static ScanResult ScanWorkspaceFiles(string root)
     {
         var clock = System.Diagnostics.Stopwatch.StartNew();
         var files = new List<string>();
@@ -146,7 +225,9 @@ public sealed class WorkspaceLoader
             directories++;
             try
             {
-                files.AddRange(Directory.EnumerateFiles(current, "*.md"));
+                files.AddRange(Directory.EnumerateFiles(current, "*" + KindResolver.CanonicalExtension));
+                files.AddRange(Directory.EnumerateFiles(current, "*" + KindResolver.LegacyExtension));
+                files.AddRange(Directory.EnumerateFiles(current, "*" + KindResolver.HttpExtension));
 
                 foreach (var child in Directory.EnumerateDirectories(current))
                 {
@@ -232,10 +313,55 @@ public sealed class LoadedWorkspace
     public IReadOnlyList<FlowFile> Flows { get; }
     public IReadOnlyList<TestSetFile> TestSets { get; }
 
+    /// <summary>The workspace's response caps, or the defaults when it has no manifest or the
+    /// manifest is silent. Read this rather than <c>Manifest?.Response</c> — a workspace loaded
+    /// from a folder with no <c>workspace.tap</c> still has to answer "how much do we keep".</summary>
+    public ResponseLimits ResponseLimits => Manifest?.Response ?? DefaultResponseLimits;
+
+    private static readonly ResponseLimits DefaultResponseLimits = new();
+
+    /// <summary>The workspace's history defaults — the weakest tier a request's own
+    /// <c>history:</c> block cascades onto, and the only scope that answers "how long do we keep
+    /// an orphan". Same reasoning as <see cref="ResponseLimits"/>: a manifest-less folder still
+    /// has to have an answer.</summary>
+    public HistoryOptions HistoryDefaults => Manifest?.History ?? DefaultHistory;
+
+    private static readonly HistoryOptions DefaultHistory = new();
+
+    /// <summary>
+    /// The environments selectable while a file owned by <paramref name="collectionSlug"/> is in
+    /// front of the user: every global env, plus the ones scoped to that collection. Pass
+    /// <c>null</c> for a file that belongs to no collection — only the globals answer then.
+    /// </summary>
+    public IReadOnlyList<EnvFile> EnvironmentsFor(string? collectionSlug)
+        => Environments.Where(e => e.AppliesTo(collectionSlug)).ToArray();
+
     public WorkspaceFile? FindByPath(string relativePath)
         => _byPath.GetValueOrDefault(relativePath.Replace('\\', '/'));
 
     public WorkspaceFile? FindById(string id) => _byId.GetValueOrDefault(id);
+
+    /// <summary>
+    /// Where a save targeting <paramref name="canonicalRelativePath"/> should actually land.
+    ///
+    /// <para>New files are always written canonically — that is what "canonical writes" means.
+    /// But a file that already exists under the legacy extension is written back in place:
+    /// renaming a user's file as a side effect of clicking Save would orphan every ref pointing
+    /// at it and leave a colliding pair on disk. Renaming is <c>tap-studio migrate</c>'s job,
+    /// where it happens deliberately and rewrites the refs too.</para>
+    /// </summary>
+    public string ResolveWritePath(string canonicalRelativePath)
+    {
+        var normalized = canonicalRelativePath.Replace('\\', '/');
+        if (_byPath.ContainsKey(normalized)) return normalized;
+
+        var fileName = Path.GetFileName(normalized);
+        if (KindResolver.ToLegacyFileName(fileName) is not { } legacyName) return normalized;
+
+        var cut = normalized.LastIndexOf('/');
+        var legacyPath = cut < 0 ? legacyName : string.Concat(normalized.AsSpan(0, cut + 1), legacyName);
+        return _byPath.ContainsKey(legacyPath) ? legacyPath : normalized;
+    }
 
     /// <summary>Resolves a <see cref="WorkspaceRef"/> using its path (if set) then its id.</summary>
     public WorkspaceFile? Resolve(WorkspaceRef? r, string? sourceRelativeDir = null)
@@ -258,7 +384,10 @@ public sealed class LoadedWorkspace
         return null;
     }
 
-    private static string NormalizeRelative(string p)
+    /// <summary>Collapses <c>.</c> and <c>..</c> segments in a workspace-relative path. Public
+    /// because ref resolution has to be reproducible outside the index — the migrator pairs raw
+    /// ref strings with loaded files and must normalize them exactly the way lookup does.</summary>
+    public static string NormalizeRelative(string p)
     {
         var parts = p.Split('/', StringSplitOptions.RemoveEmptyEntries);
         var stack = new Stack<string>();

@@ -49,7 +49,31 @@ public static class TargetResolver
             return true;
         }
 
-        // 2. Display name, then 3. filename stem. Both case-insensitive — a name typed from
+        // 2. A bare file path, when the file holds exactly one request. Canonical identity is
+        // always the fragment — it stays stable as requests are added — but demanding
+        // "orders.http#get-orders" for a file with a single request in it is friction for no
+        // benefit. More than one request is an error naming them, not a guess.
+        if (!HttpFragment.HasFragment(normalized))
+        {
+            var inFile = candidates
+                .Where(f => HttpFragment.HasFragment(f.RelativePath)
+                         && string.Equals(HttpFragment.FilePath(f.RelativePath), normalized, StringComparison.OrdinalIgnoreCase))
+                .ToArray();
+
+            if (inFile.Length == 1)
+            {
+                target = new ResolvedTarget(inFile[0], inFile[0].RelativePath);
+                return true;
+            }
+            if (inFile.Length > 1)
+            {
+                error = $"'{query}' holds {inFile.Length} requests — name one:\n"
+                      + string.Join('\n', inFile.Select(f => $"  {f.RelativePath}"));
+                return false;
+            }
+        }
+
+        // 3. Display name, then 4. filename stem. Both case-insensitive — a name typed from
         // memory rarely matches capitalisation, and there is no value in being strict.
         if (TryUnique(candidates.Where(f => Matches(f.Name, normalized)), out target, out error, normalized)) return true;
         if (error.Length > 0) return false;
@@ -107,7 +131,7 @@ public static class TargetResolver
         => !string.IsNullOrWhiteSpace(value)
         && string.Equals(value.Trim(), query, StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Filename stem without the two-part suffix — <c>orders.test.md</c> → <c>orders</c>.</summary>
+    /// <summary>Filename stem without the two-part suffix — <c>orders.test.tap</c> → <c>orders</c>.</summary>
     public static string Stem(string relativePath)
     {
         var file = Path.GetFileName(relativePath);

@@ -50,7 +50,7 @@ public sealed class AgentInitCommand : Command<AgentInitCommand.Settings>
         public string ProjectDir { get; init; } = ".";
 
         [CommandOption("-w|--workspace <DIR>")]
-        [Description("Workspace the project-scope MCP registration points at. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
+        [Description("Workspace the project-scope MCP registration points at. Defaults to the nearest ancestor containing workspace.tap, or the first workspace found beneath the working directory.")]
         public string? WorkspaceDirectory { get; init; }
 
         [CommandOption("--force")]
@@ -124,7 +124,7 @@ public sealed class AgentInitCommand : Command<AgentInitCommand.Settings>
             }
             else
             {
-                console.MarkupLine("[yellow]No tap.md found — registering the MCP server without a pinned --workspace; it will resolve the workspace from the agent's working directory.[/]");
+                console.MarkupLine("[yellow]No workspace.tap found — registering the MCP server without a pinned --workspace; it will resolve the workspace from the agent's working directory.[/]");
             }
         }
 

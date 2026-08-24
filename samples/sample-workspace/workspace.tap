@@ -1,0 +1,31 @@
+---
+kind: workspace
+id: 0192-3a4c-bb71-7c1d-9e8f0a1b2c3d
+name: studio-demo
+defaultEnv: environments/local.env.tap
+defaultVariableProvider: file
+variableProviders:
+- name: env
+  type: env
+- name: file
+  type: file
+- name: kv-dev
+  type: azkv
+  settings:
+    vaultName: tap-studio-01-dev
+    tenantId: f6acae55-feb3-4c9a-8a7d-53c383c9fbe8
+- name: kv-prod
+  type: azkv
+  settings:
+    vaultName: tap-studio-01-prod
+    tenantId: f6acae55-feb3-4c9a-8a7d-53c383c9fbe8
+vars:
+  JWT_SECRET: '{{env:DEMO_JWT_SECRET}}'
+  # Identity defaults. Selecting an environment *replaces* the previous one rather than
+  # layering on it — there is only one env tier now — so a value every environment shares
+  # belongs here, at workspace scope, not in whichever env happens to be selected. The
+  # global envs still override these; the collection-scoped ones inherit them.
+  user.name: Jane Doe
+  user.email: jane@example.com
+tags: [demo, local, public, sample, streaming, websocket, graphql, oauth2]
+---

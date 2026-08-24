@@ -15,8 +15,11 @@ namespace Tap.Execution.Http;
 /// </summary>
 public static class HttpExecutionHelpers
 {
-    /// <summary>2 MiB cap on returned response body bytes; anything larger is truncated.</summary>
-    public const int BodyCap = 2 * 1024 * 1024;
+    /// <summary>Inline body cap for callers with no workspace to ask — 2 MiB, the same
+    /// default <see cref="Tap.Workspace.Model.ResponseLimits"/> hands a workspace that
+    /// doesn't set <c>response.maxBytes</c>. Anything holding a manifest should read the
+    /// limit from it instead of hard-coding this.</summary>
+    public const int BodyCap = (int)Tap.Workspace.Model.ResponseLimits.DefaultMaxBytes;
 
     /// <summary>Schemes the studio is willing to execute. Anything else (file://, gopher://,
     /// data://, custom app schemes, etc) is rejected before a request goes out.</summary>

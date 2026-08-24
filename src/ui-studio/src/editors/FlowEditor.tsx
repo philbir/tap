@@ -23,15 +23,17 @@ import { KvTable, type KvRow } from './KvTable'
 import { SourceTab } from './SourceTab'
 import { TestRunPanel } from './TestRunPanel'
 import { matchRefOptionGrouped, requestSelectGroups, resolveRef } from './testingOptions'
+import { useTabView } from './useTabView'
 import { useSpecEditor } from './useSpecEditor'
 import { useTestRun } from './useTestRun'
 import { flatVarsToRows, rowsToFlatVars } from './varRows'
 import { VariablesPanel } from './VariablesPanel'
+import { labelForPath } from '../shell/tapFiles'
 
 interface Props { path: string }
 
 /**
- * Editor for a `*.flow.md` — an ordered sequence of requests that passes values between
+ * Editor for a `*.flow.tap` — an ordered sequence of requests that passes values between
  * steps.
  *
  * The step list is the whole point, so it's the default tab and each step is a card that
@@ -46,7 +48,7 @@ export function FlowEditor({ path }: Props) {
   const activeEnv = useActiveEnv()
   const tagSuggestions = useTagDictionary()
 
-  const [tab, setTab] = useState<string | null>('steps')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'steps')
   const [requests, setRequests] = useState<RequestSummary[]>([])
   const [varsOpened, varsCtl] = useDisclosure(false)
 
@@ -120,7 +122,7 @@ export function FlowEditor({ path }: Props) {
             <Button
               size="xs"
               leftSection={<IconPlayerPlayFilled size={13} />}
-              onClick={() => run.run(activeEnv, null)}
+              onClick={() => run.run(activeEnv)}
               loading={run.state.running}
               disabled={dirty || steps.length === 0}
             >
@@ -422,5 +424,5 @@ function rowsToVars(rows: KvRow[]): Record<string, string> | null {
 }
 
 function basename(path: string): string {
-  return path.split('/').pop()?.replace(/\.flow\.md$/i, '') ?? path
+  return labelForPath(path)
 }

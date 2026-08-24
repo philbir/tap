@@ -296,6 +296,10 @@ public sealed class OnePasswordVariableProvider : IVariableProvider, IRefreshabl
             $"1Password provider '{Name}' is read-only. Edit the item or Environment in the " +
             "1Password app, or point the write at a read/write provider.");
 
+    public ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
+        => throw new NotSupportedException(
+            $"1Password provider '{Name}' is read-only. Delete the item or field in the 1Password app.");
+
     public void InvalidateListCache()
     {
         lock (_gate) { _listCache = null; }
@@ -387,7 +391,7 @@ public sealed class OnePasswordVariableProviderFactory : IVariableProviderFactor
                 Description = "Leave empty to auto-detect: TAP_OP_CLI, then the usual install locations, then PATH. "
                     + "System-scope providers only — a workspace file cannot choose which binary Tap runs.",
                 Picker = "1password-cli",
-                // This setting names an executable, and tap.md travels with a cloned repo.
+                // This setting names an executable, and workspace.tap travels with a cloned repo.
                 SystemScopeOnly = true,
                 Note = new ProviderFieldNote
                 {

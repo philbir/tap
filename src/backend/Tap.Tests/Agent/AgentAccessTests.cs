@@ -12,7 +12,7 @@ namespace Tap.Tests.Agent;
 public class AgentAccessTests
 {
     private static CollectionFile LockedCollection(string agentYaml) => (CollectionFile)Parse(
-        "collections/locked/_collection.md", $"""
+        "collections/locked/_collection.tap", $"""
         ---
         kind: collection
         name: Locked
@@ -21,7 +21,7 @@ public class AgentAccessTests
         ---
         """);
 
-    private static readonly WorkspaceFile LockedRequest = Parse("collections/locked/get.req.md", """
+    private static readonly WorkspaceFile LockedRequest = Parse("collections/locked/get.req.tap", """
         ---
         kind: request
         name: Locked get
@@ -64,7 +64,7 @@ public class AgentAccessTests
         var ws = BuildWorkspace(
             LockedCollection("agent: false"), LockedRequest,
             DemoCollection(), BearerAuth,
-            Parse("collections/demo/open.req.md", """
+            Parse("collections/demo/open.req.tap", """
                 ---
                 kind: request
                 name: Open get
@@ -82,7 +82,7 @@ public class AgentAccessTests
         Assert.Equal(1, locked.RequestCount);
 
         Assert.True(inventory.Collections.Single(c => c.Name == "Demo").AgentEnabled);
-        Assert.Equal(["collections/demo/open.req.md"], inventory.Requests.Select(r => r.Path));
+        Assert.Equal(["collections/demo/open.req.tap"], inventory.Requests.Select(r => r.Path));
     }
 
     [Fact]
@@ -92,19 +92,19 @@ public class AgentAccessTests
         // the option, one edit in the editor would silently re-open the collection to agents.
         var disabled = Tap.Studio.Specs.CollectionSpecEmitter.ToFileSource(
             new Tap.Studio.Contracts.CollectionSpecDto { Slug = "locked", Name = "Locked", AgentEnabled = false });
-        var parsed = (CollectionFile)Parse("collections/locked/_collection.md", disabled);
+        var parsed = (CollectionFile)Parse("collections/locked/_collection.tap", disabled);
         Assert.False(parsed.Agent.Enabled);
 
         var defaulted = Tap.Studio.Specs.CollectionSpecEmitter.ToFileSource(
             new Tap.Studio.Contracts.CollectionSpecDto { Slug = "open", Name = "Open" });
         Assert.DoesNotContain("agent", defaulted);
-        Assert.True(((CollectionFile)Parse("collections/open/_collection.md", defaulted)).Agent.Enabled);
+        Assert.True(((CollectionFile)Parse("collections/open/_collection.tap", defaulted)).Agent.Enabled);
     }
 
     [Fact]
     public void A_request_outside_any_collection_is_never_gated()
     {
-        var loose = (RequestFile)Parse("requests/loose.req.md", """
+        var loose = (RequestFile)Parse("requests/loose.req.tap", """
             ---
             kind: request
             name: Loose

@@ -22,8 +22,7 @@ public static class WorkspaceInventory
                 Name: DisplayName(c),
                 Path: c.RelativePath,
                 BaseUrl: string.IsNullOrWhiteSpace(c.BaseUrl) ? null : c.BaseUrl,
-                Stages: c.Stages.Select(s => s.Name).ToArray(),
-                DefaultStage: c.DefaultStage,
+                Environments: ScopedEnvs(workspace, c).Select(e => e.RelativePath).ToArray(),
                 Tags: c.Tags,
                 RequestCount: workspace.Requests.Count(r => IsInCollection(workspace, r, c)),
                 AgentEnabled: c.Agent.Enabled))
@@ -44,7 +43,10 @@ public static class WorkspaceInventory
         var envs = workspace.Environments
             .OrderBy(e => e.RelativePath, StringComparer.Ordinal)
             .Select(e => new EnvSummaryDto(
-                DisplayName(e), e.RelativePath, IsDefault: e.RelativePath == defaultEnvPath))
+                DisplayName(e), e.RelativePath, IsDefault: e.RelativePath == defaultEnvPath,
+                Collections: e.Collections
+                    .Select(b => new EnvCollectionDto(b.Collection, b.BaseUrl))
+                    .ToArray()))
             .ToArray();
 
         var tests = workspace.TestSets
@@ -71,9 +73,9 @@ public static class WorkspaceInventory
 
     public static RequestDescriptionDto Describe(LoadedWorkspace workspace, RequestFile request)
     {
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         var block = ScanBlock(request.HttpBlock);
-        var auth = RequestPipeline.ResolveAuth(workspace, request, stageName: null);
+        var auth = RequestPipeline.ResolveAuth(workspace, request, envPath: null);
 
         // The block plus the baseUrl it will be joined onto is the full template surface a
         // caller can influence; both contribute the tokens worth overriding per run.
@@ -94,7 +96,10 @@ public static class WorkspaceInventory
             BodyTemplate: block.Body,
             Auth: auth is null ? null : DisplayName(auth),
             AuthType: auth?.Type,
-            Stages: collection?.Stages.Select(s => s.Name).ToArray() ?? [],
+            Environments: workspace
+                .EnvironmentsFor(collection is null ? null : CollectionLocator.SlugForFile(collection.RelativePath))
+                .Select(e => e.RelativePath)
+                .ToArray(),
             VariablesReferenced: referenced,
             DeclaredVars: request.Vars.Keys.OrderBy(n => n, StringComparer.Ordinal).ToArray(),
             Assertions: request.Assertions.Select(a => a.Describe()).ToArray(),
@@ -103,9 +108,9 @@ public static class WorkspaceInventory
 
     private static RequestSummaryDto Summarize(LoadedWorkspace workspace, RequestFile request)
     {
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         var block = ScanBlock(request.HttpBlock);
-        var auth = RequestPipeline.ResolveAuth(workspace, request, stageName: null);
+        var auth = RequestPipeline.ResolveAuth(workspace, request, envPath: null);
 
         return new RequestSummaryDto(
             Name: DisplayName(request),
@@ -121,11 +126,20 @@ public static class WorkspaceInventory
     }
 
     private static bool IsInCollection(LoadedWorkspace workspace, RequestFile request, CollectionFile collection)
-        => CollectionLocator.ForFile(workspace, request.RelativePath)?.RelativePath == collection.RelativePath;
+        => CollectionLocator.ForRequest(workspace, request)?.RelativePath == collection.RelativePath;
 
     /// <summary>Falls back to the filename stem (everything before the first dot, so
-    /// <c>01-get.req.md</c> → <c>01-get</c>); a collection falls back to its folder name,
-    /// since every collection file is called <c>_collection.md</c>.</summary>
+    /// <c>01-get.req.tap</c> → <c>01-get</c>); a collection falls back to its folder name,
+    /// since every collection file has the same fixed name.</summary>
+    /// <summary>Environments confined to <paramref name="collection"/>. Global envs are left
+    /// out on purpose: they apply everywhere, so repeating them on every collection row would
+    /// make the inventory grow with the product of the two lists and say nothing extra.</summary>
+    private static IEnumerable<EnvFile> ScopedEnvs(LoadedWorkspace workspace, CollectionFile collection)
+    {
+        var slug = CollectionLocator.SlugForFile(collection.RelativePath);
+        return workspace.Environments.Where(e => !e.IsGlobal && e.AppliesTo(slug));
+    }
+
     private static string DisplayName(WorkspaceFile file)
     {
         if (file.Name is { Length: > 0 }) return file.Name;

@@ -19,7 +19,7 @@ app.Configure(cfg =>
     cfg.AddCommand<TestCommand>("test")
         .WithDescription("Run a test set or a flow. Exits 1 when something failed, 0 when everything passed.")
         .WithExample(["test", "Demo API smoke"])
-        .WithExample(["test", "tests/demo-smoke.test.md", "--env", "ci"])
+        .WithExample(["test", "tests/demo-smoke.test.tap", "--env", "ci"])
         .WithExample(["test", "Checkout", "--var", "customer=cus_ci", "--var", "sku=ABC-1"])
         .WithExample(["test", "Demo API smoke", "--output", "junit", "--output-file", "results.xml"])
         .WithExample(["test", "--list"]);
@@ -27,7 +27,7 @@ app.Configure(cfg =>
     cfg.AddCommand<SendCommand>("send")
         .WithDescription("Send one request and evaluate its assertions.")
         .WithExample(["send", "GET /demo/methods"])
-        .WithExample(["send", "collections/demo/methods/01-get.req.md", "--verbose"])
+        .WithExample(["send", "collections/demo/methods/01-get.req.tap", "--verbose"])
         .WithExample(["send", "GET /demo/methods", "--json"]);
 
     cfg.AddCommand<CallCommand>("call")
@@ -43,7 +43,7 @@ app.Configure(cfg =>
     cfg.AddCommand<DescribeCommand>("describe")
         .WithDescription("Show one request's template surface: method, URL, headers, variables, auth (name only), assertions.")
         .WithExample(["describe", "GET /demo/methods"])
-        .WithExample(["describe", "collections/demo/methods/01-get.req.md", "--json"]);
+        .WithExample(["describe", "collections/demo/methods/01-get.req.tap", "--json"]);
 
     cfg.AddCommand<McpCommand>("mcp")
         .WithDescription("Serve the workspace to MCP clients over stdio: inventory, describe, send, call, and test as tools.")
@@ -61,6 +61,17 @@ app.Configure(cfg =>
             .WithExample(["agent", "init", "--env", "codex", "--scope", "user", "--mcp"]);
     });
 
+    cfg.AddBranch("key", key =>
+    {
+        key.SetDescription("This machine's encryption key — the one secret that unlocks everything Tap encrypts at rest.");
+        key.AddCommand<KeyStatusCommand>("status")
+            .WithDescription("Report whether this machine has an encryption key and where it came from. Never prints the key. Exits 3 when there is none.")
+            .WithExample(["key", "status"]);
+        key.AddCommand<KeyInitCommand>("init")
+            .WithDescription("Generate an encryption key into <system-dir>/encryption.key. Refuses to overwrite an existing key.")
+            .WithExample(["key", "init"]);
+    });
+
     cfg.AddCommand<LintCommand>("lint")
         .WithDescription("Parse every file in the workspace and report what doesn't load.")
         .WithExample(["lint"])
@@ -69,7 +80,12 @@ app.Configure(cfg =>
     cfg.AddCommand<VarsCommand>("vars")
         .WithDescription("Print the resolved variable cascade. Secret values are masked.")
         .WithExample(["vars"])
-        .WithExample(["vars", "--env", "prod", "--request", "collections/demo/methods/01-get.req.md"]);
+        .WithExample(["vars", "--env", "prod", "--request", "collections/demo/methods/01-get.req.tap"]);
+
+    cfg.AddCommand<MigrateCommand>("migrate")
+        .WithDescription("Rename legacy .md workspace files to .tap and rewrite the refs that point at them.")
+        .WithExample(["migrate", "--dry-run"])
+        .WithExample(["migrate"]);
 });
 
 return await app.RunAsync(args);

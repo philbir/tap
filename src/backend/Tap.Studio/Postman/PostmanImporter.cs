@@ -1,15 +1,18 @@
 using System.Text;
 using System.Text.Json;
 using Tap.Studio.Contracts;
+using Tap.Studio.Importing;
 using Tap.Studio.Specs;
+using Tap.Workspace.Model;
+using Tap.Workspace.Parsing;
 
 namespace Tap.Studio.Postman;
 
 /// <summary>
 /// Imports a Postman v2.1 collection JSON into the Tap workspace shape:
-/// a single <c>_collection.md</c>, a folder tree mirroring Postman's nested <c>item[]</c>
-/// arrays, one <c>.req.md</c> per terminal item, and (optionally) one
-/// <c>.auth.md</c> at workspace root when the Postman collection carries auth.
+/// a single <c>_collection.tap</c>, a folder tree mirroring Postman's nested <c>item[]</c>
+/// arrays, one <c>.req.tap</c> per terminal item, and (optionally) one
+/// <c>.auth.tap</c> at workspace root when the Postman collection carries auth.
 ///
 /// <para>The importer is a pure planner: <see cref="Plan"/> walks the JSON tree and
 /// returns an <see cref="ImportPlan"/> of (relative path, content) pairs. The caller
@@ -37,19 +40,6 @@ namespace Tap.Studio.Postman;
 public static class PostmanImporter
 {
     private const string CollectionsRoot = "collections";
-
-    public sealed record ImportFile(string RelativePath, string Content);
-
-    public sealed record ImportPlan(
-        string Slug,
-        string CollectionPath,
-        string? AuthPath,
-        IReadOnlyList<ImportFile> Files,
-        IReadOnlyList<string> Warnings)
-    {
-        public int RequestCount => Files.Count(f => f.RelativePath.EndsWith(".req.md", StringComparison.OrdinalIgnoreCase));
-        public int FolderCount { get; init; }
-    }
 
     /// <summary>Plans the import. Pass <paramref name="requestedSlug"/> to override the
     /// slug derived from <c>info.name</c>. Throws <see cref="PostmanImportException"/>
@@ -81,7 +71,7 @@ public static class PostmanImporter
 
         var (baseUrl, vars) = ExtractVariables(root);
 
-        // Collection-level auth → write it *inside* the collection, next to _collection.md,
+        // Collection-level auth → write it *inside* the collection, next to the collection file,
         // and reference it as a sibling from defaultAuth. Postman's collection auth routinely
         // interpolates collection variables ({{baseUrl}}, {{clientId}}, …), which only resolve
         // for a profile owned by the collection — and it keeps the import self-contained, so
@@ -92,7 +82,7 @@ public static class PostmanImporter
         if (root.TryGetProperty("auth", out var authEl) && authEl.ValueKind == JsonValueKind.Object)
         {
             var authSlug = $"{slug}-postman";
-            var authFileName = $"{authSlug}.auth.md";
+            var authFileName = KindResolver.FileNameFor(WorkspaceKind.Auth, authSlug);
             if (TryMapAuth(authEl, $"{collectionName} (Postman)", warnings) is { } authSpec)
             {
                 authPath = $"{CollectionsRoot}/{slug}/{authFileName}";
@@ -111,7 +101,7 @@ public static class PostmanImporter
             Vars = vars.Count > 0 ? vars : null,
             Body = string.IsNullOrWhiteSpace(description) ? null : description,
         };
-        var collectionRelPath = $"{CollectionsRoot}/{slug}/_collection.md";
+        var collectionRelPath = $"{CollectionsRoot}/{slug}/{KindResolver.CollectionFileName}";
         var collectionContent = CollectionSpecEmitter.ToFileSource(collectionSpec);
 
         var files = new List<ImportFile> { new(collectionRelPath, collectionContent) };
@@ -169,7 +159,7 @@ public static class PostmanImporter
             if (requestSpec is null) continue;
 
             var reqSlug = UniqueSlug(name, siblings);
-            var relPath = $"{parentPath}/{reqSlug}.req.md";
+            var relPath = $"{parentPath}/{KindResolver.FileNameFor(WorkspaceKind.Request, reqSlug)}";
             files.Add(new ImportFile(relPath, RequestSpecEmitter.ToFileSource(requestSpec with { Path = relPath })));
         }
     }
@@ -201,7 +191,7 @@ public static class PostmanImporter
         }
 
         // Per-item auth — flag as TODO. The runner's request-level auth ref is a path
-        // to an .auth.md file; building one per request would explode the workspace,
+        // to an .auth.tap file; building one per request would explode the workspace,
         // so we surface a warning instead and let the user wire it manually.
         if (req.TryGetProperty("auth", out var auth) && auth.ValueKind == JsonValueKind.Object)
         {
@@ -564,42 +554,9 @@ public static class PostmanImporter
     }
 
     private static string UniqueSlug(string name, HashSet<string> siblings)
-    {
-        var baseSlug = Slugify(name);
-        if (baseSlug.Length == 0) baseSlug = "item";
-        var slug = baseSlug;
-        var i = 2;
-        while (!siblings.Add(slug))
-        {
-            slug = $"{baseSlug}-{i++}";
-        }
-        return slug;
-    }
+        => ImportSlug.UniqueSlug(name, siblings);
 
-    private static string Slugify(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name)) return string.Empty;
-        var sb = new StringBuilder(name.Length);
-        bool lastDash = false;
-        foreach (var ch in name.Trim().ToLowerInvariant())
-        {
-            if (char.IsLetterOrDigit(ch))
-            {
-                sb.Append(ch);
-                lastDash = false;
-            }
-            else if (ch is '_' or '-')
-            {
-                if (!lastDash) { sb.Append('-'); lastDash = true; }
-            }
-            else if (char.IsWhiteSpace(ch) || ch is '/' or '\\' or '.' or ':')
-            {
-                if (!lastDash) { sb.Append('-'); lastDash = true; }
-            }
-        }
-        var s = sb.ToString().Trim('-');
-        return s.Length > 60 ? s[..60].TrimEnd('-') : s;
-    }
+    private static string Slugify(string name) => ImportSlug.Slugify(name);
 }
 
 public sealed class PostmanImportException : Exception

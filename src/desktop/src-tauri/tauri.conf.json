@@ -33,6 +33,7 @@
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
+      "icons/icon.png",
       "icons/icon.icns",
       "icons/icon.ico"
     ],
@@ -43,8 +44,8 @@
       "binaries/wwwroot/**/*"
     ],
     "category": "DeveloperTool",
-    "shortDescription": "API workbench",
-    "longDescription": "Tap Studio — an API request workbench backed by a local sidecar.",
+    "shortDescription": "HTTP request and auth credential crafter",
+    "longDescription": "Tap Studio — craft authenticated HTTP requests, flows, and tests in a local-first workbench.",
     "macOS": {
       "minimumSystemVersion": "11.0",
       "entitlements": "entitlements.plist"

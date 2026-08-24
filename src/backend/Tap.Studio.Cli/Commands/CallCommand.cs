@@ -36,7 +36,7 @@ public sealed class CallCommand : AsyncCommand<CallCommand.Settings>
         public string Url { get; init; } = string.Empty;
 
         [CommandOption("-c|--collection <NAME|PATH>")]
-        [Description("The collection carrying the request: its name, its directory, or its _collection.md path.")]
+        [Description("The collection carrying the request: its name, its directory, or its _collection.tap path.")]
         public string? Collection { get; init; }
 
         [CommandOption("-H|--header <HEADER>")]
@@ -161,7 +161,6 @@ public sealed class CallCommand : AsyncCommand<CallCommand.Settings>
         var request = new RunTestRequestDto(
             Path: requestFile.RelativePath,
             Env: envPath,
-            Stage: settings.Stage,
             Only: null,
             Overrides: variables.Count > 0 ? variables : null);
 

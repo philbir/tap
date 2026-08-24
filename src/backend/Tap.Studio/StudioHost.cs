@@ -6,6 +6,7 @@ using Tap.Studio.Auth;
 using Tap.Studio.Contracts;
 using Tap.Studio.Endpoints;
 using Tap.Studio.Variables;
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 using Tap.Workspace.Variables.Providers;
 using Tap.Execution.Variables;
@@ -83,10 +84,17 @@ public static class StudioHost
             SystemProviders = options.SystemProviders,
         });
         builder.Services.AddSingleton<SystemSettingsStore>();
+        // One key source for the process, pinned to the same system dir as system.json, so
+        // TAP_SYSTEM_DIR moves every piece of user-level state as a unit.
+        builder.Services.AddSingleton<IEncryptionKeySource>(new MachineEncryptionKeySource(options.SystemDir));
         builder.Services.AddSingleton<Tap.Studio.Ai.AiProviderFactory>();
         builder.Services.AddSingleton<KnownWorkspaceStore>();
         builder.Services.AddSingleton<WorkspaceService>();
         builder.Services.AddSingleton<GitService>();
+        builder.Services.AddSingleton<ResponseBodyStore>();
+        builder.Services.AddSingleton<History.HistoryStoreProvider>();
+        builder.Services.AddSingleton<History.IHistoryStores>(sp => sp.GetRequiredService<History.HistoryStoreProvider>());
+        builder.Services.AddSingleton<History.HistoryRecorder>();
 
         // The agent surface as MCP tools at /mcp, over the live WorkspaceService — same
         // shared tool layer the CLI's stdio server hosts, but with this process's cached
@@ -97,6 +105,19 @@ public static class StudioHost
             .WithHttpTransport()
             .WithTools<Mcp.TapStudioTools>();
         builder.Services.AddHttpContextAccessor();
+
+        // OpenAPI spec fetching. AllowAutoRedirect must stay off: HttpExecutionHelpers re-validates
+        // every hop, and that per-hop check *is* the SSRF guard for a user-supplied spec URL. Let
+        // the handler follow redirects itself and the guard never runs.
+        builder.Services.AddHttpClient("openapi")
+            .ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler { AllowAutoRedirect = false });
+        builder.Services.AddSingleton<OpenApi.OpenApiDocumentCache>();
+        // Turns each Aspire-referenced API's OpenAPI document into real requests on first run.
+        // A hosted service rather than part of the boot scaffold: that path is synchronous and
+        // already the slowest thing in a cold start, and this one makes network calls.
+        builder.Services.AddHostedService<AspireOpenApiScaffold>();
+        builder.Services.AddSingleton<OpenApi.OpenApiSpecSource>(sp =>
+            new OpenApi.OpenApiSpecSource(sp.GetRequiredService<IHttpClientFactory>().CreateClient("openapi")));
 
         builder.Services.AddHttpClient("auth");
         builder.Services.AddSingleton<OidcDiscoveryClient>(sp =>
@@ -124,6 +145,7 @@ public static class StudioHost
         builder.Services.AddSingleton<IVariableProviderFactory, AzureKeyVaultVariableProviderFactory>();
         builder.Services.AddSingleton<IVariableProviderFactory, OnePasswordVariableProviderFactory>();
         builder.Services.AddSingleton<IVariableProviderFactory, SystemVariableProviderFactory>();
+        builder.Services.AddSingleton<IVariableProviderFactory, AspireVariableProviderFactory>();
         builder.Services.AddSingleton<ProviderRegistryBuilder>();
         builder.Services.AddSingleton<Tap.Studio.AzureDiscovery.AzureDiscoveryService>();
 
@@ -139,6 +161,33 @@ public static class StudioHost
         // so it announces the folder it is about to read. A desktop launch that appears to
         // hang is nearly always this line with a root nobody meant to open (see
         // StudioOptions.WorkspaceRoot); saying so up front is what makes that visible.
+        // Scaffold before the first load, not after: the loader is what the UI serves, and a
+        // workspace scaffolded afterwards would show up empty until the watcher caught up.
+        if (options.IsWorkspacePinned)
+        {
+            try
+            {
+                var scaffold = AspireWorkspaceScaffold.Run(
+                    options.WorkspaceRoot,
+                    AspireWorkspaceScaffold.ReadApis(app.Configuration));
+
+                if (!scaffold.IsNoOp)
+                {
+                    // Logged rather than silent: this writes files into the developer's repo, and
+                    // the Aspire dashboard's resource console is where they will look for why.
+                    app.Logger.LogInformation(
+                        "Scaffolded {Count} file(s) into {Root}: {Files}",
+                        scaffold.Created.Count, options.WorkspaceRoot, string.Join(", ", scaffold.Created));
+                }
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                // A read-only or unwritable folder is worth a warning, never a failed boot —
+                // Studio is still perfectly usable against whatever is already there.
+                app.Logger.LogWarning(ex, "Could not scaffold the workspace at {Root}", options.WorkspaceRoot);
+            }
+        }
+
         var bootRoot = SafeActivePath(app, options);
         StartupSignal.Progress("workspace.loading", $"Loading workspace {bootRoot}");
         var workspaceClock = System.Diagnostics.Stopwatch.StartNew();
@@ -184,14 +233,31 @@ public static class StudioHost
         app.Use(HostAllowlist(allowedHosts, allowAnyHost));
         app.Use(RejectCrossOriginRequests);
 
+        // Liveness for Aspire's WithHttpHealthCheck and WaitFor. Deliberately cheap — Kestrel is
+        // answering and the workspace object exists — because a health check that walks the
+        // workspace would make an AppHost's startup gate on a filesystem scan. A workspace that
+        // loaded *with errors* is still healthy: the whole point of degrading to
+        // "loaded with errors" is that Studio stays usable so you can fix them.
+        app.MapGet("/health", (WorkspaceService svc) => Results.Ok(new
+        {
+            status = "healthy",
+            mode = svc.Mode.ToString().ToLowerInvariant(),
+            workspace = svc.RootDirectory,
+            files = svc.Current.Files.Count,
+        })).ExcludeFromDescription();
+
         WorkspaceEndpoints.Map(app);
         RequestEndpoints.Map(app);
         CatalogEndpoints.Map(app);
         CollectionEndpoints.Map(app);
+        OpenApiEndpoints.Map(app);
         TagEndpoints.Map(app);
         StreamEndpoints.Map(app);
+        HttpFileEndpoints.Map(app);
         ExecuteEndpoint.Map(app);
         ExecuteStreamEndpoint.Map(app);
+        ResponseBodyEndpoints.Map(app);
+        HistoryEndpoints.Map(app);
         AssertEndpoints.Map(app);
         TestingEndpoints.Map(app);
         FileEndpoints.Map(app);
@@ -266,6 +332,10 @@ public static class StudioHost
     /// </summary>
     private static string SafeActivePath(WebApplication app, StudioOptions options)
     {
+        // Pinned hosts ignore the known-workspace list entirely, so reading it here would label
+        // the progress message with a folder we are not about to open.
+        if (options.IsWorkspacePinned) return options.WorkspaceRoot;
+
         try
         {
             return app.Services.GetRequiredService<KnownWorkspaceStore>().ActivePath;

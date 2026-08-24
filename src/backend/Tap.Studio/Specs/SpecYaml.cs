@@ -1,5 +1,6 @@
 using System.Text;
 using Tap.Studio.Contracts;
+using Tap.Workspace.Parsing;
 using Tap.Workspace.Model;
 using YamlDotNet.RepresentationModel;
 
@@ -61,6 +62,38 @@ internal static class SpecYaml
         if (transport.TimeoutMs is not null)
             inner.Add("timeoutMs", new YamlScalarNode(transport.TimeoutMs.Value.ToString(System.Globalization.CultureInfo.InvariantCulture)));
         map.Add("transport", inner);
+    }
+
+    /// <summary>
+    /// Emits a <c>history:</c> block, or nothing when the scope declares nothing. Collapses to
+    /// the <c>history: true</c> shorthand when <c>enabled</c> is the only thing set, which is the
+    /// overwhelmingly common case and doesn't deserve four lines of frontmatter.
+    /// </summary>
+    public static void SetHistory(this YamlMappingNode map, HistoryOptionsDto? history)
+    {
+        if (history is null) return;
+        var (enabled, maxEntries, encrypt, maxBody, orphanDays) =
+            (history.Enabled, history.MaxEntries, history.Encrypt, history.MaxBodyBytes, history.OrphanRetentionDays);
+        if (enabled is null && maxEntries is null && encrypt is null && maxBody is null && orphanDays is null) return;
+
+        if (enabled is not null && maxEntries is null && encrypt is null && maxBody is null && orphanDays is null)
+        {
+            map.Add("history", new YamlScalarNode(enabled.Value ? "true" : "false"));
+            return;
+        }
+
+        var inner = new YamlMappingNode();
+        if (enabled is not null) inner.Add("enabled", new YamlScalarNode(enabled.Value ? "true" : "false"));
+        if (maxEntries is not null) inner.Add("maxEntries", Number(maxEntries.Value));
+        if (encrypt is not null) inner.Add("encrypt", new YamlScalarNode(encrypt.Value ? "true" : "false"));
+        // Written back in the unit the user is most likely to have typed — ByteSize.Format
+        // renders exact multiples as '256kb' rather than a six-digit byte count.
+        if (maxBody is not null) inner.Add("maxBodyBytes", new YamlScalarNode(ByteSize.Format(maxBody.Value)));
+        if (orphanDays is not null) inner.Add("orphanRetentionDays", Number(orphanDays.Value));
+        map.Add("history", inner);
+
+        static YamlScalarNode Number(long value)
+            => new(value.ToString(System.Globalization.CultureInfo.InvariantCulture));
     }
 
     /// <summary>

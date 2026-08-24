@@ -122,6 +122,26 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
         await _client.SetSecretAsync(keyVaultName, value, ct).ConfigureAwait(false);
         lock (_gate) { _listCache = null; }
     }
+
+    /// <summary>Starts a KV soft-delete and returns once the vault has accepted it — not once
+    /// purging completes. A soft-deleted secret is gone from listings and lookups, which is
+    /// what "deleted" means to a caller here; recovery stays available in the vault for its
+    /// retention window, which is the behaviour a Key Vault user expects and the reason we
+    /// don't purge.</summary>
+    public async ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
+    {
+        var keyVaultName = _prefix + name;
+        try
+        {
+            await _client.StartDeleteSecretAsync(keyVaultName, ct).ConfigureAwait(false);
+        }
+        catch (Azure.RequestFailedException ex) when (ex.Status == 404)
+        {
+            return false;
+        }
+        lock (_gate) { _listCache = null; }
+        return true;
+    }
 }
 
 public sealed class AzureKeyVaultVariableProviderFactory : IVariableProviderFactory

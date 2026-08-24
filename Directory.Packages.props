@@ -2,7 +2,7 @@
   <PropertyGroup>
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
-    <AspireVersion>13.4.6</AspireVersion>
+    <AspireVersion>13.5.2</AspireVersion>
     <AspNetCoreVersion>10.0.11</AspNetCoreVersion>
   </PropertyGroup>
   <ItemGroup>
@@ -24,12 +24,22 @@
          extractor. Chosen over the alternatives because it binds to JsonNode directly and
          keeps the repo free of a reflection-based serializer. -->
     <PackageVersion Include="JsonPath.Net" Version="3.0.2" />
+    <!-- OpenAPI import. The core package reads JSON via System.Text.Json; the YamlReader add-on
+         is what makes `.yaml` specs work (registered with settings.AddYamlReader(), after which
+         Parse auto-detects JSON-then-YAML). Split deliberately by the library so JSON-only
+         consumers avoid the YamlDotNet hop — we take both because specs arrive in either form. -->
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(AspNetCoreVersion)" />
+    <PackageVersion Include="Microsoft.OpenApi" Version="3.10.0" />
+    <PackageVersion Include="Microsoft.OpenApi.YamlReader" Version="3.10.0" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(AspNetCoreVersion)" />
     <!-- Official MCP C# SDK — backs `tap-studio mcp` (stdio server over the agent surface).
          Microsoft.Extensions.Hosting is its host loop; the CLI only pulls it for that command. -->
     <PackageVersion Include="ModelContextProtocol" Version="2.2.0" />
     <PackageVersion Include="ModelContextProtocol.AspNetCore" Version="2.2.0" />
     <PackageVersion Include="Microsoft.Extensions.Hosting" Version="$(AspNetCoreVersion)" />
+    <!-- IHttpClientFactory for `tap mcp`, whose capture provider is an HTTP client of a
+         running inspector's redacted /api/agent/* surface. -->
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="$(AspNetCoreVersion)" />
     <PackageVersion Include="Azure.Identity" Version="1.21.0" />
     <PackageVersion Include="Azure.Security.KeyVault.Secrets" Version="4.11.0" />
     <PackageVersion Include="LibGit2Sharp" Version="0.32.0" />

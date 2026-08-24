@@ -15,13 +15,18 @@ public sealed record WorkspaceInfoDto(
     string Root,
     string? DefaultEnv,
     IReadOnlyList<string> Providers,
-    IReadOnlyList<WorkspaceErrorDto> Errors);
+    IReadOnlyList<WorkspaceErrorDto> Errors,
+    /// <summary>"normal" or "aspire". Aspire means the workspace is pinned by the host —
+    /// the UI locks the switcher and badges the header instead of offering an action that 409s.</summary>
+    string Mode = "normal");
 
-/// <summary>Entry in the workspace switcher dropdown. <c>Available</c> is false if the
-/// folder no longer contains a <c>.tap/</c> directory — the UI greys it out. <c>Git</c> is
-/// filled when an enclosing git repository was discovered at add-time (and is still on
-/// disk); the UI shows branch + origin chips.</summary>
-public sealed record KnownWorkspaceDto(string Path, string Label, bool IsActive, bool Available, GitInfoDto? Git);
+/// <summary>Entry in the workspace switcher dropdown. <c>Name</c> is the manifest's
+/// <c>name:</c> — what the switcher shows — and <c>Label</c> is the folder name, shown
+/// underneath it as the disambiguator when two workspaces share a name. <c>Available</c> is
+/// false if the folder no longer contains a <c>.tap/</c> directory — the UI greys it out.
+/// <c>Git</c> is filled when an enclosing git repository was discovered at add-time (and is
+/// still on disk); the UI shows branch + origin chips.</summary>
+public sealed record KnownWorkspaceDto(string Path, string Name, string Label, bool IsActive, bool Available, GitInfoDto? Git);
 
 public sealed record AddWorkspaceDto(string Path);
 public sealed record ActivateWorkspaceDto(string Path);
@@ -101,7 +106,18 @@ public sealed record CreateFolderDto(string Path);
 /// of the destination.</summary>
 public sealed record MoveItemDto(string From, string To);
 
-public sealed record WorkspaceErrorDto(string Code, string Message, string? Path, int? Line);
+/// <summary>A workspace problem on the wire. <c>Severity</c> is "error" or "warning";
+/// warnings (deprecations) are reported but do not make a workspace invalid.</summary>
+/// <summary>A workspace file's raw text, for kinds Studio edits as source rather than
+/// through a structured spec.</summary>
+public sealed record RawSourceDto(string Path, string Content);
+
+public sealed record WorkspaceErrorDto(string Code, string Message, string? Path, int? Line, string Severity = "error");
+
+/// <summary>What every spec PUT answers with. Carries the stable id the file was stored under —
+/// freshly minted when the client sent none — so a just-created request knows its own identity
+/// before the watcher-driven reload lands. Request history keys on it.</summary>
+public sealed record SavedSpecDto(string Id);
 
 public sealed record TreeNodeDto(
     string Path,
@@ -138,7 +154,14 @@ public sealed record RequestDetailDto(
     string Protocol,
     RequestTransportSettingsDto? Transport,
     /// <summary>Declared expectations about the response, in file order.</summary>
-    IReadOnlyList<AssertSpecDto> Assertions);
+    IReadOnlyList<AssertSpecDto> Assertions,
+    /// <summary>The request's own <c>history:</c> keys, or null when it declares none.</summary>
+    HistoryOptionsDto? History = null,
+    /// <summary>The same block after the workspace → collection → request merge — what
+    /// recording this request will actually do. The editor shows it as the inherited value
+    /// behind each unset field, so "why is this being recorded?" is answerable without
+    /// opening two other files.</summary>
+    HistoryOptionsDto? EffectiveHistory = null);
 
 public sealed record AuthDetailDto(
     string Path,
@@ -148,7 +171,7 @@ public sealed record AuthDetailDto(
     /// <summary>Slug of the collection that owns this profile (it lives under
     /// <c>collections/&lt;slug&gt;/</c>), or null for a workspace-scoped profile under
     /// <c>auth/</c>. A collection-scoped profile resolves its fields against that
-    /// collection's variables and stages.</summary>
+    /// collection's variables and its active environment.</summary>
     string? Collection,
     IReadOnlyDictionary<string, string?> Fields,
     IReadOnlyDictionary<string, string> Headers,
@@ -168,6 +191,9 @@ public sealed record EnvDetailDto(
     IReadOnlyList<string> Tags,
     string Body,
     string Source,
+    /// <summary>The collections this env is assigned to, each with its own overrides. Empty =
+    /// global (selectable everywhere, overriding nothing).</summary>
+    IReadOnlyList<EnvCollectionDto> Collections,
     /// <summary>Provider bare tokens hit first while this env is active (may be an alias).
     /// Null = inherit the workspace/system default.</summary>
     string? DefaultVariableProvider,
@@ -178,32 +204,22 @@ public sealed record EnvDetailDto(
 
 /// <summary>Listing-row representation of a collection. <see cref="Exists"/> is false when
 /// the directory <c>collections/&lt;slug&gt;/</c> is present on disk but has no
-/// <c>_collection.md</c> yet — the editor uses that to render a create-on-save form.</summary>
+/// <c>_collection.tap</c> yet — the editor uses that to render a create-on-save form.</summary>
 public sealed record CollectionSummaryDto(
     string Slug,
     string Name,
     string? Id,
     bool Exists,
     string BaseUrl,
-    /// <summary>Stage names defined on this collection — full stage detail lives on
-    /// CollectionDetailDto.Stages. Empty when the collection has none.</summary>
-    IReadOnlyList<string> StageNames,
-    string? DefaultStage);
-
-/// <summary>One named stage inside a collection. Stage fields override the parent
-/// collection's defaults; variables here override workspace + collection scopes but are
-/// still overridden by env / request scopes.</summary>
-public sealed record CollectionStageDto(
-    string Name,
-    string? BaseUrl,
-    string? DefaultAuth,
-    IReadOnlyDictionary<string, VarSpec> Vars);
+    /// <summary>Paths of the environments scoped to this collection, in listing order. The
+    /// baseUrl chip offers these alongside the global ones. Empty when no env names it.</summary>
+    IReadOnlyList<string> EnvPaths);
 
 /// <summary>Detail view of a collection. <see cref="Slug"/> is the directory name under
 /// <c>collections/</c>; the metadata file lives at
-/// <c>collections/&lt;slug&gt;/_collection.md</c>. Collections own the baseUrl, optional
-/// stages, default auth/headers, plus their own vars / tags / markdown body — what used
-/// to live on a separate <c>api</c> file.</summary>
+/// <c>collections/&lt;slug&gt;/_collection.tap</c>. Collections own the baseUrl, default
+/// auth/headers, plus their own vars / tags / markdown body — what used to live on a
+/// separate <c>api</c> file. Per-target overrides live on scoped environments.</summary>
 public sealed record CollectionDetailDto(
     string Slug,
     string Name,
@@ -217,10 +233,16 @@ public sealed record CollectionDetailDto(
     IReadOnlyList<string> Tags,
     string Body,
     string Source,
-    IReadOnlyList<CollectionStageDto> Stages,
-    string? DefaultStage,
+    /// <summary>Paths of the environments scoped to this collection — the ones that may
+    /// override its baseUrl and defaultAuth.</summary>
+    IReadOnlyList<string> EnvPaths,
     /// <summary>The collection's <c>agent:</c> option — whether agent surfaces may use it.</summary>
-    bool AgentEnabled);
+    bool AgentEnabled,
+    /// <summary>The collection's own <c>history:</c> keys, or null when it declares none.</summary>
+    HistoryOptionsDto? History = null,
+    /// <summary>The workspace-level defaults this collection inherits, for the editor to show
+    /// behind unset fields.</summary>
+    HistoryOptionsDto? InheritedHistory = null);
 
 /// <summary>Structured PUT spec for a collection. The server resolves the on-disk path
 /// from <see cref="Slug"/> and writes canonical YAML via <c>CollectionSpecEmitter</c>.</summary>
@@ -234,27 +256,232 @@ public sealed record CollectionSpecDto
     public string? DefaultAuth { get; init; }
     public IReadOnlyDictionary<string, string>? DefaultHeaders { get; init; }
     public RequestTransportSettingsDto? Transport { get; init; }
+    public HistoryOptionsDto? History { get; init; }
     public IReadOnlyDictionary<string, string>? Vars { get; init; }
     /// <summary>Variable names marked secret. Same encoding as <see cref="EnvSpecDto.Secrets"/>.</summary>
     public IReadOnlyList<string>? Secrets { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
-    public IReadOnlyList<CollectionStageSpecDto>? Stages { get; init; }
-    public string? DefaultStage { get; init; }
     /// <summary>The <c>agent:</c> option. Null or true emits nothing (enabled is the
     /// default); false emits <c>agent: false</c>.</summary>
     public bool? AgentEnabled { get; init; }
     public string? Body { get; init; }
 }
 
-public sealed record CollectionStageSpecDto
+// ---------------------------------------------------------------------------------------------
+// OpenAPI import.
+//
+// Two phases. `POST /api/openapi/documents[/fetch]` parses once and stages the result, returning a
+// DocumentId; every later call references that id. This guarantees the operation list the user
+// picked from and the document that gets imported are the same one — a URL re-fetched a minute
+// later need not return the same bytes — and keeps a document that may reach 16 MB out of the
+// model binder on every call.
+//
+// The raw spec arrives as a `string`, not a JsonElement like Postman's: OpenAPI documents are
+// commonly YAML, which JsonElement cannot carry at all.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>Body for <c>POST /api/openapi/documents</c> — the document as text, JSON or YAML.</summary>
+public sealed record OpenApiUploadRequestDto
 {
-    public required string Name { get; init; }
-    public string? BaseUrl { get; init; }
-    public string? DefaultAuth { get; init; }
-    public IReadOnlyDictionary<string, string>? Vars { get; init; }
-    /// <summary>Names of stage-scoped variables marked secret.</summary>
-    public IReadOnlyList<string>? Secrets { get; init; }
+    public required string Text { get; init; }
+    public string? FileName { get; init; }
 }
+
+/// <summary>Body for <c>POST /api/openapi/documents/fetch</c>.</summary>
+public sealed record OpenApiFetchRequestDto
+{
+    public required string Url { get; init; }
+}
+
+/// <summary>A staged document: everything the wizard needs to render its picker, having written
+/// nothing to disk.</summary>
+public sealed record OpenApiDocumentDto(
+    string DocumentId,
+    string Title,
+    string? ApiVersion,
+    string SpecVersion,
+    string? Description,
+    string SuggestedSlug,
+    IReadOnlyList<OpenApiServerDto> Servers,
+    IReadOnlyList<OpenApiSecuritySchemeDto> SecuritySchemes,
+    IReadOnlyList<OpenApiOperationDto> Operations,
+    IReadOnlyList<OpenApiDiagnosticDto> Diagnostics);
+
+public sealed record OpenApiServerDto(string Url, string? Description);
+
+/// <summary><see cref="TapAuthType"/> is null when Tap has no equivalent — the wizard shows the
+/// scheme greyed out with <see cref="Warning"/> as the reason rather than hiding it.</summary>
+public sealed record OpenApiSecuritySchemeDto(
+    string Key,
+    string Type,
+    string? TapAuthType,
+    string? Description,
+    IReadOnlyList<string> Scopes,
+    string? Warning);
+
+public sealed record OpenApiOperationDto(
+    string OpKey,
+    string? OperationId,
+    string Method,
+    string Path,
+    string? Summary,
+    IReadOnlyList<string> Tags,
+    bool Deprecated,
+    bool HasRequestBody,
+    int PathParamCount,
+    int QueryParamCount);
+
+public sealed record OpenApiDiagnosticDto(string Severity, string Message, string? Pointer);
+
+/// <summary>Body for <c>POST /api/collections/import/openapi</c>.</summary>
+public sealed record OpenApiImportRequestDto
+{
+    public required string DocumentId { get; init; }
+    public string? Slug { get; init; }
+
+    /// <summary>
+    /// <c>req</c> (one <c>.req.tap</c> per operation) or <c>http</c> (one <c>.http</c> file per
+    /// tag). Null means <c>req</c>.
+    ///
+    /// <para>Deliberately nullable with no initializer: a property initializer does not survive
+    /// source-generated deserialization when the client omits the field, so the default has to
+    /// live in the code that reads it, not in the DTO.</para>
+    /// </summary>
+    public string? Layout { get; init; }
+
+    /// <summary>Null or empty imports every operation.</summary>
+    public IReadOnlyList<string>? OperationKeys { get; init; }
+
+    public string? BaseUrl { get; init; }
+    public string? SecuritySchemeKey { get; init; }
+    public string? LinkAuthPath { get; init; }
+    public bool IncludeOptionalQueryParams { get; init; }
+
+    /// <summary>
+    /// Values to seed generated variables with, keyed by opKey then variable name. This is where
+    /// an accepted AI suggestion lands; the import is identical without it.
+    /// </summary>
+    public IReadOnlyDictionary<string, Dictionary<string, string>>? VariableDefaults { get; init; }
+
+    /// <summary>
+    /// What to do when the target collection already exists: <c>create</c> (the default — fail if
+    /// it does), <c>merge</c> (write these files, leave everything else alone), or <c>replace</c>
+    /// (delete the directory first).
+    ///
+    /// <para>Null means <c>create</c>. As with <c>Layout</c>, the default lives here and not in a
+    /// property initializer, which source-generated deserialization does not honour.</para>
+    /// </summary>
+    public string? Mode { get; init; }
+
+    /// <summary>Legacy alias for <c>mode: "replace"</c>.</summary>
+    public bool Overwrite { get; init; }
+}
+
+public sealed record OpenApiImportResponseDto(
+    string Slug,
+    string CollectionPath,
+    string? AuthPath,
+    int RequestCount,
+    int FileCount,
+    IReadOnlyList<string> Warnings);
+
+/// <summary>
+/// <c>GET /api/collections/{slug}/openapi</c> — the recorded link between a collection and the
+/// document it came from. 404 when the collection was not imported (or the lock was deleted).
+/// </summary>
+public sealed record OpenApiLinkDto(
+    string Slug,
+    string SourceKind,
+    string? Url,
+    string? FileName,
+    DateTimeOffset FetchedAt,
+    string SpecVersion,
+    string? ApiVersion,
+    string DocumentHash,
+    string Layout,
+    int TrackedOperations);
+
+/// <summary>Body for <c>POST /api/ai/openapi/suggest</c>.</summary>
+public sealed record OpenApiSuggestRequestDto
+{
+    public required string DocumentId { get; init; }
+    /// <summary>Null or empty asks about every operation in the document.</summary>
+    public IReadOnlyList<string>? OperationKeys { get; init; }
+    public string? Model { get; init; }
+}
+
+/// <summary>Proposed values for one operation's variables, keyed by variable name.</summary>
+public sealed record OpenApiSuggestionDto(
+    string OpKey,
+    IReadOnlyDictionary<string, string> Values,
+    string? Note);
+
+public sealed record OpenApiSuggestResponseDto(
+    IReadOnlyList<OpenApiSuggestionDto> Suggestions,
+    string Provider,
+    string? Model,
+    /// <summary>How many operations were considered. Batching means a big spec may be partial.</summary>
+    int Considered,
+    IReadOnlyList<string> Warnings);
+
+/// <summary>Body for the two re-sync calls — the document to diff against.</summary>
+public sealed record OpenApiResyncRequestDto
+{
+    public required string DocumentId { get; init; }
+}
+
+/// <summary>
+/// One operation's verdict. <c>kind</c> is <c>added</c> | <c>changed</c> | <c>conflict</c> |
+/// <c>unchanged</c> | <c>orphaned</c> | <c>removed</c>, and <c>defaultAction</c> is what the UI
+/// pre-selects — never destructive.
+/// </summary>
+public sealed record OpenApiChangeDto(
+    string Kind,
+    string OpKey,
+    string Method,
+    string Path,
+    string? Summary,
+    string? LocalPath,
+    string? Fragment,
+    bool LocallyEdited,
+    string DefaultAction);
+
+public sealed record OpenApiResyncPreviewDto(
+    string Slug,
+    string Layout,
+    string? SourceUrl,
+    DateTimeOffset PreviouslyFetchedAt,
+    string? PreviousApiVersion,
+    string? NewApiVersion,
+    bool DocumentUnchanged,
+    int Added,
+    int Changed,
+    int Conflicts,
+    int Removed,
+    IReadOnlyList<OpenApiChangeDto> Changes);
+
+/// <summary>One user decision. <c>action</c> is <c>skip</c> | <c>add</c> | <c>update</c> |
+/// <c>deprecate</c> | <c>untrack</c>. Operations not listed are skipped.</summary>
+public sealed record OpenApiDecisionDto
+{
+    public required string OpKey { get; init; }
+    public required string Action { get; init; }
+}
+
+public sealed record OpenApiResyncApplyRequestDto
+{
+    public required string DocumentId { get; init; }
+    public required IReadOnlyList<OpenApiDecisionDto> Decisions { get; init; }
+}
+
+public sealed record OpenApiResyncResultDto(
+    int Added,
+    int Updated,
+    int Deprecated,
+    int Untracked,
+    int Skipped,
+    IReadOnlyList<string> WrittenPaths,
+    IReadOnlyList<string> Warnings);
 
 /// <summary>Body for <c>POST /api/collections/import/postman</c>. <see cref="Collection"/>
 /// is the raw Postman v2.1 collection JSON (parsed as a free-form object so we don't have
@@ -297,7 +524,20 @@ public sealed record WorkspaceDetailDto(
     /// when surfaced via <c>/api/tags/dictionary</c>, so this list is purely additive.</summary>
     IReadOnlyList<string> Tags,
     string Body,
-    string Source);
+    string Source,
+    /// <summary>The workspace's response caps, or null when the manifest leaves them at the
+    /// defaults.</summary>
+    ResponseLimitsDto? Response = null,
+    /// <summary>The workspace-wide <c>history:</c> defaults, or null when the manifest is
+    /// silent (which means off).</summary>
+    HistoryOptionsDto? History = null);
+
+/// <summary>Response caps declared in <c>workspace.tap</c>. Both members are byte counts;
+/// null means "leave it at the default" and the emitter writes nothing.</summary>
+/// <param name="MaxBytes">How much of a body is delivered inline to the panel / CLI.</param>
+/// <param name="MaxRetainedBytes">How much is held back for "show all" and the full
+/// download.</param>
+public sealed record ResponseLimitsDto(long? MaxBytes, long? MaxRetainedBytes);
 
 /// <summary>
 /// Variable provider configuration as exposed to the UI. <see cref="Settings"/> may include
@@ -325,16 +565,13 @@ public sealed record OidcDiscoveryDto(
     IReadOnlyList<string> GrantTypesSupported,
     IReadOnlyList<string> CodeChallengeMethodsSupported);
 
-/// <summary>Body for <c>POST /api/auth/execute</c>. <see cref="RequestPath"/> +
-/// <see cref="Stage"/> carry the caller's editing context so a collection-scoped profile
-/// expands against the right stage's variables (and caches its token there); both are
-/// ignored for a workspace-scoped profile. <see cref="Env"/> is the workspace-relative path
-/// of the selected environment — it applies to every profile, and omitting it falls back to
-/// the workspace's <c>defaultEnv</c>.</summary>
+/// <summary>Body for <c>POST /api/auth/execute</c>. <see cref="Env"/> is the
+/// workspace-relative path of the selected environment — the profile expands against its
+/// variables and caches its token there. Omitting it falls back to the workspace's
+/// <c>defaultEnv</c>. Nothing else is needed: the profile's own location decides whether it
+/// also sees a collection's variables.</summary>
 public sealed record AuthExecuteRequestDto(string Path, bool ForceReauthenticate)
 {
-    public string? RequestPath { get; init; }
-    public string? Stage { get; init; }
     public string? Env { get; init; }
 }
 
@@ -367,7 +604,25 @@ public sealed record AuthExecuteResponseDto(
 /// or null for a workspace-scoped one under <c>auth/</c>.</summary>
 public sealed record AuthSummaryDto(string Path, string Name, string? Id, string Type, string? Collection);
 
-public sealed record EnvSummaryDto(string Path, string Name, string? Id);
+/// <summary>Listing row for an environment. <see cref="Collections"/> is empty for a global
+/// env — offered everywhere — and otherwise names the collections it is assigned to, which is
+/// what the request editor filters its picker on.</summary>
+public sealed record EnvSummaryDto(
+    string Path,
+    string Name,
+    string? Id,
+    IReadOnlyList<EnvCollectionDto> Collections);
+
+/// <summary>One collection an environment is assigned to, with what it overrides there.
+/// Carried on the summary so the baseUrl chip can show where each choice points without a
+/// second round trip.</summary>
+public sealed record EnvCollectionDto(
+    string Collection,
+    /// <summary>Base URL override as written, or null to inherit the collection's.</summary>
+    string? BaseUrl,
+    /// <summary>Default-auth override — a path relative to the env file, or <c>id:…</c> —
+    /// or null to inherit the collection's.</summary>
+    string? DefaultAuth);
 
 public sealed record SaveFileDto(string Content);
 
@@ -377,6 +632,28 @@ public sealed record SaveFileDto(string Content);
 /// writing so a broken file never lands on disk.
 /// </summary>
 public sealed record SaveSourceDto(string Path, string Content);
+
+/// <summary>Body for <c>POST /api/http/parse</c> — the <c>.http</c> file being edited and the
+/// unsaved text currently in the editor.</summary>
+public sealed record ParseHttpFileDto(string Path, string Content);
+
+/// <summary>One request found in a <c>.http</c> file.</summary>
+/// <param name="Path">Its fragment path (<c>orders.http#get-order</c>) — the identity that
+/// addresses it everywhere else, and what an execute call sends back as its <c>Path</c>.</param>
+/// <param name="Line">1-based line of the request line, for scrolling the editor to it.</param>
+public sealed record HttpRequestSummaryDto(
+    string Path,
+    string Name,
+    string Method,
+    string Url,
+    int Line);
+
+/// <summary>What <c>POST /api/http/parse</c> found. Errors and warnings are reported together —
+/// a file that fails to parse still lists whatever requests survived, because per-request error
+/// isolation is the whole point of <see cref="Tap.Workspace.Parsing.HttpFileParser"/>.</summary>
+public sealed record ParseHttpFileResultDto(
+    IReadOnlyList<HttpRequestSummaryDto> Requests,
+    IReadOnlyList<WorkspaceErrorDto> Errors);
 
 // -----------------------------------------------------------------------------------------
 // Typed PUT specs — clients send structured props, the server emits canonical YAML.
@@ -467,6 +744,10 @@ public sealed record EnvSpecDto
     public IReadOnlyList<string>? Tags { get; init; }
     public string? Body { get; init; }
 
+    /// <summary>Collections to assign this env to, each with its own overrides. Null or empty
+    /// emits nothing and the env stays global.</summary>
+    public IReadOnlyList<EnvCollectionDto>? Collections { get; init; }
+
     /// <summary>Provider bare tokens hit first while this env is active. May name a
     /// provider directly or via <see cref="ProviderAliases"/>. Null/empty = inherit.</summary>
     public string? DefaultVariableProvider { get; init; }
@@ -489,6 +770,8 @@ public sealed record WorkspaceSpecDto
     public IReadOnlyList<string>? Secrets { get; init; }
     public IReadOnlyList<string>? Tags { get; init; }
     public string? Body { get; init; }
+    public ResponseLimitsDto? Response { get; init; }
+    public HistoryOptionsDto? History { get; init; }
 }
 
 public sealed record RequestSpecDto
@@ -509,6 +792,7 @@ public sealed record RequestSpecDto
     public string? RequestBody { get; init; }
     public string? Protocol { get; init; }
     public RequestTransportSettingsDto? Transport { get; init; }
+    public HistoryOptionsDto? History { get; init; }
 
     /// <summary>Declared expectations about the response. Omitted (or empty) leaves the
     /// <c>assertions:</c> key out of the emitted file entirely.</summary>
@@ -516,6 +800,19 @@ public sealed record RequestSpecDto
 }
 
 public sealed record RequestTransportSettingsDto(bool? IgnoreTlsErrors, int? TimeoutMs);
+
+/// <summary>
+/// Wire form of a <c>history:</c> block. Every field is nullable and means "inherit" — the
+/// editors show the inherited value greyed out and only send a key the user actually set, which
+/// is what keeps a collection's policy from being silently copied into every request under it.
+/// <c>OrphanRetentionDays</c> is only meaningful on the workspace manifest.
+/// </summary>
+public sealed record HistoryOptionsDto(
+    bool? Enabled,
+    int? MaxEntries,
+    bool? Encrypt,
+    long? MaxBodyBytes,
+    int? OrphanRetentionDays);
 
 public sealed record HttpHeaderSpecDto(string Name, string Value);
 
@@ -555,8 +852,7 @@ public sealed record EvaluateAssertsRequestDto(
     IReadOnlyList<AssertSpecDto> Assertions,
     AssertResponseSnapshotDto Response,
     string? Path,
-    string? Env,
-    string? Stage);
+    string? Env);
 
 /// <summary>The captured response an <see cref="EvaluateAssertsRequestDto"/> is checked against.</summary>
 public sealed record AssertResponseSnapshotDto(
@@ -571,7 +867,7 @@ public sealed record EvaluateAssertsResponseDto(
     AssertSummaryDto Summary);
 
 // -----------------------------------------------------------------------------------------
-// Testing — flows (*.flow.md, §10) and test sets (*.test.md, §11), plus the shapes a run
+// Testing — flows (*.flow.tap, §10) and test sets (*.test.tap, §11), plus the shapes a run
 // streams back. Editors ship the *SpecDto; the server emits the canonical YAML.
 // -----------------------------------------------------------------------------------------
 
@@ -748,10 +1044,10 @@ public sealed record AiToolCallDto(string Name, string? Summary, bool? Success);
 // -----------------------------------------------------------------------------------------
 
 /// <summary>Context for resolving variables in the editor. All fields optional:
-/// <c>RequestPath</c> drives the request-editor case (workspace → collection → stage → env → request);
-/// <c>CollectionPath</c> drives the collection-editor case (workspace → collection → stage); <c>EnvPath</c> and
-/// <c>Stage</c> override the active env / collection default stage.</summary>
-public sealed record VariableContextDto(string? RequestPath, string? CollectionPath, string? EnvPath, string? Stage);
+/// <c>RequestPath</c> drives the request-editor case (workspace → collection → env → request);
+/// <c>CollectionPath</c> drives the collection-editor case (workspace → collection);
+/// <c>EnvPath</c> overrides the active environment.</summary>
+public sealed record VariableContextDto(string? RequestPath, string? CollectionPath, string? EnvPath);
 
 public sealed record VariableViewDto(
     IReadOnlyList<VariableSetDto> Sets,
@@ -885,6 +1181,22 @@ public sealed record ProviderVariableDto(string Name, bool IsSecret, string? Val
 /// per-key endpoint, never in bulk listings.</summary>
 public sealed record ProviderVariableValueDto(string Name, string Value, bool IsSecret);
 
+/// <summary>Body of a provider-variable write. <see cref="Value"/> null means "keep the stored
+/// value" — the provider editor never receives secret clear-text, so a row whose value the user
+/// didn't touch has nothing to send back, and sending an empty string instead would silently
+/// erase it.</summary>
+public sealed record ProviderVariableWriteDto(string? Value, bool IsSecret, string? Env = null);
+
+/// <summary>State of this machine's encryption key: whether one exists, where it came from,
+/// and the path a generated one would take. Drives the provider editor's "no key yet" prompt —
+/// the passphrase itself is never part of this.</summary>
+public sealed record EncryptionKeyStatusDto(
+    bool Configured,
+    /// <summary><c>env</c>, <c>file</c>, or <c>none</c>.</summary>
+    string Origin,
+    string EnvVarName,
+    string KeyFilePath);
+
 /// <summary>One Azure subscription visible to the CLI credential (vault picker dialog).</summary>
 public sealed record AzureSubscriptionDto(
     string SubscriptionId,
@@ -946,8 +1258,7 @@ public sealed record SaveSystemSettingsDto(
 public sealed record RenderRequestDto(
     string Path,
     string? Env,
-    IReadOnlyDictionary<string, string>? Overrides,
-    string? Stage);
+    IReadOnlyDictionary<string, string>? Overrides);
 
 public sealed record RenderedRequestDto(
     string Method,
@@ -955,17 +1266,26 @@ public sealed record RenderedRequestDto(
     IReadOnlyDictionary<string, string> Headers,
     string? Body,
     IReadOnlyList<VariableTraceDto> VariablesUsed,
-    string? Stage,
+    /// <summary>Path of the environment that actually applied, or null when none did — a
+    /// scoped env out of range for this request's collection drops out of the render.</summary>
+    string? Env,
     string Protocol);
 
 public sealed record VariableTraceDto(string VariableProvider, string Name, bool Resolved, bool IsSecret, double DurationMs);
 
+/// <param name="Spec">An unsaved editor draft of a structured request, built in-memory through
+/// the emit pipeline instead of being read off disk. Does not apply to <c>.http</c> requests —
+/// those have no canonical spec form, so their draft arrives as <paramref name="Source"/>.</param>
+/// <param name="Source">The unsaved raw text of the <c>.http</c> file <paramref name="Path"/>
+/// points into. The file is parsed in-memory and the fragment named by <paramref name="Path"/>
+/// is executed, so the user runs what is on screen rather than what was last saved. Ignored for
+/// every other kind, and mutually exclusive with <paramref name="Spec"/>.</param>
 public sealed record ExecuteRequestDto(
     string Path,
     string? Env,
     IReadOnlyDictionary<string, string>? Overrides,
-    string? Stage,
-    RequestSpecDto? Spec = null);
+    RequestSpecDto? Spec = null,
+    string? Source = null);
 
 public sealed record ExecutionResultDto(
     int Status,
@@ -980,7 +1300,8 @@ public sealed record ExecutionResultDto(
     long ResponseBodyBytes,
     double DurationMs,
     IReadOnlyList<VariableTraceDto> VariablesUsed,
-    string? Stage,
+    /// <summary>Path of the environment the request actually resolved under, or null.</summary>
+    string? Env,
     string? Error,
     string Protocol,
     /// <summary>One entry per declared assertion, in file order. Empty when the request
@@ -988,7 +1309,17 @@ public sealed record ExecutionResultDto(
     IReadOnlyList<AssertResultDto> Assertions,
     /// <summary>Roll-up of <see cref="Assertions"/>. Null when the request declares none, so
     /// a request without assertions shows no pass/fail chrome at all.</summary>
-    AssertSummaryDto? AssertSummary);
+    AssertSummaryDto? AssertSummary,
+    /// <summary>How many bytes of the body <see cref="ResponseBody"/> actually carries. Below
+    /// <see cref="ResponseBodyBytes"/> when the workspace's <c>response.maxBytes</c> cut it
+    /// short — that difference is what the truncation banner reports.</summary>
+    long ResponseBodyInlineBytes = 0,
+    /// <summary>Handle for the retained copy held by <see cref="ResponseBodyStore"/>, or null
+    /// when the whole body already rode inline. Backs "show all" and the full download.</summary>
+    string? BodyId = null,
+    /// <summary>How much of the body the retained copy holds. Equals
+    /// <see cref="ResponseBodyBytes"/> when the response was kept whole.</summary>
+    long RetainedBytes = 0);
 
 public sealed record ExecuteStreamMetaDto(
     string Method,
@@ -1038,7 +1369,25 @@ public sealed record ExecuteStreamWsDto(
 
 public sealed record ExecuteStreamBodyDto(
     string? ResponseBody,
-    long ResponseBodyBytes);
+    long ResponseBodyBytes,
+    /// <summary>Bytes of the body carried by <see cref="ResponseBody"/> — see
+    /// <see cref="ExecutionResultDto.ResponseBodyInlineBytes"/>.</summary>
+    long ResponseBodyInlineBytes = 0,
+    /// <summary>Handle for the retained copy, or null when nothing was held back.</summary>
+    string? BodyId = null,
+    long RetainedBytes = 0);
+
+/// <summary>Reply from <c>GET /api/execute/body/{id}/text</c> — a longer prefix of a body the
+/// panel first showed truncated.</summary>
+/// <param name="Text">Decoded body, capped at the requested size.</param>
+/// <param name="InlineBytes">Bytes of the body <paramref name="Text"/> was decoded from.</param>
+/// <param name="TotalBytes">What the upstream sent.</param>
+/// <param name="RetainedBytes">What the host kept — the ceiling on any future ask.</param>
+public sealed record ResponseBodyTextDto(
+    string? Text,
+    long InlineBytes,
+    long TotalBytes,
+    long RetainedBytes);
 
 public sealed record ExecuteStreamSseDto(
     int Seq,
@@ -1051,7 +1400,8 @@ public sealed record ExecuteStreamDoneDto(
     double DurationMs,
     long ResponseBodyBytes,
     IReadOnlyList<VariableTraceDto> VariablesUsed,
-    string? Stage,
+    /// <summary>Path of the environment the request actually resolved under, or null.</summary>
+    string? Env,
     string? Error,
     /// <summary>Assertion results, evaluated server-side once the body is complete. Rides on
     /// <c>done</c> rather than its own event so the UI paints the verdict in the same frame
@@ -1061,7 +1411,7 @@ public sealed record ExecuteStreamDoneDto(
 
 public sealed record ExecuteStreamErrorDto(string Message);
 
-public sealed record GraphQLSchemaRequestDto(string Path, string? Env, string? Stage, string Mode);
+public sealed record GraphQLSchemaRequestDto(string Path, string? Env, string Mode);
 
 public sealed record GraphQLSchemaResponseDto(string? Schema, string? Error);
 
@@ -1112,10 +1462,6 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(TestRunStartDto))]
 [JsonSerializable(typeof(TestRunStepEventDto))]
 [JsonSerializable(typeof(TestRunResultDto))]
-[JsonSerializable(typeof(CollectionStageDto))]
-[JsonSerializable(typeof(IReadOnlyList<CollectionStageDto>))]
-[JsonSerializable(typeof(CollectionStageSpecDto))]
-[JsonSerializable(typeof(IReadOnlyList<CollectionStageSpecDto>))]
 [JsonSerializable(typeof(KnownWorkspaceDto))]
 [JsonSerializable(typeof(GitInfoDto))]
 [JsonSerializable(typeof(GitRemoteDto))]
@@ -1125,6 +1471,8 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(IReadOnlyList<GitFileChangeDto>))]
 [JsonSerializable(typeof(GitBranchDto))]
 [JsonSerializable(typeof(IReadOnlyList<GitBranchDto>))]
+[JsonSerializable(typeof(EnvCollectionDto))]
+[JsonSerializable(typeof(IReadOnlyList<EnvCollectionDto>))]
 [JsonSerializable(typeof(GitStagePathsDto))]
 [JsonSerializable(typeof(GitCommitRequestDto))]
 [JsonSerializable(typeof(GitCommitResultDto))]
@@ -1160,9 +1508,36 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(CollectionSpecDto))]
 [JsonSerializable(typeof(PostmanImportRequestDto))]
 [JsonSerializable(typeof(PostmanImportResponseDto))]
+[JsonSerializable(typeof(OpenApiUploadRequestDto))]
+[JsonSerializable(typeof(OpenApiFetchRequestDto))]
+[JsonSerializable(typeof(OpenApiDocumentDto))]
+[JsonSerializable(typeof(OpenApiServerDto))]
+[JsonSerializable(typeof(OpenApiSecuritySchemeDto))]
+[JsonSerializable(typeof(OpenApiOperationDto))]
+[JsonSerializable(typeof(OpenApiDiagnosticDto))]
+[JsonSerializable(typeof(OpenApiImportRequestDto))]
+[JsonSerializable(typeof(OpenApiImportResponseDto))]
+[JsonSerializable(typeof(OpenApiLinkDto))]
+[JsonSerializable(typeof(OpenApiSuggestRequestDto))]
+[JsonSerializable(typeof(OpenApiSuggestionDto))]
+[JsonSerializable(typeof(OpenApiSuggestResponseDto))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiSuggestionDto>))]
+[JsonSerializable(typeof(OpenApiResyncRequestDto))]
+[JsonSerializable(typeof(OpenApiChangeDto))]
+[JsonSerializable(typeof(OpenApiResyncPreviewDto))]
+[JsonSerializable(typeof(OpenApiDecisionDto))]
+[JsonSerializable(typeof(OpenApiResyncApplyRequestDto))]
+[JsonSerializable(typeof(OpenApiResyncResultDto))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiChangeDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiDecisionDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiServerDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiSecuritySchemeDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiOperationDto>))]
+[JsonSerializable(typeof(IReadOnlyList<OpenApiDiagnosticDto>))]
 [JsonSerializable(typeof(TaggedItemDto))]
 [JsonSerializable(typeof(IReadOnlyList<TaggedItemDto>))]
 [JsonSerializable(typeof(WorkspaceSpecDto))]
+[JsonSerializable(typeof(ResponseLimitsDto))]
 [JsonSerializable(typeof(RequestSpecDto))]
 [JsonSerializable(typeof(AiStatusDto))]
 [JsonSerializable(typeof(AiConfigDto))]
@@ -1185,13 +1560,17 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(ExecuteStreamWsDto))]
 [JsonSerializable(typeof(ExecuteStreamDoneDto))]
 [JsonSerializable(typeof(ExecuteStreamErrorDto))]
+[JsonSerializable(typeof(ResponseBodyTextDto))]
 [JsonSerializable(typeof(TlsDiagnosisDto))]
 [JsonSerializable(typeof(GraphQLSchemaRequestDto))]
 [JsonSerializable(typeof(GraphQLSchemaResponseDto))]
 [JsonSerializable(typeof(FileUploadResponseDto))]
 [JsonSerializable(typeof(Tap.Studio.Endpoints.GraphQLSchemaEndpoint.IntrospectionBody))]
+[JsonSerializable(typeof(RawSourceDto))]
 [JsonSerializable(typeof(WorkspaceErrorDto))]
 [JsonSerializable(typeof(SaveSourceDto))]
+[JsonSerializable(typeof(ParseHttpFileDto))]
+[JsonSerializable(typeof(ParseHttpFileResultDto))]
 [JsonSerializable(typeof(IReadOnlyList<RequestSummaryDto>))]
 [JsonSerializable(typeof(IReadOnlyList<AuthSummaryDto>))]
 [JsonSerializable(typeof(IReadOnlyList<EnvSummaryDto>))]
@@ -1220,6 +1599,8 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(ProviderVariableDto))]
 [JsonSerializable(typeof(IReadOnlyList<ProviderVariableDto>))]
 [JsonSerializable(typeof(ProviderVariableValueDto))]
+[JsonSerializable(typeof(ProviderVariableWriteDto))]
+[JsonSerializable(typeof(EncryptionKeyStatusDto))]
 [JsonSerializable(typeof(AzureSubscriptionDto))]
 [JsonSerializable(typeof(AzureSubscriptionDto[]))]
 [JsonSerializable(typeof(AzureKeyVaultDto))]

@@ -24,15 +24,17 @@ import { TestRunPanel } from './TestRunPanel'
 import {
   flowSelectItems, matchRefOption, matchRefOptionGrouped, requestSelectGroups, resolveRef,
 } from './testingOptions'
+import { useTabView } from './useTabView'
 import { useSpecEditor } from './useSpecEditor'
 import { useTestRun } from './useTestRun'
 import { flatVarsToRows, rowsToFlatVars } from './varRows'
 import { VariablesPanel } from './VariablesPanel'
+import { labelForPath } from '../shell/tapFiles'
 
 interface Props { path: string }
 
 /**
- * Editor for a `*.test.md` — a named group of checks, each running one request or one flow.
+ * Editor for a `*.test.tap` — a named group of checks, each running one request or one flow.
  *
  * Where the flow editor is a composer, this is a runner: the list is what to check, the Run
  * button is the point, and each row can be re-run on its own so a single failure doesn't
@@ -46,7 +48,7 @@ export function TestSetEditor({ path }: Props) {
   const activeEnv = useActiveEnv()
   const tagSuggestions = useTagDictionary()
 
-  const [tab, setTab] = useState<string | null>('tests')
+  const [tab, setTab] = useTabView<string | null>(path, 'tab', 'tests')
   const [requests, setRequests] = useState<RequestSummary[]>([])
   const [varsOpened, varsCtl] = useDisclosure(false)
 
@@ -114,7 +116,7 @@ export function TestSetEditor({ path }: Props) {
             <Button
               size="xs"
               leftSection={<IconPlayerPlayFilled size={13} />}
-              onClick={() => run.run(activeEnv, null)}
+              onClick={() => run.run(activeEnv)}
               loading={run.state.running}
               disabled={dirty || tests.length === 0}
             >
@@ -128,7 +130,7 @@ export function TestSetEditor({ path }: Props) {
             kind="test"
             onStop={run.stop}
             onClose={run.clear}
-            onRunOne={(index) => run.run(activeEnv, null, index)}
+            onRunOne={(index) => run.run(activeEnv, index)}
           />
         ) : undefined}
       >
@@ -449,5 +451,5 @@ function rowsToVars(rows: KvRow[]): Record<string, string> | null {
 }
 
 function basename(path: string): string {
-  return path.split('/').pop()?.replace(/\.(test|flow|req)\.md$/i, '') ?? path
+  return labelForPath(path)
 }

@@ -6,6 +6,7 @@
     <AssemblyName>Tap.Workspace</AssemblyName>
     <IsPackable>true</IsPackable>
     <PackageId>Tap.Workspace</PackageId>
+    <TapProductIcon>Studio</TapProductIcon>
     <Title>Tap.Workspace</Title>
     <Description>Parses, validates, and renders Tap workspace files (.req.md / .api.md / .auth.md / .env.md / tap.md). Source of truth for the on-disk workspace format documented in docs/workspace-format.md.</Description>
     <PackageTags>tap;workspace;http-client;markdown;frontmatter</PackageTags>

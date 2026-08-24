@@ -1,6 +1,23 @@
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 
 namespace Tap.Studio;
+
+/// <summary>How this Studio process is being hosted, which decides how much of itself it
+/// lets the user reconfigure.</summary>
+public enum StudioMode
+{
+    /// <summary>Standalone or desktop. The user owns the workspace choice.</summary>
+    Normal,
+
+    /// <summary>
+    /// Launched as a companion resource by an Aspire AppHost. The workspace is pinned to the
+    /// folder the AppHost passed, the switcher is locked, and the UI says so — an AppHost-run
+    /// Studio has to be deterministic, because the workspace it opens is part of the
+    /// solution's definition rather than a per-user preference.
+    /// </summary>
+    Aspire,
+}
 
 /// <summary>
 /// Configuration consumed by <see cref="StudioHost"/>. Read from <c>Studio:*</c> keys in
@@ -8,6 +25,14 @@ namespace Tap.Studio;
 /// </summary>
 public sealed class StudioOptions
 {
+    /// <summary>How this process is hosted. Set from <c>Studio:Mode</c> (env
+    /// <c>Studio__Mode</c>); anything unrecognized falls back to
+    /// <see cref="StudioMode.Normal"/>.</summary>
+    public StudioMode Mode { get; init; } = StudioMode.Normal;
+
+    /// <summary>True when the workspace root is fixed by the host and the user may not switch.</summary>
+    public bool IsWorkspacePinned => Mode == StudioMode.Aspire;
+
     /// <summary>HTTP port the REST API + UI listen on.</summary>
     public required int Port { get; init; }
 
@@ -58,13 +83,7 @@ public sealed class StudioOptions
         var host = config["Studio:Host"] ?? "localhost";
         var desktop = string.Equals(
             Environment.GetEnvironmentVariable("TAP_STUDIO_DESKTOP"), "1", StringComparison.Ordinal);
-        var systemDir = Environment.GetEnvironmentVariable("TAP_SYSTEM_DIR");
-        if (string.IsNullOrWhiteSpace(systemDir))
-        {
-            systemDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
-                ".tap");
-        }
+        var systemDir = MachineEncryptionKeySource.DefaultSystemDir();
         systemDir = Path.GetFullPath(systemDir);
 
         // The CLI is run *from* a workspace, so the working directory is the right default
@@ -82,8 +101,13 @@ public sealed class StudioOptions
         var state = config["Studio:StatePath"]
             ?? Path.Combine(systemDir, "state.db");
 
+        var mode = Enum.TryParse<StudioMode>(config["Studio:Mode"], ignoreCase: true, out var parsedMode)
+            ? parsedMode
+            : StudioMode.Normal;
+
         return new StudioOptions
         {
+            Mode = mode,
             Port = port,
             Host = host,
             DesktopShell = desktop,

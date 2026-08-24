@@ -34,6 +34,13 @@ public interface IVariableProvider
     /// instructs the provider whether to apply at-rest encryption (file provider) or
     /// otherwise treat the value as sensitive.</summary>
     ValueTask SetAsync(string name, string value, bool isSecret, CancellationToken ct);
+
+    /// <summary>Removes a variable. <c>true</c> when something was removed, <c>false</c> when
+    /// the name wasn't there — deleting an absent name is not an error, so a UI can converge on
+    /// "gone" without racing itself. Throws <see cref="NotSupportedException"/> when
+    /// <see cref="Mode"/> is <see cref="ProviderMode.Read"/>, matching
+    /// <see cref="SetAsync"/>.</summary>
+    ValueTask<bool> DeleteAsync(string name, CancellationToken ct);
 }
 
 /// <summary>Optional capability for providers whose <see cref="IVariableProvider.ListAsync"/>
@@ -43,4 +50,16 @@ public interface IVariableProvider
 public interface IRefreshableVariableProvider
 {
     void InvalidateListCache();
+}
+
+/// <summary>
+/// Implemented by providers that can say something more useful than "not found" when a lookup
+/// misses. A miss on most providers means "you didn't put it there"; on some it means "you
+/// didn't set this specific environment variable", and saying which one is the difference
+/// between a dead end and a fix.
+/// </summary>
+public interface IExplainsMissingValues
+{
+    /// <summary>One sentence appended to the resolution failure for <paramref name="name"/>.</summary>
+    string ExplainMiss(string name);
 }

@@ -13,7 +13,7 @@ public class FlowParserTests
               sku: ABC-1
             steps:
             - name: Create order
-              request: ../collections/demo/create-order.req.md
+              request: ../collections/demo/create-order.req.tap
               vars:
                 item: '{{sku}}'
               extract:
@@ -27,7 +27,7 @@ public class FlowParserTests
         Assert.Equal("ABC-1", flow.Vars["sku"].Default);
         var step = Assert.Single(flow.Steps);
         Assert.Equal("Create order", step.Name);
-        Assert.Equal("../collections/demo/create-order.req.md", step.Request.SourceText);
+        Assert.Equal("../collections/demo/create-order.req.tap", step.Request.SourceText);
         Assert.Equal("{{sku}}", step.Vars["item"]);
         Assert.True(step.ContinueOnFailure);
         Assert.False(step.Skip);
@@ -61,7 +61,7 @@ public class FlowParserTests
     [InlineData("- var: token\n    regex: 'session=([^;]+)'", ExtractSource.Regex, "session=([^;]+)")]
     public void Reads_every_extraction_source(string entry, ExtractSource source, string? selector)
     {
-        var flow = ParseFlow($"steps:\n- request: ./a.req.md\n  extract:\n  {entry}");
+        var flow = ParseFlow($"steps:\n- request: ./a.req.tap\n  extract:\n  {entry}");
         var extract = Assert.Single(Assert.Single(flow.Steps).Extract);
         Assert.Equal(source, extract.Source);
         Assert.Equal(selector, extract.Selector);
@@ -72,7 +72,7 @@ public class FlowParserTests
     {
         var flow = ParseFlow("""
             steps:
-            - request: ./a.req.md
+            - request: ./a.req.tap
               extract:
               - var: token
                 regex: 'session=([^;]+)'
@@ -118,17 +118,17 @@ public class FlowParserTests
     [Fact]
     public void An_extraction_needs_exactly_one_source()
     {
-        var none = FlowParseError("steps:\n- request: ./a.req.md\n  extract:\n  - var: x");
+        var none = FlowParseError("steps:\n- request: ./a.req.tap\n  extract:\n  - var: x");
         Assert.Contains("has no source", none.Message, StringComparison.Ordinal);
 
-        var two = FlowParseError("steps:\n- request: ./a.req.md\n  extract:\n  - var: x\n    jsonpath: $.a\n    header: etag");
+        var two = FlowParseError("steps:\n- request: ./a.req.tap\n  extract:\n  - var: x\n    jsonpath: $.a\n    header: etag");
         Assert.Contains("names two sources", two.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void An_extraction_needs_a_var()
     {
-        var error = FlowParseError("steps:\n- request: ./a.req.md\n  extract:\n  - jsonpath: $.id");
+        var error = FlowParseError("steps:\n- request: ./a.req.tap\n  extract:\n  - jsonpath: $.id");
         Assert.Contains("has no 'var:'", error.Message, StringComparison.Ordinal);
     }
 
@@ -137,7 +137,7 @@ public class FlowParserTests
     {
         var error = FlowParseError("""
             steps:
-            - request: ./a.req.md
+            - request: ./a.req.tap
               extract:
               - var: id
                 jsonpath: $.a
@@ -150,28 +150,28 @@ public class FlowParserTests
     [Fact]
     public void A_variable_name_has_to_be_readable_as_a_token()
     {
-        var error = FlowParseError("steps:\n- request: ./a.req.md\n  extract:\n  - var: 'order id'\n    jsonpath: $.id");
+        var error = FlowParseError("steps:\n- request: ./a.req.tap\n  extract:\n  - var: 'order id'\n    jsonpath: $.id");
         Assert.Contains("not a usable variable name", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Group_belongs_to_regex_extractions()
     {
-        var error = FlowParseError("steps:\n- request: ./a.req.md\n  extract:\n  - var: x\n    jsonpath: $.a\n    group: 1");
+        var error = FlowParseError("steps:\n- request: ./a.req.tap\n  extract:\n  - var: x\n    jsonpath: $.a\n    group: 1");
         Assert.Contains("'group' applies to regex", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void Unknown_step_keys_are_rejected_by_name()
     {
-        var error = FlowParseError("steps:\n- request: ./a.req.md\n  retries: 3");
+        var error = FlowParseError("steps:\n- request: ./a.req.tap\n  retries: 3");
         Assert.Contains("unknown key 'retries'", error.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void A_bad_assertion_inside_a_step_names_the_step()
     {
-        var error = FlowParseError("steps:\n- request: ./a.req.md\n  assertions:\n  - body:\n      count: 2");
+        var error = FlowParseError("steps:\n- request: ./a.req.tap\n  assertions:\n  - body:\n      count: 2");
         Assert.Equal(WorkspaceErrorCode.E_ASSERT_INVALID, error.Code);
         Assert.Contains("Step #1", error.Message, StringComparison.Ordinal);
     }
@@ -180,7 +180,7 @@ public class FlowParserTests
     public void The_suffix_and_the_kind_have_to_agree()
     {
         var ex = Assert.Throws<WorkspaceParseException>(() => Workspace.Parsing.FileParser.Parse(
-            "tests/a.flow.md", "---\nkind: test\nname: X\ntests: []\n---\n"));
+            "tests/a.flow.tap", "---\nkind: test\nname: X\ntests: []\n---\n"));
         Assert.Equal(WorkspaceErrorCode.E_KIND_MISMATCH, ex.Error.Code);
     }
 }

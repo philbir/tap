@@ -86,7 +86,7 @@ and `icons/icon.ico` (Windows). Generate them once from the existing source:
 
 ```bash
 cd src/desktop
-yarn tauri icon ../../assets/tap-studio-icon-512.png
+yarn tauri icon ../../assets/tap-studio-icon.svg
 ```
 
 The generated files are committed (icons are stable across builds).

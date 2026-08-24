@@ -70,6 +70,9 @@ public sealed class EnvVariableProvider(VariableProviderConfig config) : IVariab
     public ValueTask SetAsync(string name, string value, bool isSecret, CancellationToken ct)
         => throw new NotSupportedException("Env provider is read-only. Set the variable in the host environment and add it to TAP_VARS_ALLOWED / TAP_SECRETS_ALLOWED.");
 
+    public ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
+        => throw new NotSupportedException("Env provider is read-only. Unset the variable in the host environment instead.");
+
     private static IReadOnlyList<Regex> ParsePatterns(string? raw)
     {
         if (string.IsNullOrWhiteSpace(raw)) return [];

@@ -18,23 +18,32 @@ internal static class AgentTestData
     public static VariableProviderRegistry Registry(params IVariableProvider[] providers)
         => new(providers, providers.Length > 0 ? providers[0].Name : null);
 
-    public static WorkspaceFile DemoCollection(string baseUrl = "http://api.demo.test", string? defaultAuth = "./bearer.auth.md")
-        => Parse("collections/demo/_collection.md", $"""
+    public static WorkspaceFile DemoCollection(string baseUrl = "http://api.demo.test", string? defaultAuth = "./bearer.auth.tap")
+        => Parse("collections/demo/_collection.tap", $"""
             ---
             kind: collection
             name: Demo
             baseUrl: '{baseUrl}'
             {(defaultAuth is null ? "" : $"defaultAuth: {defaultAuth}\n")}defaultHeaders:
               Accept: application/json
-            stages:
-            - name: uat
-              baseUrl: http://uat.demo.test
             ---
 
             Demo collection.
             """);
 
-    public static readonly WorkspaceFile BearerAuth = Parse("collections/demo/bearer.auth.md", """
+    /// <summary>An environment scoped to the demo collection — the replacement for what used to
+    /// be a <c>stages:</c> entry, and what the inventory reports on the collection row.</summary>
+    public static readonly WorkspaceFile UatEnv = Parse("collections/demo/uat.env.tap", """
+        ---
+        kind: env
+        name: UAT
+        collections:
+        - collection: demo
+          baseUrl: http://uat.demo.test
+        ---
+        """);
+
+    public static readonly WorkspaceFile BearerAuth = Parse("collections/demo/bearer.auth.tap", """
         ---
         kind: auth
         name: Demo Bearer
@@ -77,5 +86,8 @@ internal sealed class StubVariableProvider(string name, params VariableValue[] v
         => ValueTask.FromResult<IReadOnlyList<VariableValue>>(_values.Values.ToArray());
 
     public ValueTask SetAsync(string variable, string value, bool isSecret, CancellationToken ct)
+        => throw new NotSupportedException();
+
+    public ValueTask<bool> DeleteAsync(string variable, CancellationToken ct)
         => throw new NotSupportedException();
 }

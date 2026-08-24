@@ -65,28 +65,21 @@ public sealed class AuthRunner
     /// flows + cache hits) or a <see cref="ExecuteAuthResult.LoginUrl"/> /
     /// <see cref="ExecuteAuthResult.UserCode"/> for the UI to drive an interactive step.
     ///
-    /// <para><paramref name="requestPath"/> + <paramref name="stageName"/> are the caller's
-    /// current editing context. They matter for a profile that lives inside a collection:
-    /// its fields expand against that collection's (and the selected stage's) variables, and
-    /// the resulting token is cached per stage. See <see cref="AuthScopeResolver"/> — a
-    /// workspace-scoped profile ignores both.</para>
-    ///
-    /// <para><paramref name="envPath"/> is the environment the caller has selected. It applies
-    /// to every profile: its fields expand against that env's variables and bind that env's
-    /// variable providers, and the resulting token is cached per env. Omitting it falls back to
-    /// the workspace's <c>defaultEnv</c> — which is what the whole call used to do
-    /// unconditionally, so a profile referencing a var that only exists in the selected env
-    /// failed with E_VAR_UNKNOWN however the editor previewed it.</para>
+    /// <para><paramref name="envPath"/> is the environment the caller has selected. Its fields
+    /// expand against that env's variables and bind that env's variable providers, and the
+    /// resulting token is cached per env. A profile inside a collection additionally sees that
+    /// collection's variables — see <see cref="AuthScopeResolver"/>, which derives the whole
+    /// scope from the profile's own location, so no request context is needed here. Omitting
+    /// the env falls back to the workspace's <c>defaultEnv</c>.</para>
     /// </summary>
     public async Task<ExecuteAuthResult> ExecuteAsync(
-        string authPath, bool forceReauthenticate, CancellationToken ct,
-        string? requestPath = null, string? stageName = null, string? envPath = null)
+        string authPath, bool forceReauthenticate, CancellationToken ct, string? envPath = null)
     {
         var workspace = _ws.Current;
         if (workspace.FindByPath(authPath) is not AuthFile auth)
             return ExecuteAuthResult.Failed($"Auth profile '{authPath}' not in workspace.");
 
-        var context = AuthScopeResolver.ContextFor(workspace, authPath, requestPath, stageName, envPath);
+        var context = AuthScopeResolver.ContextFor(workspace, authPath, envPath);
         var profile = context.ScopeFor(authPath);
 
         if (!forceReauthenticate)
@@ -173,7 +166,7 @@ public sealed class AuthRunner
                 ClientId = flow.ClientId,
                 Scopes = flow.Scopes,
             };
-            _tokens.Save(_ws.RootDirectory, new AuthProfileScope(flow.AuthPath, flow.Stage, flow.Env), entry);
+            _tokens.Save(_ws.RootDirectory, new AuthProfileScope(flow.AuthPath, flow.Env), entry);
             return ExecuteAuthResult.FromTokens(entry, fromCache: false);
         }
         catch (Exception ex)
@@ -326,7 +319,6 @@ public sealed class AuthRunner
         {
             Id = flowId,
             AuthPath = profile.Path,
-            Stage = profile.Stage,
             Env = profile.Env,
             CreatedAt = DateTimeOffset.UtcNow,
             CodeVerifier = string.Empty,
@@ -446,7 +438,6 @@ public sealed class AuthRunner
         {
             Id = flowId,
             AuthPath = profile.Path,
-            Stage = profile.Stage,
             Env = profile.Env,
             CreatedAt = DateTimeOffset.UtcNow,
             CodeVerifier = codeVerifier,
@@ -632,7 +623,7 @@ public sealed class AuthRunner
     /// <c>&amp; | ^ &lt; &gt;</c> as metacharacters wherever they are unquoted, so an
     /// argument like <c>tenant&amp;whoami</c> (no whitespace, therefore never quoted) arrived
     /// at cmd.exe as two commands. Every one of those arguments comes from a workspace
-    /// <c>.auth.md</c> profile or a variable provider. Locating the shim ourselves and
+    /// <c>.auth.tap</c> profile or a variable provider. Locating the shim ourselves and
     /// starting it with <c>UseShellExecute=false</c> leaves exactly one parser in the path.
     ///
     /// Falls back to the bare name so a miss behaves as before — the OS still does its own

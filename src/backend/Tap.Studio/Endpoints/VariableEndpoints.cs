@@ -39,8 +39,7 @@ public static class VariableEndpoints
                 ct,
                 requestPath: body.RequestPath,
                 collectionPath: body.CollectionPath,
-                envPath: body.EnvPath,
-                stageName: body.Stage).ConfigureAwait(false);
+                envPath: body.EnvPath).ConfigureAwait(false);
 
             // Provider sets carry provenance (origin + type display name + icon) so the
             // variables panel can render one labelled group per provider instead of an
@@ -83,8 +82,7 @@ public static class VariableEndpoints
                 ct,
                 requestPath: body.Context.RequestPath,
                 collectionPath: body.Context.CollectionPath,
-                envPath: body.Context.EnvPath,
-                stageName: body.Context.Stage).ConfigureAwait(false);
+                envPath: body.Context.EnvPath).ConfigureAwait(false);
 
             var scope = view.Result.ToDictionary(v => v.Name, v => v, StringComparer.Ordinal);
             var result = VariableCompiler.Compile(body.Template ?? string.Empty, scope, view.Sets, registry.Aliases);
@@ -147,9 +145,9 @@ public static class VariableEndpoints
     private static string ScopeName(VariableScope s) => s switch
     {
         VariableScope.Provider => "provider",
+        VariableScope.Portable => "portable",
         VariableScope.Workspace => "workspace",
         VariableScope.Collection => "collection",
-        VariableScope.Stage => "stage",
         VariableScope.Env => "env",
         VariableScope.Request => "request",
         _ => "unknown",

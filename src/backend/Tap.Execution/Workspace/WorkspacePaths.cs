@@ -1,3 +1,4 @@
+using Tap.Workspace.Model;
 
 namespace Tap.Execution.Workspace;
 
@@ -12,7 +13,7 @@ namespace Tap.Execution.Workspace;
 ///   <item>The input must not be rooted (absolute, drive-rooted, or UNC).</item>
 ///   <item>The canonical full path must stay strictly under the selected workspace root.</item>
 /// </list>
-/// <para>The encoded-traversal case (e.g. <c>a/%2e%2e/x.req.md</c>) is not handled here —
+/// <para>The encoded-traversal case (e.g. <c>a/%2e%2e/x.req.tap</c>) is not handled here —
 /// callers must hand in already URL-decoded paths. ASP.NET Core decodes route + query values
 /// before they reach us, and JSON bodies are not URL-encoded to begin with, so the only place
 /// a literal <c>%2e</c> can appear is as itself in a filename, which the segment check still
@@ -39,7 +40,10 @@ public static class WorkspacePaths
             return false;
         }
 
-        var normalized = relative.Replace('\\', '/').Trim('/');
+        // A fragment (orders.http#get-order) identifies one request inside a file; the file is
+        // what lives on disk. Strip it before resolving so every caller — ReadSource, binary body
+        // refs, the Studio's file endpoints — can hand in a canonical request path unchanged.
+        var normalized = HttpFragment.FilePath(relative.Replace('\\', '/')).Trim('/');
         if (normalized.Length == 0)
         {
             error = "Path is required.";

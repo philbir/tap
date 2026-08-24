@@ -20,10 +20,16 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
 
+// Publishes /openapi/v1.json. AddTapStudio().WithApi(demoApi) reads it on first run and
+// scaffolds a request per operation, which is what makes the Aspire sample worth running.
+builder.Services.AddOpenApi();
+
 DemoAuth.AddServices(builder);
 DemoGraphQL.AddServices(builder);
 
 var app = builder.Build();
+
+app.MapOpenApi();
 
 app.UseCors();
 app.UseWebSockets();

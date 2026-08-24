@@ -20,7 +20,7 @@ public static class ExitCode
     /// <summary>Usage error — unknown or ambiguous name, bad option, malformed <c>--var</c>.</summary>
     public const int UsageError = 2;
 
-    /// <summary>Workspace error — no <c>tap.md</c>, a file that doesn't parse, a dangling ref.</summary>
+    /// <summary>Workspace error — no <c>workspace.tap</c>, a file that doesn't parse, a dangling ref.</summary>
     public const int WorkspaceError = 3;
 
     /// <summary>An auth profile needed a token that couldn't be acquired without a human.</summary>

@@ -11,8 +11,9 @@
     <ToolCommandName>tap</ToolCommandName>
     <IsPackable>true</IsPackable>
     <PackageId>Tap</PackageId>
-    <Title>Tap</Title>
-    <Description>tap — ngrok-style HTTP inspector with optional Cloudflare tunnels. Install as a global .NET tool: `dotnet tool install -g Tap`. Run `tap --help` to get started.</Description>
+    <TapProductIcon>Tunnels</TapProductIcon>
+    <Title>Tap Tunnels CLI</Title>
+    <Description>Tap Tunnels — local HTTP tunnels with inspection built in. Install as a global .NET tool: `dotnet tool install -g Tap`. Run `tap --help` to get started.</Description>
     <PackageTags>tap;http;inspector;proxy;cloudflare;cloudflared;tunnel;ngrok;dotnet-tool</PackageTags>
 
     <!-- The bundled wwwroot includes a .gitkeep; without this NuGet's default-excludes
@@ -25,6 +26,10 @@
     <PackageReference Include="Spectre.Console.Cli" />
     <ProjectReference Include="..\Tap.Core\Tap.Core.csproj" />
     <ProjectReference Include="..\Tap.Server\Tap.Server.csproj" />
+    <ProjectReference Include="..\Tap.Inspector.Mcp\Tap.Inspector.Mcp.csproj" />
+    <PackageReference Include="ModelContextProtocol" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Http" />
   </ItemGroup>
 
   <!-- Tap.Server is a Web SDK project that ships its UI as static web assets via a runtime

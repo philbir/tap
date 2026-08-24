@@ -161,7 +161,7 @@ public sealed class VariableProviderRegistry
         var key = provider.Name + ":" + name;
         if (_cache.TryGetValue(key, out var cached))
         {
-            return cached ?? FailMissing(providerName, name);
+            return cached ?? FailMissing(providerName, name, provider);
         }
 
         var sw = Stopwatch.StartNew();
@@ -181,7 +181,7 @@ public sealed class VariableProviderRegistry
         _cache[key] = value;
         _trace.Add(new VariableResolution(provider.Name, name, value is not null, value?.IsSecret ?? false, sw.Elapsed));
 
-        return value ?? FailMissing(providerName, name);
+        return value ?? FailMissing(providerName, name, provider);
     }
 
     /// <summary>Resolve <c>{{name}}</c>. Tries the effective default provider first when one
@@ -243,10 +243,13 @@ public sealed class VariableProviderRegistry
         return value;
     }
 
-    private static VariableValue FailMissing(string providerName, string name) =>
+    private static VariableValue FailMissing(string providerName, string name, IVariableProvider provider)
+    {
+        var hint = provider is IExplainsMissingValues explains ? " " + explains.ExplainMiss(name) : string.Empty;
         throw new WorkspaceParseException(new WorkspaceError(
             WorkspaceErrorCode.E_PROVIDER_RESOLUTION_FAILED,
-            $"Variable '{providerName}:{name}' resolved to null."));
+            $"Variable '{providerName}:{name}' resolved to null.{hint}"));
+    }
 }
 
 /// <summary>Records one provider hit during a render. Stored in execution history by

@@ -2,7 +2,7 @@ import type { KvRow } from './KvTable'
 
 /**
  * Variable-row helpers used by every editor that surfaces a vars table. The two shapes are:
- *   - Workspace / collection / stage: `vars: Record<string, VarSpec>` (rich VarSpec map).
+ *   - Workspace / collection / env: `vars: Record<string, VarSpec>` (rich VarSpec map).
  *   - Env / request override: `vars: Record<string, string>` + `secrets: string[]` (flat).
  *
  * Both ultimately render as `KvRow[]`, but each editor used to spell out its own
@@ -43,7 +43,7 @@ export function rowsToFlatVars(rows: readonly KvRow[]): {
 }
 
 /**
- * Shape used by the workspace/collection/stage editors — `VarSpec` carries default +
+ * Shape used by the workspace/collection/env editors — `VarSpec` carries default +
  * secret + description + required + example. We expose the `default` in the row and the
  * `secret` flag via the inline toggle; the other VarSpec fields are preserved verbatim on
  * write-back so they survive an edit even when not shown.

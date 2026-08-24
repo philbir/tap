@@ -73,7 +73,7 @@ public sealed class CloudflareApi(HttpClient http, string apiToken)
 
     /// <summary>
     /// Where a tunnel's credentials file lives. <c>TunnelProvisioner</c> and the AppHost's
-    /// <c>CloudflaredLifecycleHook</c> still open-code the same expression to decide whether a
+    /// <c>CloudflaredProvisioner</c> still open-code the same expression to decide whether a
     /// named tunnel can be reused; they should call this instead, because all three have to
     /// agree — a mismatch silently deletes and recreates the tunnel on every start.
     ///

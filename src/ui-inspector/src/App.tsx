@@ -9,6 +9,8 @@ import { useRequestStream } from './useRequestStream'
 import { useInspectorConfig } from './useIngress'
 import { useTheme } from './useTheme'
 import type { IngressEntry } from './types'
+import { AgentChip } from './AgentChip'
+import { useAgentStatus } from './useAgentStatus'
 
 type View = 'inspector' | 'config' | 'qr'
 
@@ -74,6 +76,7 @@ function TunnelBadge({ entry, onClick }: { entry: IngressEntry; onClick: () => v
 export function App() {
   const { records, connected, clear } = useRequestStream()
   const config = useInspectorConfig()
+  const agentStatus = useAgentStatus()
   const { theme, toggle: toggleTheme } = useTheme()
   const [view, setView] = useState<View>(initialViewFromLocation)
   const switchView = (next: View) => {
@@ -173,9 +176,9 @@ export function App() {
           gap: '16px',
         }}
       >
-        <div className="app-brand" aria-label="Tap">
-          <img src="/tap-mark.svg" width="28" height="28" alt="" />
-          <span>Tap</span>
+        <div className="app-brand" aria-label="Tap Tunnels">
+          <img src="/tap-tunnels-icon.svg" width="28" height="28" alt="" />
+          <span>Tap Tunnels</span>
         </div>
 
         <nav style={{ display: 'flex', gap: 4 }}>
@@ -190,6 +193,8 @@ export function App() {
             {connected ? 'live' : 'disconnected'}
           </div>
         )}
+
+        <AgentChip status={agentStatus} />
 
         {view === 'inspector' && ingress.length > 0 && proxyPort !== undefined && !showSelector && (
           <div

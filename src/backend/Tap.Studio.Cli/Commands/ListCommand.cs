@@ -26,7 +26,7 @@ public sealed class ListCommand : Command<ListCommand.Settings>
         public string? Kind { get; init; }
 
         [CommandOption("-w|--workspace <DIR>")]
-        [Description("Workspace directory. Defaults to the nearest ancestor containing tap.md, or the first workspace found beneath the working directory.")]
+        [Description("Workspace directory. Defaults to the nearest ancestor containing workspace.tap, or the first workspace found beneath the working directory.")]
         public string? WorkspaceDirectory { get; init; }
 
         [CommandOption("--json")]
@@ -99,9 +99,11 @@ public sealed class ListCommand : Command<ListCommand.Settings>
         Section(console, "Collections", ref first);
         foreach (var c in inventory.Collections)
         {
-            var stages = c.Stages.Count > 0 ? $" · stages: {string.Join(", ", c.Stages)}" : string.Empty;
+            var envs = c.Environments.Count > 0
+                ? $" · envs: {string.Join(", ", c.Environments.Select(System.IO.Path.GetFileName))}"
+                : string.Empty;
             console.MarkupLine(
-                $"  {Markup.Escape(c.Name)}  [dim]{c.RequestCount} requests · {Markup.Escape(c.BaseUrl ?? "(no baseUrl)")}{Markup.Escape(stages)} · {Markup.Escape(c.Path)}[/]");
+                $"  {Markup.Escape(c.Name)}  [dim]{c.RequestCount} requests · {Markup.Escape(c.BaseUrl ?? "(no baseUrl)")}{Markup.Escape(envs)} · {Markup.Escape(c.Path)}[/]");
         }
     }
 

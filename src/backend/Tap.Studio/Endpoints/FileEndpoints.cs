@@ -6,7 +6,7 @@ namespace Tap.Studio.Endpoints;
 
 /// <summary>
 /// <c>/api/files/*</c> — sideband store for binary uploads referenced from
-/// <c>.req.md</c> bodies via the <c>&lt; ./.files/name</c> marker. The Binary editor
+/// <c>.req.tap</c> bodies via the <c>&lt; ./.files/name</c> marker. The Binary editor
 /// posts a file here, the server writes it into a <c>.files/</c> directory next to
 /// the owning request, and the response carries the ref string that the editor drops
 /// into the request body. The executor (see <see cref="WorkspaceService"/>) resolves

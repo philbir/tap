@@ -1,6 +1,7 @@
 using System.Text;
 using Tap.Workspace;
 using Tap.Workspace.Model;
+using Tap.Workspace.Security;
 using Tap.Workspace.Variables;
 
 namespace Tap.Execution.Variables;
@@ -30,8 +31,13 @@ namespace Tap.Execution.Variables;
 /// owns its own per-render resolution cache + trace — only the underlying providers are
 /// shared.</para>
 /// </summary>
-public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory> factories, ILogger<ProviderRegistryBuilder> logger)
+public sealed class ProviderRegistryBuilder(
+    IEnumerable<IVariableProviderFactory> factories,
+    ILogger<ProviderRegistryBuilder> logger,
+    IEncryptionKeySource? keySource = null)
 {
+    private readonly IEncryptionKeySource _keySource = keySource ?? MachineEncryptionKeySource.Default;
+
     private readonly Dictionary<string, IVariableProviderFactory> _factories =
         factories.ToDictionary(f => f.Type, StringComparer.OrdinalIgnoreCase);
 
@@ -40,6 +46,11 @@ public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory
     private string? _cachedWorkspaceRoot;
 
     private sealed record CachedProvider(IVariableProvider Provider, string ConfigHash);
+
+    /// <summary>Name and type of the ambient Aspire provider. A literal rather than a
+    /// reference to the provider class so this builder stays independent of any one
+    /// implementation, the way it is for every other type.</summary>
+    private const string AspireProviderName = "aspire";
 
     public VariableProviderRegistry Build(
         LoadedWorkspace workspace,
@@ -61,8 +72,25 @@ public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory
             effective.Add(cfg);
         }
 
+        // The `aspire` provider is ambient rather than configured. It resolves only names the
+        // host environment already advertises (services__<resource>__<scheme>__<index>) and
+        // returns null for everything else, so registering it unconditionally costs nothing and
+        // buys the thing that makes it useful: a workspace with `baseUrl: {{aspire:orders-api}}`
+        // runs unchanged under an AppHost, from the CLI, and in CI where those variables were
+        // exported by hand. Requiring configuration would have meant three different setups for
+        // one token. A workspace or system provider that claims the name still wins.
+        if (!effective.Any(c => c.Name.Equals(AspireProviderName, StringComparison.OrdinalIgnoreCase)))
+        {
+            effective.Add(new VariableProviderConfig
+            {
+                Name = AspireProviderName,
+                Type = AspireProviderName,
+                Origin = ProviderOrigin.System,
+            });
+        }
+
         var providers = new List<IVariableProvider>(effective.Count);
-        var context = new ProviderFactoryContext(workspaceRoot);
+        var context = new ProviderFactoryContext(workspaceRoot) { KeySource = _keySource };
 
         lock (_cacheGate)
         {
@@ -148,7 +176,7 @@ public sealed class ProviderRegistryBuilder(IEnumerable<IVariableProviderFactory
 
     /// <summary>
     /// Drops settings the descriptor marks system-scope-only when the config came out of the
-    /// workspace. <c>tap.md</c> is cloned along with a repository, so a field like 1Password's
+    /// workspace. <c>workspace.tap</c> is cloned along with a repository, so a field like 1Password's
     /// <c>cliPath</c> — which decides what binary gets spawned, on a code path as innocuous as
     /// rendering the variables panel — must never be honoured from there. The drop is logged so
     /// the setting doesn't just silently do nothing.

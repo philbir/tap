@@ -1,17 +1,20 @@
 using Tap.Studio.Contracts;
+using Tap.Studio.Importing;
 using Tap.Studio.Postman;
 using Tap.Studio.Specs;
 using Tap.Workspace;
 using Tap.Workspace.Model;
 using Tap.Execution.Workspace;
+using Tap.Workspace.Parsing;
+using Tap.Workspace.Rendering;
 
 namespace Tap.Studio.Endpoints;
 
 /// <summary>
 /// <c>/api/collections/...</c> — read + write the structured spec for a
-/// <c>_collection.md</c>. Collections live at <c>collections/&lt;slug&gt;/_collection.md</c>;
+/// <c>_collection.tap</c>. Collections live at <c>collections/&lt;slug&gt;/_collection.tap</c>;
 /// the client passes the slug as the path segment (e.g. <c>demo</c>) and the server appends
-/// the rest. A collection directory without <c>_collection.md</c> still returns a
+/// the rest. A collection directory without a collection file still returns a
 /// <see cref="CollectionDetailDto"/> with <c>Exists=false</c> so the editor can render a
 /// create-on-save form.
 /// </summary>
@@ -39,8 +42,7 @@ public static class CollectionEndpoints
                     c.Id,
                     Exists: true,
                     BaseUrl: c.BaseUrl,
-                    StageNames: c.Stages.Select(s => s.Name).ToArray(),
-                    DefaultStage: c.DefaultStage));
+                    EnvPaths: ScopedEnvPaths(ws, slug)));
                 seenSlugs.Add(slug);
             }
 
@@ -51,7 +53,7 @@ public static class CollectionEndpoints
                 {
                     var slug = Path.GetFileName(dir);
                     if (string.IsNullOrEmpty(slug) || seenSlugs.Contains(slug)) continue;
-                    items.Add(new CollectionSummaryDto(slug, slug, null, false, string.Empty, Array.Empty<string>(), null));
+                    items.Add(new CollectionSummaryDto(slug, slug, null, false, string.Empty, ScopedEnvPaths(ws, slug)));
                 }
             }
 
@@ -63,8 +65,7 @@ public static class CollectionEndpoints
         {
             if (!IsValidSlug(slug)) return Results.NotFound();
             var ws = svc.Current;
-            var path = $"{CollectionsRoot}/{slug}/_collection.md";
-            if (ws.FindByPath(path) is CollectionFile c)
+            if (CollectionLocator.ForSlug(ws, slug) is { } c)
             {
                 return Results.Ok(new CollectionDetailDto(
                     Slug: slug,
@@ -78,14 +79,12 @@ public static class CollectionEndpoints
                     Vars: c.Vars,
                     Tags: c.Tags,
                     Body: c.Body,
-                    Source: svc.ReadSource(path),
-                    Stages: c.Stages.Select(s => new CollectionStageDto(
-                        Name: s.Name,
-                        BaseUrl: s.BaseUrl,
-                        DefaultAuth: s.DefaultAuth?.RelativePath,
-                        Vars: s.Vars)).ToArray(),
-                    DefaultStage: c.DefaultStage,
-                    AgentEnabled: c.Agent.Enabled));
+                    Source: svc.ReadSource(c.RelativePath),
+                    EnvPaths: ScopedEnvPaths(ws, slug),
+                    AgentEnabled: c.Agent.Enabled,
+                    History: HistoryOptionsMapper.ToDto(c.History),
+                    InheritedHistory: HistoryOptionsMapper.Effective(
+                        HistoryOptions.Resolve(ws.HistoryDefaults, collection: null, request: null))));
             }
 
             var dirAbs = Path.Combine(ws.TapDirectory, CollectionsRoot, slug);
@@ -103,9 +102,11 @@ public static class CollectionEndpoints
                 Tags: Array.Empty<string>(),
                 Body: string.Empty,
                 Source: string.Empty,
-                Stages: Array.Empty<CollectionStageDto>(),
-                DefaultStage: null,
-                AgentEnabled: true));
+                EnvPaths: ScopedEnvPaths(ws, slug),
+                AgentEnabled: true,
+                History: null,
+                InheritedHistory: HistoryOptionsMapper.Effective(
+                    HistoryOptions.Resolve(ws.HistoryDefaults, collection: null, request: null))));
         });
 
         g.MapPut("/spec", (CollectionSpecDto spec, WorkspaceService svc) =>
@@ -119,9 +120,10 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
             Directory.CreateDirectory(dirAbs);
 
-            var content = CollectionSpecEmitter.ToFileSource(spec);
-            var relPath = $"{CollectionsRoot}/{spec.Slug}/_collection.md";
-            try { svc.Save(relPath, content); return Results.NoContent(); }
+            var id = SpecIds.Ensure(spec.Id);
+            var content = CollectionSpecEmitter.ToFileSource(spec with { Id = id });
+            var relPath = $"{CollectionsRoot}/{spec.Slug}/{KindResolver.CollectionFileName}";
+            try { svc.Save(relPath, content); return Results.Ok(new SavedSpecDto(id)); }
             catch (WorkspaceParseException ex)
             {
                 return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line));
@@ -135,7 +137,7 @@ public static class CollectionEndpoints
         // slug error unless Overwrite=true — silent clobbering would surprise users.
         g.MapPost("/import/postman", (PostmanImportRequestDto body, WorkspaceService svc) =>
         {
-            PostmanImporter.ImportPlan plan;
+            ImportPlan plan;
             try
             {
                 plan = PostmanImporter.Plan(body.Collection, body.Slug);
@@ -145,48 +147,12 @@ public static class CollectionEndpoints
                 return Results.BadRequest(new WorkspaceErrorDto(ex.Code, ex.Message, null, null));
             }
 
-            if (!IsValidSlug(plan.Slug))
-                return Results.BadRequest(new WorkspaceErrorDto("invalid-slug",
-                    $"Derived slug '{plan.Slug}' is not valid. Pass an explicit slug.", null, null));
-
-            if (!WorkspacePaths.TryResolve(svc.RootDirectory, $"{CollectionsRoot}/{plan.Slug}",
-                    out var collectionDirAbs, out var dirErr))
-                return Results.BadRequest(new WorkspaceErrorDto("invalid-slug", dirErr, null, null));
-
             // Reject overwrite by default — Postman re-imports otherwise turn into silent
             // merges where renamed-in-Postman requests become orphans on disk.
-            if (Directory.Exists(collectionDirAbs) && !body.Overwrite
-                && Directory.EnumerateFileSystemEntries(collectionDirAbs).Any())
-            {
-                return Results.BadRequest(new WorkspaceErrorDto(
-                    "collection-exists",
-                    $"Collection '{plan.Slug}' already exists. Pass overwrite=true to replace it.",
-                    $"{CollectionsRoot}/{plan.Slug}",
-                    null));
-            }
-
-            // Wipe the existing directory on overwrite — leftovers from a previous import
-            // would otherwise show up as stale requests in the explorer.
-            if (body.Overwrite && Directory.Exists(collectionDirAbs))
-            {
-                Directory.Delete(collectionDirAbs, recursive: true);
-            }
-
-            foreach (var file in plan.Files)
-            {
-                try
-                {
-                    svc.Save(file.RelativePath, file.Content);
-                }
-                catch (WorkspaceParseException ex)
-                {
-                    return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line));
-                }
-                catch (InvalidOperationException ex)
-                {
-                    return Results.BadRequest(new WorkspaceErrorDto("import-failed", ex.Message, file.RelativePath, null));
-                }
-            }
+            var write = ImportWriter.Write(svc, plan, body.Overwrite
+                ? ImportWriter.ExistingCollection.Replace
+                : ImportWriter.ExistingCollection.Reject);
+            if (!write.Ok) return Results.BadRequest(write.Error);
 
             return Results.Ok(new PostmanImportResponseDto(
                 Slug: plan.Slug,
@@ -220,12 +186,22 @@ public static class CollectionEndpoints
             ? null
             : new RequestTransportSettingsDto(settings.IgnoreTlsErrors, settings.TimeoutMs);
 
+    /// <summary>Paths of the environments that name <paramref name="slug"/> in their
+    /// <c>collections:</c> list. Global envs are deliberately absent — the client already holds
+    /// the full env list and knows a global one applies everywhere; this is the extra set the
+    /// baseUrl chip offers on top.</summary>
+    private static IReadOnlyList<string> ScopedEnvPaths(LoadedWorkspace ws, string slug)
+        => ws.Environments
+            .Where(e => !e.IsGlobal && e.AppliesTo(slug))
+            .Select(e => e.RelativePath)
+            .ToArray();
+
     private static string? SlugFromCollectionFile(string relativePath)
     {
         var parts = relativePath.Replace('\\', '/').Split('/');
         if (parts.Length != 3) return null;
         if (!string.Equals(parts[0], CollectionsRoot, StringComparison.OrdinalIgnoreCase)) return null;
-        if (!string.Equals(parts[2], "_collection.md", StringComparison.OrdinalIgnoreCase)) return null;
+        if (KindResolver.Resolve(parts[2]) is not { Kind: WorkspaceKind.Collection }) return null;
         return parts[1];
     }
 

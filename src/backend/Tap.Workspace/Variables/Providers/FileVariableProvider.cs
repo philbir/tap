@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using Tap.Workspace.Model;
+using Tap.Workspace.Security;
 using YamlDotNet.RepresentationModel;
 
 namespace Tap.Workspace.Variables.Providers;
@@ -9,18 +10,18 @@ namespace Tap.Workspace.Variables.Providers;
 /// Read-write provider that persists variables to a dedicated YAML file under the workspace:
 /// <c>.tap/.vars/&lt;provider-name&gt;.yml</c>. Each value can be marked <c>secret</c>; secret
 /// values are encrypted at rest using AES-256-GCM with a key derived (PBKDF2-HMAC-SHA256)
-/// from a shared passphrase declared in the provider's settings.
+/// from the machine's encryption passphrase (<see cref="IEncryptionKeySource"/>:
+/// <c>TAP_ENCRYPTION_KEY</c>, else <c>&lt;system-dir&gt;/encryption.key</c>).
 ///
-/// <para>Settings consumed:</para>
-/// <list type="bullet">
-///   <item><c>encryptionKey</c> — passphrase used to derive the AES key. Required when storing
-///     any <c>secret: true</c> variable; if absent and a secret write is attempted, the
-///     provider throws. Plain (non-secret) values are still stored when the key is absent.
-///     Belongs at system scope or in the environment — see
-///     <see cref="FileVariableProvider.PassphraseEnvVar"/>. Declaring it in workspace config
-///     puts the passphrase in Git right beside the ciphertext it unlocks, which is no
-///     encryption at all; that still works this release but is flagged.</item>
-/// </list>
+/// <para>The passphrase is deliberately <b>not</b> a provider setting. A key configured
+/// alongside the workspace travels with the ciphertext it unlocks — into Git, into the
+/// container image, into whatever the workspace gets copied to — which is not encryption at
+/// all. Making it a property of the machine rather than of the provider removes the option.
+/// The PBKDF2 salt is still per-provider (<c>tap-file-provider:&lt;name&gt;</c>), so one
+/// machine key yields a distinct derived key per store.</para>
+///
+/// <para>The key is only needed to read or write <c>secret: true</c> values; plain values work
+/// on a machine with no key at all.</para>
 ///
 /// <para>On-disk envelope for secret values: <c>enc:v1:&lt;iv-b64&gt;:&lt;ciphertext-b64&gt;:&lt;tag-b64&gt;</c>.
 /// Plain values are stored as YAML scalars. The provider file lives entirely under the
@@ -28,7 +29,7 @@ namespace Tap.Workspace.Variables.Providers;
 /// stays out of the per-scope file cascade.</para>
 ///
 /// <para>This provider intentionally does NOT touch per-scope <c>vars:</c> blocks (in
-/// workspace/api/stage/env/request files). Those continue to be edited through the
+/// workspace/collection/env/request files). Those continue to be edited through the
 /// existing scope-specific file editors. The file provider is the durable place for
 /// "workspace-wide" variables that don't belong to one scope.</para>
 /// </summary>
@@ -36,19 +37,9 @@ public sealed class FileVariableProvider : IVariableProvider
 {
     /// <summary>On-disk marker for encrypted values. Public so the Studio's provider-test
     /// endpoint can detect secrets that failed to decrypt (ListAsync surfaces the raw
-    /// envelope on decrypt failure instead of throwing).</summary>
-    public const string EnvelopePrefix = "enc:v1:";
-
-    /// <summary>Environment variable holding the AES passphrase. The per-provider form
-    /// <c>TAP_FILE_PROVIDER_KEY_&lt;NAME&gt;</c> (name upper-cased, non-alphanumerics replaced
-    /// by <c>_</c>) wins over the bare variable, and both win over configured settings. This is
-    /// the only place a passphrase can live that isn't committed next to the ciphertext.</summary>
-    public const string PassphraseEnvVar = "TAP_FILE_PROVIDER_KEY";
-
-    private const int Pbkdf2Iterations = 200_000;
-    private const int KeyBytes = 32;
-    private const int IvBytes = 12;
-    private const int TagBytes = 16;
+    /// envelope on decrypt failure instead of throwing). The format itself lives in
+    /// <see cref="SecretEnvelope"/>, shared with request history.</summary>
+    public const string EnvelopePrefix = SecretEnvelope.Prefix;
 
     private const UnixFileMode OwnerOnlyFile = UnixFileMode.UserRead | UnixFileMode.UserWrite;
 
@@ -56,59 +47,39 @@ public sealed class FileVariableProvider : IVariableProvider
         UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
 
     private readonly string _storePath;
-    private readonly byte[]? _key;
+    private readonly IEncryptionKeySource _keySource;
+    private readonly DerivedKey _derived;
     private readonly Lock _gate = new();
     private VariableProviderConfig _config;
 
-    public FileVariableProvider(VariableProviderConfig config, string workspaceRoot)
+    public FileVariableProvider(VariableProviderConfig config, string workspaceRoot, IEncryptionKeySource keySource)
     {
         _config = config;
+        _keySource = keySource;
         _storePath = Path.Combine(workspaceRoot, ".vars", config.Name + ".yml");
-
-        // Encryption key is optional at construction — it's only required if a write touches
-        // a secret. Reads return ciphertext-on-failure so the operator can fix the key.
-        var passphrase = ResolvePassphrase(config, out var fromWorkspaceConfig);
-        EncryptionKeyFromWorkspaceConfig = fromWorkspaceConfig;
-        if (!string.IsNullOrEmpty(passphrase))
-        {
-            var salt = Encoding.UTF8.GetBytes("tap-file-provider:" + config.Name);
-            _key = Rfc2898DeriveBytes.Pbkdf2(passphrase, salt, Pbkdf2Iterations, HashAlgorithmName.SHA256, KeyBytes);
-        }
+        // Per-provider salt: one machine key, a distinct derived key per store.
+        _derived = new DerivedKey(keySource, "tap-file-provider:" + config.Name);
     }
 
-    /// <summary>True when the passphrase came from workspace-scope config rather than system
-    /// scope or the environment — i.e. the key is committed to Git alongside the ciphertext it
-    /// unlocks. Surfaced (rather than rejected) so existing setups keep working; the written
-    /// store file carries the same warning in its header.</summary>
-    public bool EncryptionKeyFromWorkspaceConfig { get; }
+    /// <summary>True when this machine has no encryption passphrase, so secret values can
+    /// neither be written nor read back. Surfaced to the Studio so the provider editor can
+    /// offer to generate one instead of failing on save.</summary>
+    public bool HasEncryptionKey => _keySource.GetPassphrase() is not null;
 
-    /// <summary>Resolves the passphrase, preferring sources that don't live in the workspace.
-    /// Order: per-provider env var, bare env var, then the configured <c>encryptionKey</c>.</summary>
-    private static string? ResolvePassphrase(VariableProviderConfig config, out bool fromWorkspaceConfig)
-    {
-        fromWorkspaceConfig = false;
+    /// <summary>The AES key for this store, or <c>null</c> when the machine has no passphrase.
+    /// Resolved per call rather than at construction: providers are cached across requests, and
+    /// a key generated after the instance was built must take effect immediately.</summary>
+    private byte[]? Key(bool create = false) => _derived.Get(create);
 
-        var scoped = Environment.GetEnvironmentVariable($"{PassphraseEnvVar}_{EnvSuffix(config.Name)}");
-        if (!string.IsNullOrEmpty(scoped)) return scoped;
-        var shared = Environment.GetEnvironmentVariable(PassphraseEnvVar);
-        if (!string.IsNullOrEmpty(shared)) return shared;
-
-        if (!config.Settings.TryGetValue("encryptionKey", out var configured) || string.IsNullOrEmpty(configured))
-            return null;
-
-        fromWorkspaceConfig = config.Origin is ProviderOrigin.Workspace;
-        return configured;
-    }
-
-    private static string EnvSuffix(string name)
-    {
-        var chars = name.ToUpperInvariant().ToCharArray();
-        for (var i = 0; i < chars.Length; i++)
-        {
-            if (!char.IsAsciiLetterOrDigit(chars[i])) chars[i] = '_';
-        }
-        return new string(chars);
-    }
+    /// <summary>The message every "no key" failure shares. Names both sources, because the
+    /// only useful thing to say to someone holding undecryptable data is where to put the key.
+    ///
+    /// <para>On the write path this is now the rare case: storing a secret generates a key when
+    /// the machine has none. Reaching it there means generation itself failed — an unwritable
+    /// system directory — which is why the message still names the manual routes.</para></summary>
+    private static string NoKeyHint =>
+        $"No encryption key on this machine — set {MachineEncryptionKeySource.EnvVar}, or generate "
+        + $"'{MachineEncryptionKeySource.Default.KeyFilePath}' from Settings or `tap-studio key init`.";
 
     public string Name => _config.Name;
     public ProviderMode Mode => ProviderMode.ReadWrite;  // static — the file provider's whole point is durable, writable storage.
@@ -139,21 +110,35 @@ public sealed class FileVariableProvider : IVariableProvider
 
     public ValueTask SetAsync(string name, string value, bool isSecret, CancellationToken ct)
     {
-        if (isSecret && _key is null)
+        // Derive before taking the gate: PBKDF2 is the slow part, and it needs nothing the
+        // store holds.
+        var key = isSecret ? Key(create: true) : null;
+        if (isSecret && key is null)
         {
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
-                $"File provider '{Name}' has no 'encryptionKey' set — cannot store secret variable '{name}'."));
+                $"Cannot store secret variable '{name}' in file provider '{Name}'. {NoKeyHint}"));
         }
 
         lock (_gate)
         {
             var store = LoadStore();
-            var stored = isSecret ? Encrypt(value) : value;
+            var stored = isSecret ? Encrypt(value, key!) : value;
             store[name] = new Entry(stored, isSecret);
             SaveStore(store);
         }
         return ValueTask.CompletedTask;
+    }
+
+    public ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
+    {
+        lock (_gate)
+        {
+            var store = LoadStore();
+            if (!store.Remove(name)) return ValueTask.FromResult(false);
+            SaveStore(store);
+            return ValueTask.FromResult(true);
+        }
     }
 
     private Dictionary<string, Entry> LoadStore()
@@ -221,13 +206,8 @@ public sealed class FileVariableProvider : IVariableProvider
         var sb = new StringBuilder();
         sb.Append("# Tap file provider store — written by the Studio UI / API.\n");
         sb.Append("# Secret values use the envelope: enc:v1:<iv-b64>:<ciphertext-b64>:<tag-b64>\n");
-        sb.Append("# Do NOT hand-edit secret values; rotate the passphrase via the provider settings.\n");
-        if (EncryptionKeyFromWorkspaceConfig)
-        {
-            sb.Append("# WARNING: this provider's encryptionKey is declared in workspace config, which is\n");
-            sb.Append("#          committed alongside this file — the passphrase travels with the ciphertext.\n");
-            sb.Append($"#          Move it to system scope or the {PassphraseEnvVar} environment variable.\n");
-        }
+        sb.Append($"# Do NOT hand-edit secret values; they are keyed to this machine's {MachineEncryptionKeySource.EnvVar}\n");
+        sb.Append($"# (or {MachineEncryptionKeySource.FileName}). Committing this file without that key commits nothing usable.\n");
 
         var doc = new YamlDocument(root);
         var stream = new YamlStream(doc);
@@ -279,57 +259,38 @@ public sealed class FileVariableProvider : IVariableProvider
         }
     }
 
-    private string Encrypt(string clear)
-    {
-        if (_key is null) throw new InvalidOperationException("Encryption key not configured.");
-        var iv = RandomNumberGenerator.GetBytes(IvBytes);
-        var plain = Encoding.UTF8.GetBytes(clear);
-        var cipher = new byte[plain.Length];
-        var tag = new byte[TagBytes];
-        using var aes = new AesGcm(_key, TagBytes);
-        aes.Encrypt(iv, plain, cipher, tag);
-        return EnvelopePrefix
-            + Convert.ToBase64String(iv) + ":"
-            + Convert.ToBase64String(cipher) + ":"
-            + Convert.ToBase64String(tag);
-    }
+    private static string Encrypt(string clear, byte[] key) => SecretEnvelope.Protect(clear, key);
 
     private string Decrypt(string stored, string name)
     {
-        if (!stored.StartsWith(EnvelopePrefix, StringComparison.Ordinal))
+        if (!SecretEnvelope.IsEnvelope(stored))
         {
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
                 $"File provider '{Name}' variable '{name}' is marked secret but the stored value is not in the v1 envelope."));
         }
-        if (_key is null)
+        var key = Key();
+        if (key is null)
         {
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
-                $"File provider '{Name}' has no encryptionKey set, cannot decrypt secret variable '{name}'."));
-        }
-        var parts = stored[EnvelopePrefix.Length..].Split(':');
-        if (parts.Length != 3)
-        {
-            throw new WorkspaceParseException(new WorkspaceError(
-                WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
-                $"File provider '{Name}' variable '{name}' has a malformed envelope."));
+                $"Cannot decrypt secret variable '{name}' in file provider '{Name}'. {NoKeyHint}"));
         }
         try
         {
-            var iv = Convert.FromBase64String(parts[0]);
-            var cipher = Convert.FromBase64String(parts[1]);
-            var tag = Convert.FromBase64String(parts[2]);
-            var plain = new byte[cipher.Length];
-            using var aes = new AesGcm(_key, TagBytes);
-            aes.Decrypt(iv, cipher, tag, plain);
-            return Encoding.UTF8.GetString(plain);
+            return SecretEnvelope.Unprotect(stored, key);
         }
         catch (CryptographicException ex)
         {
             throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
                 $"File provider '{Name}' could not decrypt variable '{name}': {ex.Message}"));
+        }
+        catch (FormatException ex)
+        {
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_PROVIDER_DECRYPT_FAILED,
+                $"File provider '{Name}' variable '{name}' has a malformed envelope: {ex.Message}"));
         }
     }
 
@@ -366,22 +327,13 @@ public sealed class FileVariableProviderFactory : IVariableProviderFactory
         Type = "file",
         DisplayName = "Encrypted file",
         Icon = "file",
-        Description = "Stores variables in a YAML file under the workspace; secret values are encrypted with a passphrase.",
+        Description = "Stores variables in a YAML file under the workspace; secret values are encrypted with this machine's encryption key.",
         Mode = ProviderMode.ReadWrite,
-        Fields =
-        [
-            new ProviderSettingField
-            {
-                Key = "encryptionKey",
-                Label = "Encryption passphrase",
-                Description = "Used to derive the AES key for secret values. Plain values work without it; storing a secret requires it. "
-                    + "Set it at system scope or via the TAP_FILE_PROVIDER_KEY environment variable — in workspace config it is committed "
-                    + "to Git next to the encrypted values it unlocks.",
-                Kind = ProviderFieldKind.Secret,
-            },
-        ],
+        // No settings. The one thing this provider needs — the passphrase — is a property of
+        // the machine, not of the provider: see FileVariableProvider's remarks.
+        Fields = [],
     };
 
     public IVariableProvider Create(VariableProviderConfig config, ProviderFactoryContext context)
-        => new FileVariableProvider(config, context.WorkspaceRoot);
+        => new FileVariableProvider(config, context.WorkspaceRoot, context.KeySource);
 }

@@ -133,57 +133,26 @@ internal static class FrontmatterReader
     /// <para>The scan runs on the low-level event stream, which is linear in the input and never
     /// expands an alias — so the guard cannot itself be turned into the bomb it looks for.</para>
     ///
-    /// <para>Internal rather than private so any other loader of workspace-controlled YAML can run
-    /// the same screen before calling <c>YamlStream.Load</c>.</para>
+    /// <para>The scan itself lives in <see cref="YamlSafety"/> so other loaders of untrusted YAML
+    /// — the OpenAPI importer, which reads documents fetched from a URL — run the identical
+    /// screen. Only the wording of the failure is Tap-workspace-specific.</para>
     /// </summary>
     internal static void ScreenUntrustedYaml(string yamlText, string relativePath)
     {
-        var parser = new Parser(new StringReader(yamlText));
-        var depth = 0;
-        try
+        if (YamlSafety.Screen(yamlText, MaxFrontmatterDepth) is not { } rejection) return;
+
+        var message = rejection.Kind switch
         {
-            while (parser.MoveNext())
-            {
-                var current = parser.Current;
-                if (current is null) continue;
+            YamlRejectionKind.Alias =>
+                "Frontmatter uses a YAML alias (*). Anchors and aliases are not supported in Tap workspace files.",
+            YamlRejectionKind.Anchor =>
+                "Frontmatter declares a YAML anchor (&). Anchors and aliases are not supported in Tap workspace files.",
+            _ => $"Frontmatter nests more than {MaxFrontmatterDepth} levels deep.",
+        };
 
-                // Marks are 1-based within the frontmatter; +1 puts them back on the file's own
-                // line numbering, which starts one line below the opening fence.
-                var line = (int)(current.Start.Line + 1);
-
-                if (current is AnchorAlias)
-                {
-                    throw new WorkspaceParseException(new WorkspaceError(
-                        WorkspaceErrorCode.E_FRONTMATTER_MALFORMED_YAML,
-                        "Frontmatter uses a YAML alias (*). Anchors and aliases are not supported in Tap workspace files.",
-                        relativePath,
-                        line));
-                }
-
-                if (current is NodeEvent node && !node.Anchor.IsEmpty)
-                {
-                    throw new WorkspaceParseException(new WorkspaceError(
-                        WorkspaceErrorCode.E_FRONTMATTER_MALFORMED_YAML,
-                        "Frontmatter declares a YAML anchor (&). Anchors and aliases are not supported in Tap workspace files.",
-                        relativePath,
-                        line));
-                }
-
-                depth += current.NestingIncrease;
-                if (depth > MaxFrontmatterDepth)
-                {
-                    throw new WorkspaceParseException(new WorkspaceError(
-                        WorkspaceErrorCode.E_FRONTMATTER_MALFORMED_YAML,
-                        $"Frontmatter nests more than {MaxFrontmatterDepth} levels deep.",
-                        relativePath,
-                        line));
-                }
-            }
-        }
-        catch (YamlException)
-        {
-            // Malformed YAML — leave the diagnostic to the real load below, which reports the same
-            // error code with YamlDotNet's own message and would otherwise be pre-empted here.
-        }
+        // Marks are 1-based within the frontmatter; +1 puts them back on the file's own line
+        // numbering, which starts one line below the opening fence.
+        throw new WorkspaceParseException(new WorkspaceError(
+            WorkspaceErrorCode.E_FRONTMATTER_MALFORMED_YAML, message, relativePath, rejection.Line + 1));
     }
 }

@@ -6,31 +6,34 @@ import { modals } from '@mantine/modals'
 import { notifications } from '@mantine/notifications'
 import {
   IconAlertCircle, IconBrandGit, IconChecklist, IconCopy, IconEdit, IconFilePlus, IconFolderPlus,
-  IconFolderShare, IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
+  IconFolderShare, IconHistory, IconLayoutDashboard, IconLock, IconPlus, IconSearch, IconSend, IconTag, IconTrash,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
-import type { TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
+import type { HistorySummary, TaggedItem, TreeNode, WorkspaceErrorDto } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import { DuplicateRequestDialog } from './DuplicateRequestDialog'
 import { buildAuthView, buildRequestsView, filterExplorerTree, type ExplorerNode } from './explorerTree'
 import { FilesystemView } from './FilesystemView'
 import { GitView } from './GitView'
+import { HistoryView } from './HistoryView'
 import { NewFolderDialog } from './NewFolderDialog'
 import { PierreFileTree } from './PierreFileTree'
 import { TagsView } from './TagsView'
 import { TestingView } from './TestingView'
 import { makeTapTreeIcons, TAP_ICONS, TAP_TREE_UNSAFE_CSS } from './treeIcons'
+import { fileNameFor, labelForPath, stripTapSuffix } from './tapFiles'
 
-type Filter = 'requests' | 'auth' | 'testing' | 'tags' | 'fs' | 'git'
+type Filter = 'requests' | 'auth' | 'testing' | 'tags' | 'history' | 'fs' | 'git'
 
 const BASE_FILTER_TABS: { value: Filter; label: string; icon: TablerIcon }[] = [
   { value: 'requests', label: 'Requests', icon: IconSend },
   { value: 'auth', label: 'Auth', icon: IconLock },
   { value: 'testing', label: 'Testing', icon: IconChecklist },
   { value: 'tags', label: 'Tags', icon: IconTag },
+  { value: 'history', label: 'History', icon: IconHistory },
   { value: 'fs', label: 'Filesystem', icon: IconFolderShare },
 ]
 const GIT_TAB = { value: 'git' as const, label: 'Git', icon: IconBrandGit }
@@ -51,6 +54,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
   const closeTab = useTapStore((s) => s.closeTab)
   const openTab = useTapStore((s) => s.openTab)
   const renameTab = useTapStore((s) => s.renameTab)
+  const setTabView = useTapStore((s) => s.setTabView)
   const hasGit = useTapStore((s) =>
     s.knownWorkspaces.some((w) => w.isActive && w.git !== null))
   const filterTabs = useMemo(
@@ -91,9 +95,43 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
     [tree, search],
   )
   // Build the display-only path list for the pierre tree (no `collections/` root, no
-  // `.req.md` suffix) plus a map from display path → callback that opens the real
+  // `.req.tap` suffix) plus a map from display path → callback that opens the real
   // workspace file. Mirrored for the auth tab.
   const requestsLookup = useMemo(() => collectRequestRows(requestsView, onOpenFile), [requestsView, onOpenFile])
+
+  /** Opens a request by its workspace-relative path — what the history timeline has to work
+   *  with, since an entry records where the request lived, not the tree node it came from.
+   *  Reports whether it landed: a path with no node behind it (the file moved, or this is
+   *  another workspace) opens nothing, and callers shouldn't then act as if it had. */
+  const openRequestByPath = useCallback((path: string): boolean => {
+    const find = (nodes: TreeNode[]): TreeNode | null => {
+      for (const n of nodes) {
+        if (n.path === path && n.kind !== 'directory') return n
+        const hit = find(n.children ?? [])
+        if (hit) return hit
+      }
+      return null
+    }
+    const node = find(tree)
+    if (!node) return false
+    onOpenFile(node)
+    return true
+  }, [tree, onOpenFile])
+
+  /**
+   * Follows a timeline row all the way to what it names: the request's tab, its History tab,
+   * and that entry open in the response pane.
+   *
+   * <p>The selection travels as tab view state rather than as a call into the editor, because
+   * the editor for that tab isn't mounted yet — only the active tab's is. The editor picks the
+   * entry up when it mounts, which also means the choice survives a trip to another tab.</p>
+   */
+  const openHistoryEntry = useCallback((row: HistorySummary) => {
+    if (!row.requestPath) return
+    if (!openRequestByPath(row.requestPath)) return
+    setTabView(row.requestPath, 'tab', 'history')
+    setTabView(row.requestPath, 'historyEntry', row.id)
+  }, [openRequestByPath, setTabView])
   const requestsPaths = requestsLookup.paths
   const requestsActivePath = useMemo(
     () => activePath ? requestsLookup.realToDisplay.get(activePath) ?? null : null,
@@ -224,12 +262,19 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
     openTab({ path: dir.realPath, kind: 'collection', label: dir.name })
   }, [openTab])
 
+  /** Open a `.http` file in its own editor — the request list plus the raw source. Reachable
+   *  from the Requests view, where the row otherwise only expands to show what's inside it. */
+  const editHttpFile = useCallback((dir: DirContext) => {
+    if (dir.kind !== 'httpfile') return
+    openTab({ path: dir.realPath, kind: 'httpfile', label: dir.name })
+  }, [openTab])
+
   /** Create an empty `GET /` request straight into the right-clicked collection/folder and
    *  open it. No dialog — the name is the first free "New Request {n}" in that directory,
    *  and the editor is where the user renames it. */
   const newRequest = useCallback(async (dir: DirContext) => {
     const name = nextRequestName(tree, dir.realPath)
-    const target = `${dir.realPath}/${nameToSlug(name)}.req.md`
+    const target = `${dir.realPath}/${fileNameFor('req', nameToSlug(name))}`
     try {
       await api.saveRequestSpec({ path: target, id: null, name, method: 'GET', url: '/' })
       await reload()
@@ -327,6 +372,12 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
           <GitView />
         </Box>
+      ) : filter === 'history' ? (
+        // Its own branch rather than a row source for the shared tree: a timeline is grouped by
+        // day and filtered by outcome, which the explorer's search box can't express.
+        <Box style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
+          <HistoryView onOpenEntry={openHistoryEntry} />
+        </Box>
       ) : (
       <>
       <Group gap="xs" p="sm" wrap="nowrap">
@@ -357,20 +408,31 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         </ActionIcon>
       </Group>
 
-      {errors.length > 0 && (
-        <Box px="sm" pb="xs">
-          <Alert variant="light" color="red" icon={<IconAlertCircle size={14} />} p="xs">
-            <Stack gap={2}>
-              {errors.slice(0, 5).map((e, i) => (
-                <Text key={i} size="xs" ff="var(--mono)" title={e.message} truncate>
-                  <Text component="span" fw={600}>{e.code}</Text> · {e.path ?? '(no path)'}
-                </Text>
-              ))}
-              {errors.length > 5 && <Text size="xs" c="dimmed">+{errors.length - 5} more</Text>}
-            </Stack>
-          </Alert>
-        </Box>
-      )}
+      {/* Warnings get their own, calmer alert: a workspace that merely hasn't migrated its
+          file extensions yet is not broken, and painting it red says otherwise. */}
+      {(['error', 'warning'] as const).map((severity) => {
+        const matching = errors.filter((e) => e.severity === severity)
+        if (matching.length === 0) return null
+        return (
+          <Box px="sm" pb="xs" key={severity}>
+            <Alert
+              variant="light"
+              color={severity === 'error' ? 'red' : 'yellow'}
+              icon={<IconAlertCircle size={14} />}
+              p="xs"
+            >
+              <Stack gap={2}>
+                {matching.slice(0, 5).map((e, i) => (
+                  <Text key={i} size="xs" ff="var(--mono)" title={e.message} truncate>
+                    <Text component="span" fw={600}>{e.code}</Text> · {e.path ?? '(no path)'}
+                  </Text>
+                ))}
+                {matching.length > 5 && <Text size="xs" c="dimmed">+{matching.length - 5} more</Text>}
+              </Stack>
+            </Alert>
+          </Box>
+        )
+      })}
 
       {filter === 'requests' && (
         requestsPaths.length === 0
@@ -445,13 +507,14 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
         onDeleteFile={(file) => { setCtxMenu(null); confirmDeleteFile(file) }}
         onDuplicateFile={(file) => { setCtxMenu(null); setDuplicateState({ open: true, source: { realPath: file.realPath, name: file.name } }) }}
         onEditCollection={(dir) => { setCtxMenu(null); editCollection(dir) }}
+        onEditHttpFile={(dir) => { setCtxMenu(null); editHttpFile(dir) }}
       />
 
       <DuplicateRequestDialog
         open={duplicateState.open}
         onOpenChange={(open) => setDuplicateState((s) => ({ ...s, open }))}
         source={duplicateState.source}
-        onCreated={(path) => openTab({ path, kind: 'request', label: path.split('/').pop()?.replace(/\.req\.md$/, '') ?? path })}
+        onCreated={(path) => openTab({ path, kind: 'request', label: labelForPath(path) })}
       />
     </Stack>
   )
@@ -464,6 +527,7 @@ export function Sidebar({ hasActiveWorkspace, onOpenFile, onCreateNew }: Props) 
  *  fully visible menu. Item set depends on whether the row is a directory or a file. */
 function FloatingCtxMenu({
   ctx, onClose, onNewRequest, onNewFolder, onDeleteDir, onDeleteFile, onDuplicateFile, onEditCollection,
+  onEditHttpFile,
 }: {
   ctx: { x: number; y: number; row: RowContext; canCreateRequest: boolean } | null
   onClose: () => void
@@ -473,6 +537,7 @@ function FloatingCtxMenu({
   onDeleteFile: (file: FileContext) => void
   onDuplicateFile: (file: FileContext) => void
   onEditCollection: (dir: DirContext) => void
+  onEditHttpFile: (dir: DirContext) => void
 }) {
   const menuRef = useRef<HTMLDivElement>(null)
   const [placement, setPlacement] = useState<{ left: number; top: number } | null>(null)
@@ -511,6 +576,7 @@ function FloatingCtxMenu({
 
   if (!ctx) return null
   const isDir = ctx.row.row === 'dir'
+  const isHttpFile = ctx.row.kind === 'httpfile'
   return (
     <Paper
       ref={menuRef}
@@ -541,7 +607,20 @@ function FloatingCtxMenu({
             </UnstyledButton>
           )
         )}
-        {isDir && ctx.canCreateRequest && (
+        {/* A .http row groups requests but is one file. Editing it means opening the file —
+            its requests, its raw source — not adding siblings inside a directory, so it gets
+            an Edit action and none of the folder ones. */}
+        {isHttpFile && (
+          <UnstyledButton
+            px={10} py={6}
+            className="tap-tree-row"
+            style={{ fontSize: 13, borderRadius: 4 }}
+            onClick={() => onEditHttpFile(ctx.row as DirContext)}
+          >
+            <Group gap={8} wrap="nowrap"><IconEdit size={14} />Edit…</Group>
+          </UnstyledButton>
+        )}
+        {isDir && !isHttpFile && ctx.canCreateRequest && (
           <UnstyledButton
             px={10} py={6}
             className="tap-tree-row"
@@ -551,7 +630,7 @@ function FloatingCtxMenu({
             <Group gap={8} wrap="nowrap"><IconFilePlus size={14} />New request</Group>
           </UnstyledButton>
         )}
-        {isDir && (
+        {isDir && !isHttpFile && (
           <UnstyledButton
             px={10} py={6}
             className="tap-tree-row"
@@ -576,11 +655,15 @@ function FloatingCtxMenu({
           className="tap-tree-row"
           style={{ fontSize: 13, borderRadius: 4, color: 'var(--mantine-color-red-6)' }}
           onClick={() => {
-            if (ctx.row.row === 'dir') onDeleteDir(ctx.row)
-            else onDeleteFile(ctx.row)
+            // A .http row is a dir-shaped row over a single file: deleting it has to go
+            // through deleteFile, or the server is handed a file path and told it's a folder.
+            if (ctx.row.row === 'dir' && !isHttpFile) onDeleteDir(ctx.row)
+            else onDeleteFile({ kind: 'request', realPath: ctx.row.realPath, name: ctx.row.name })
           }}
         >
-          <Group gap={8} wrap="nowrap"><IconTrash size={14} />Delete {ctx.row.kind}</Group>
+          <Group gap={8} wrap="nowrap">
+            <IconTrash size={14} />Delete {isHttpFile ? 'file' : ctx.row.kind}
+          </Group>
         </UnstyledButton>
       </Stack>
     </Paper>
@@ -588,11 +671,13 @@ function FloatingCtxMenu({
 }
 
 
-type RowKind = 'collection' | 'folder' | 'request' | 'auth' | 'env'
+type RowKind = 'collection' | 'folder' | 'httpfile' | 'request' | 'auth' | 'env'
 
+/** A row that renders with children. Usually a real directory — except `httpfile`, which is a
+ *  single file that happens to contain several requests, so its actions are file actions. */
 interface DirContext {
-  kind: 'collection' | 'folder'
-  /** Real workspace path of the directory (for `api.createFolder` / `api.deleteFolder`). */
+  kind: 'collection' | 'folder' | 'httpfile'
+  /** Real workspace path of the directory — or, for `httpfile`, of the file itself. */
   realPath: string
   /** Display name shown in confirm dialogs. */
   name: string
@@ -672,11 +757,11 @@ function collectExplorerRows(
       lookup.dirsByDisplayPath.set(display, {
         kind: 'collection', realPath: node.path, name: node.name, slug: node.slug,
       })
-    } else if (node.kind === 'folder') {
+    } else if (node.kind === 'folder' || node.kind === 'httpfile') {
       lookup.paths.push(dirPath(display))
       lookup.realToDisplay.set(node.path, dirPath(display))
-      lookup.kindByDisplayPath.set(display, 'folder')
-      lookup.dirsByDisplayPath.set(display, { kind: 'folder', realPath: node.path, name: node.name })
+      lookup.kindByDisplayPath.set(display, node.kind)
+      lookup.dirsByDisplayPath.set(display, { kind: node.kind, realPath: node.path, name: node.name })
     } else if (node.source) {
       // Leaf: request or auth profile.
       const src = node.source
@@ -739,9 +824,9 @@ const REQUEST_TREE_UNSAFE_CSS = `${TAP_TREE_UNSAFE_CSS}
 function leafBasename(realPath: string, stripPrefix: string | null): string {
   let p = realPath
   if (stripPrefix && p.startsWith(stripPrefix)) p = p.slice(stripPrefix.length)
-  // Strip `.req.md` / `.auth.md` / `.env.md` / a bare `.md` — keep other extensions intact
-  // so non-tap files (e.g. uploads under `.files/`) still read naturally.
-  return p.replace(/\.(req|auth|env)\.md$/i, '').split('/').pop() ?? p
+  // Strip the Tap suffix in either family — keep other extensions intact so non-tap files
+  // (e.g. uploads under `.files/`) still read naturally.
+  return stripTapSuffix(p).split('/').pop() ?? p
 }
 
 function dirPath(path: string): string {
@@ -764,7 +849,7 @@ function nextRequestName(tree: TreeNode[], dirRealPath: string): string {
     files.add((c.path.split('/').pop() ?? '').toLowerCase())
   }
   const taken = (name: string) =>
-    names.has(name.toLowerCase()) || files.has(`${nameToSlug(name)}.req.md`)
+    names.has(name.toLowerCase()) || files.has(fileNameFor('req', nameToSlug(name)))
   let n = 1
   while (taken(`${NEW_REQUEST_PREFIX} ${n}`)) n++
   return `${NEW_REQUEST_PREFIX} ${n}`

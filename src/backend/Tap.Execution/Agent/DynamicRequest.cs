@@ -16,7 +16,7 @@ public sealed record DynamicRequestSpec
     public required string Method { get; init; }
 
     /// <summary>Path to hit, normally relative — it is joined onto the collection (or active
-    /// stage) baseUrl the same way a saved request's is. Absolute URLs are refused unless
+    /// env) baseUrl the same way a saved request's is. Absolute URLs are refused unless
     /// <see cref="AllowAnyUrl"/> is set; see <see cref="DynamicRequestFactory.EnsureCollectionScoped"/>.</summary>
     public required string Url { get; init; }
 
@@ -27,7 +27,7 @@ public sealed record DynamicRequestSpec
     public string? Body { get; init; }
 
     /// <summary>Auth profile ref (path relative to the collection directory, or <c>id:…</c>).
-    /// Null inherits the collection / stage default, like a saved request without
+    /// Null inherits the collection / env default, like a saved request without
     /// <c>auth:</c>.</summary>
     public string? Auth { get; init; }
 
@@ -42,14 +42,14 @@ public sealed record DynamicRequestSpec
 
 /// <summary>
 /// Builds an in-memory <see cref="RequestFile"/> from a <see cref="DynamicRequestSpec"/> by
-/// synthesizing <c>.req.md</c> source and running it through the real <see cref="FileParser"/>
-/// — the same road a saved file travels, so collection, stage, auth, and variable resolution
+/// synthesizing <c>.req.tap</c> source and running it through the real <see cref="FileParser"/>
+/// — the same road a saved file travels, so collection, env, auth, and variable resolution
 /// cannot diverge from what a saved request would do.
 /// </summary>
 public static class DynamicRequestFactory
 {
     /// <param name="collection">The owning collection: its workspace-relative path
-    /// (<c>collections/demo/_collection.md</c>), its directory (<c>collections/demo</c>), or
+    /// (<c>collections/demo/_collection.tap</c>), its directory (<c>collections/demo</c>), or
     /// its display name, matched case-insensitively.</param>
     public static RequestFile Create(LoadedWorkspace workspace, string collection, DynamicRequestSpec spec)
     {
@@ -132,10 +132,10 @@ public static class DynamicRequestFactory
     private static string SyntheticPath(LoadedWorkspace workspace, CollectionFile owner)
     {
         var dir = Path.GetDirectoryName(owner.RelativePath)?.Replace('\\', '/') ?? string.Empty;
-        var path = $"{dir}/_dynamic.req.md";
+        var path = $"{dir}/_dynamic{KindResolver.SuffixFor(WorkspaceKind.Request)}";
         for (var n = 2; workspace.FindByPath(path) is not null; n++)
         {
-            path = $"{dir}/_dynamic-{n}.req.md";
+            path = $"{dir}/_dynamic-{n}{KindResolver.SuffixFor(WorkspaceKind.Request)}";
         }
         return path;
     }

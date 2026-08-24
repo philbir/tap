@@ -1,0 +1,16 @@
+# Starter request for 'demo-api', scaffolded on first run.
+#
+# This is an ordinary .http file — it opens and sends in Visual Studio, VS Code REST
+# Client, JetBrains, httpyac, and Kulala. The '# @tap-*' lines are inert comments
+# there and Tap features here.
+#
+# @baseUrl below is the fallback for those tools, which have no idea this file sits in
+# a Tap collection. Inside Tap the collection's baseUrl ({{aspire:demo-api}}) wins, so the
+# request keeps working whatever port Aspire allocates — and switching environment moves it.
+@baseUrl = http://localhost:5000
+
+### Ping
+# @name ping
+# @tap-assert status 2xx
+GET {{baseUrl}}/
+Accept: application/json

@@ -1,0 +1,46 @@
+---
+kind: flow
+name: Add a book, then read it back
+vars:
+  bookTitle: The Mythical Man-Month
+  bookAuthor: Fred Brooks
+  bookYear: 1975
+steps:
+- name: Add the book
+  request: ../collections/demo/graphql/add-book.req.tap
+  extract:
+  - var: bookId
+    jsonpath: $.data.addBook.id
+  assertions:
+  - jsonpath: $.data.addBook.id
+    type: number
+- name: Read it back
+  request: ../collections/demo/graphql/get-book.req.tap
+  vars:
+    bookId: '{{bookId}}'
+  assertions:
+  - jsonpath: $.data.book.title
+    equals: '{{bookTitle}}'
+  - jsonpath: $.data.book.author
+    equals: '{{bookAuthor}}'
+  - jsonpath: $.data.book.year
+    equals: '{{bookYear}}'
+tags: [demo, graphql]
+---
+
+# Add a book, then read it back
+
+The smallest interesting flow: nothing in step 2 is knowable before step 1 runs.
+
+1. **Add the book** posts the `addBook` mutation with the flow's `bookTitle` /
+   `bookAuthor` / `bookYear`, then binds the new id out of the response into `bookId`.
+2. **Read it back** runs the ordinary "single book" request with `bookId: '{{bookId}}'`,
+   so its `{{bookId}}` variable resolves to the id step 1 just produced — and asserts the
+   book that comes back carries the title, author, and year we sent.
+
+Neither request knows it is in a flow. `add-book.req.md` and `get-book.req.md` are the
+same files the Requests tab sends, with the same assertions; the flow only supplies
+variables and carries one value across.
+
+Change `bookTitle` above and run again — step 2's assertion follows it, because the
+expected side expands through the same cascade as the request body.

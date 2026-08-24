@@ -3,10 +3,18 @@
 export type WorkspaceFileKind =
   | 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'flow' | 'test'
   | 'folder' | 'settings' | 'git-diff'
+  /** A variable provider's contents, opened as its own tab. Not a workspace file — the
+   *  provider may live in system settings — so its tab path is a `__provider__:<name>` token. */
+  | 'provider'
+  /** A portable .http file. Holds several requests, which arrive as its tree children. */
+  | 'httpfile'
 
 export interface WorkspaceInfo {
   name: string
   root: string
+  /** `aspire` means an AppHost pinned the workspace: the switcher is locked and the header
+   *  says so, because the folder is part of the solution rather than a user preference. */
+  mode: 'normal' | 'aspire'
   defaultEnv: string | null
   providers: string[]
   errors: WorkspaceErrorDto[]
@@ -14,6 +22,9 @@ export interface WorkspaceInfo {
 
 export interface KnownWorkspace {
   path: string
+  /** Manifest `name:` — what the switcher shows. Falls back to the folder name. */
+  name: string
+  /** Folder name, shown under the name in the dropdown so two same-named workspaces stay apart. */
   label: string
   isActive: boolean
   available: boolean
@@ -53,6 +64,9 @@ export interface WorkspaceErrorDto {
   message: string
   path: string | null
   line: number | null
+  /** `error` blocks; `warning` is advisory (e.g. a deprecated file extension) and must
+   *  not be presented as a broken workspace. */
+  severity: 'error' | 'warning'
 }
 
 export interface TreeNode {
@@ -61,6 +75,25 @@ export interface TreeNode {
   name: string
   id: string | null
   children: TreeNode[]
+}
+
+/** One request inside a `.http` file, as the server's parser sees it. */
+export interface HttpRequestSummary {
+  /** Fragment path (`orders.http#get-order`) — the identity that addresses this request
+   *  everywhere else, and what an execute call sends back as its `path`. */
+  path: string
+  name: string
+  method: string
+  url: string
+  /** 1-based line of the request line, for scrolling the editor to it. */
+  line: number
+}
+
+/** Result of parsing unsaved `.http` text. A file that fails to parse still lists whatever
+ *  requests survived — errors isolate per request, so one bad block doesn't hide the rest. */
+export interface HttpFileParseResult {
+  requests: HttpRequestSummary[]
+  errors: WorkspaceErrorDto[]
 }
 
 export interface VarSpec {
@@ -87,9 +120,31 @@ export interface HttpHeaderSpec {
   value: string
 }
 
+/** What every spec PUT answers with — the stable id the file was stored under, freshly minted
+ *  when the client sent none. A just-created request needs it before the watcher-driven reload
+ *  lands, or a Send fired in between goes unrecorded by request history. */
+export interface SavedSpec {
+  id: string
+}
+
 export interface RequestTransportSettings {
   ignoreTlsErrors?: boolean
   timeoutMs?: number
+}
+
+/**
+ * The `history:` block, at whichever scope declared it. Every field is optional and means
+ * "inherit" — the editors only send a key the user actually set, so a collection's policy keeps
+ * reaching the requests under it instead of being copied into each one on the next save.
+ */
+export interface HistoryOptions {
+  enabled?: boolean | null
+  maxEntries?: number | null
+  /** Store the entry unredacted and encrypt it at rest. The two always travel together. */
+  encrypt?: boolean | null
+  maxBodyBytes?: number | null
+  /** How long a deleted request's history survives. `workspace.tap` only. */
+  orphanRetentionDays?: number | null
 }
 
 export interface TlsCertificate {
@@ -194,7 +249,7 @@ export const OP_TAKES_NO_VALUE: ReadonlySet<AssertOp> = new Set<AssertOp>(['exis
 /** JSON types accepted by the `type` matcher. */
 export const ASSERT_JSON_TYPES = ['string', 'number', 'boolean', 'object', 'array', 'null'] as const
 
-// --- Testing: flows (*.flow.md) and test sets (*.test.md) ---------------------------
+// --- Testing: flows (*.flow.tap) and test sets (*.test.tap) ---------------------------
 
 /** What part of a response an extraction reads. Same vocabulary as {@link AssertSource},
  *  plus `regex` — which assertions only expose as shorthand but extraction needs as a
@@ -376,7 +431,6 @@ export interface TestRunStart {
   kind: 'test' | 'flow'
   name: string
   env: string | null
-  stage: string | null
   entries: TestRunPlanEntry[]
 }
 
@@ -409,6 +463,12 @@ export interface RequestDetail extends RequestSummary {
   protocol: RequestProtocol
   transport: RequestTransportSettings | null
   assertions: AssertSpec[]
+  /** The request's own `history:` keys, or null when it declares none. */
+  history: HistoryOptions | null
+  /** The same block after the workspace → collection → request merge — what recording this
+   *  request will actually do. Shown behind the unset fields so "why is this being recorded?"
+   *  is answerable without opening two other files. */
+  effectiveHistory: HistoryOptions | null
 }
 
 export interface RequestSpec {
@@ -428,27 +488,10 @@ export interface RequestSpec {
   /** Omitted when `http` (default). `websocket` triggers ws scheme normalization + ws transport. */
   protocol?: RequestProtocol
   transport?: RequestTransportSettings
+  /** Omitted when the request declares nothing, so saving doesn't pin what it inherits. */
+  history?: HistoryOptions
   /** Omitted when empty so dirty-tracking stays quiet on requests that declare none. */
   assertions?: AssertSpec[]
-}
-
-/** One named stage inside a collection. Stage fields override the parent collection's
- *  defaults; variables here override workspace + collection scopes but are still
- *  overridden by env / request scopes. */
-export interface CollectionStage {
-  name: string
-  baseUrl: string | null
-  defaultAuth: string | null
-  vars: Record<string, VarSpec>
-}
-
-export interface CollectionStageSpec {
-  name: string
-  baseUrl?: string
-  defaultAuth?: string
-  vars?: Record<string, string>
-  /** Names of stage-scoped variables marked secret. */
-  secrets?: string[]
 }
 
 export interface EnvSpec {
@@ -460,6 +503,9 @@ export interface EnvSpec {
   secrets?: string[]
   tags?: string[]
   body?: string
+  /** Collections to assign this env to, each with its own overrides. Omitted/empty leaves it
+   *  global — offered everywhere, overriding nothing. */
+  collections?: EnvCollection[]
   /** Provider bare `{{name}}` tokens hit first while this env is active (may be an alias).
    *  Omitted/empty = inherit the workspace/system default. */
   defaultVariableProvider?: string | null
@@ -482,6 +528,20 @@ export interface WorkspaceSpec {
   /** Workspace-level tag dictionary. */
   tags?: string[]
   body?: string
+  /** Response caps. Omit (or leave both members null) to keep Tap's defaults. */
+  response?: ResponseLimits
+  /** Workspace-wide history defaults. Omit to leave `workspace.tap` silent. */
+  history?: HistoryOptions
+}
+
+/** How much of a response body Tap delivers inline, and how much it holds back so the
+ *  panel can still offer "Show all" and a complete download. Byte counts; null on either
+ *  member means "leave it at the default" and nothing is written to `workspace.tap`. */
+export interface ResponseLimits {
+  /** Bytes shown in the body pane and evaluated by assertions. Default 2 MiB. */
+  maxBytes?: number | null
+  /** Bytes retained for "Show all" / download. Default 64 MiB. */
+  maxRetainedBytes?: number | null
 }
 
 export interface AuthSummary {
@@ -491,7 +551,7 @@ export interface AuthSummary {
   type: string
   /** Slug of the collection that owns this profile (it lives under `collections/<slug>/`),
    *  or null for a workspace-scoped profile under `auth/`. A collection-scoped profile
-   *  resolves `{{var}}` refs against that collection's variables and stages. */
+   *  resolves `{{var}}` refs against that collection's variables and active environment. */
   collection: string | null
 }
 
@@ -575,10 +635,24 @@ export interface AuthSpec {
   query?: Record<string, string>
 }
 
+/** One collection an environment is assigned to, with what it overrides there. The overrides
+ *  live on the assignment because they are per-collection: one `uat` points `orders` and
+ *  `billing` at different hosts. */
+export interface EnvCollection {
+  collection: string
+  /** Base URL override as written, or null to inherit the collection's. */
+  baseUrl: string | null
+  /** Default-auth override — a path relative to the env file, or `id:…` — or null to inherit
+   *  the collection's. */
+  defaultAuth: string | null
+}
+
 export interface EnvSummary {
   path: string
   name: string
   id: string | null
+  /** Collections this env is assigned to. Empty = global, offered everywhere. */
+  collections: EnvCollection[]
 }
 
 export interface EnvDetail extends EnvSummary {
@@ -589,6 +663,19 @@ export interface EnvDetail extends EnvSummary {
   defaultVariableProvider: string | null
   providerAliases: Record<string, string>
   strictVariables: boolean
+}
+
+/** Whether `env` may be selected for a request owned by `slug` — every global env, plus the
+ *  ones assigned to that collection. Pass null for a file that belongs to no collection. */
+export function envAppliesTo(env: EnvSummary, slug: string | null): boolean {
+  return env.collections.length === 0 || envBindingFor(env, slug) !== null
+}
+
+/** This env's assignment to `slug`, or null when it has none — always null for a global env,
+ *  which assigns no collection and so overrides nothing. */
+export function envBindingFor(env: EnvSummary, slug: string | null): EnvCollection | null {
+  if (slug === null) return null
+  return env.collections.find((b) => b.collection === slug) ?? null
 }
 
 export interface ProviderConfig {
@@ -730,6 +817,23 @@ export interface ProviderVariableValue {
   isSecret: boolean
 }
 
+/** Body of a provider-variable write. `value: null` means "keep what's stored and change only
+ *  the secret flag" — the editor never holds a secret's clear text, so it has nothing to send
+ *  back for an untouched row, and an empty string would erase it. */
+export interface ProviderVariableWrite {
+  value: string | null
+  isSecret: boolean
+  env?: string | null
+}
+
+/** This machine's encryption key: whether one exists and where it came from. Never the key. */
+export interface EncryptionKeyStatus {
+  configured: boolean
+  origin: 'env' | 'file' | 'none'
+  envVarName: string
+  keyFilePath: string
+}
+
 // --- System settings -----------------------------------------------------------------
 
 export interface SystemProvider {
@@ -857,20 +961,21 @@ export type AuthExecuteStatus = 'completed' | 'pending' | 'failed'
 
 // --- Variables view ----------------------------------------------------------------
 
-export type VariableScope = 'provider' | 'workspace' | 'collection' | 'stage' | 'env' | 'request'
+/** `portable` is a `.http` file's own `@name = value` lines — the weakest scope, since it is
+ *  what the file resolves to when opened outside Tap. */
+export type VariableScope = 'provider' | 'portable' | 'workspace' | 'collection' | 'env' | 'request'
 
 /** Listing row for a collection. `exists:false` means the on-disk directory is present
- *  but has no `_collection.md` yet — saving a CollectionSpec creates the file. */
+ *  but has no `_collection.tap` yet — saving a CollectionSpec creates the file. */
 export interface CollectionSummary {
   slug: string
   name: string
   id: string | null
   exists: boolean
   baseUrl: string
-  /** Names of stages defined on this collection — just the names, full stage definitions
-   *  live on CollectionDetail.stages. Empty when the collection has none. */
-  stageNames: string[]
-  defaultStage: string | null
+  /** Paths of the environments scoped to this collection. The globals apply here too and
+   *  are not repeated. */
+  envPaths: string[]
 }
 
 export interface CollectionDetail {
@@ -886,10 +991,15 @@ export interface CollectionDetail {
   tags: string[]
   body: string
   source: string
-  stages: CollectionStage[]
-  defaultStage: string | null
+  /** Paths of the environments scoped to this collection — the ones that may override its
+   *  baseUrl and defaultAuth. */
+  envPaths: string[]
   /** The collection's `agent:` option — whether agent surfaces (MCP tools, `call`) may use it. */
   agentEnabled: boolean
+  /** The collection's own `history:` keys, or null when it declares none. */
+  history: HistoryOptions | null
+  /** The workspace-level defaults this collection inherits, for the "inherited" hints. */
+  inheritedHistory: HistoryOptions | null
 }
 
 export interface CollectionSpec {
@@ -904,10 +1014,10 @@ export interface CollectionSpec {
   /** Names of collection-scoped variables marked secret. */
   secrets?: string[]
   tags?: string[]
-  stages?: CollectionStageSpec[]
-  defaultStage?: string
   /** Only the opt-out travels: `false` emits `agent: false`, undefined leaves the file silent (enabled). */
   agentEnabled?: boolean
+  /** Omitted when the collection declares nothing. */
+  history?: HistoryOptions
   body?: string
 }
 
@@ -918,6 +1028,171 @@ export interface PostmanImportResponse {
   authPath: string | null
   requestCount: number
   folderCount: number
+  warnings: string[]
+}
+
+// ---------------------------------------------------------------------------------------------
+// OpenAPI import.
+//
+// Two phases: stage the document (`/api/openapi/documents`), which parses and returns the
+// operation list without writing anything, then import a selection by `documentId`. The client
+// never parses the spec — it may be YAML, and $ref/allOf/Swagger-2.0 normalization must not exist
+// in two places that can disagree.
+// ---------------------------------------------------------------------------------------------
+
+/** A staged OpenAPI document: everything the wizard needs to render its picker. */
+export interface OpenApiDocument {
+  documentId: string
+  title: string
+  apiVersion: string | null
+  /** `2.0` | `3.0` | `3.1` */
+  specVersion: string
+  description: string | null
+  suggestedSlug: string
+  servers: OpenApiServer[]
+  securitySchemes: OpenApiSecurityScheme[]
+  operations: OpenApiOperation[]
+  diagnostics: OpenApiDiagnostic[]
+}
+
+export interface OpenApiServer {
+  url: string
+  description: string | null
+}
+
+/** `tapAuthType` is null when Tap has no equivalent — show the scheme disabled with `warning`
+ *  as the reason rather than hiding it. */
+export interface OpenApiSecurityScheme {
+  key: string
+  type: string
+  tapAuthType: string | null
+  description: string | null
+  scopes: string[]
+  warning: string | null
+}
+
+export interface OpenApiOperation {
+  opKey: string
+  operationId: string | null
+  method: string
+  path: string
+  summary: string | null
+  tags: string[]
+  deprecated: boolean
+  hasRequestBody: boolean
+  pathParamCount: number
+  queryParamCount: number
+}
+
+export interface OpenApiDiagnostic {
+  /** `error` | `warning` */
+  severity: string
+  message: string
+  pointer: string | null
+}
+
+/** `req` writes one `.req.tap` per operation; `http` writes one `.http` file per tag. */
+export type OpenApiLayout = 'req' | 'http'
+
+/** `create` fails if the collection exists; `merge` adds to it; `replace` deletes it first. */
+export type OpenApiImportMode = 'create' | 'merge' | 'replace'
+
+export interface OpenApiImportRequest {
+  documentId: string
+  slug: string | null
+  layout: OpenApiLayout
+  /** Null or empty imports every operation. */
+  operationKeys: string[] | null
+  baseUrl: string | null
+  securitySchemeKey: string | null
+  linkAuthPath: string | null
+  includeOptionalQueryParams: boolean
+  /** Seed values for generated variables, keyed by opKey then variable name. Where an accepted
+   *  AI suggestion lands; the import is identical without it. */
+  variableDefaults?: Record<string, Record<string, string>> | null
+  mode: OpenApiImportMode
+}
+
+/** The recorded link between a collection and the document it was generated from. */
+export interface OpenApiLink {
+  slug: string
+  /** `url` | `file` | `aspire` */
+  sourceKind: string
+  url: string | null
+  fileName: string | null
+  fetchedAt: string
+  specVersion: string
+  apiVersion: string | null
+  documentHash: string
+  layout: OpenApiLayout
+  trackedOperations: number
+}
+
+export interface OpenApiImportResponse {
+  slug: string
+  collectionPath: string
+  authPath: string | null
+  requestCount: number
+  fileCount: number
+  warnings: string[]
+}
+
+/** Proposed values for one operation's variables, keyed by variable name. */
+export interface OpenApiSuggestion {
+  opKey: string
+  values: Record<string, string>
+  note: string | null
+}
+
+export interface OpenApiSuggestResponse {
+  suggestions: OpenApiSuggestion[]
+  provider: string
+  model: string | null
+  considered: number
+  warnings: string[]
+}
+
+/** One operation's verdict in a re-sync preview. */
+export interface OpenApiChange {
+  /** `added` | `changed` | `conflict` | `unchanged` | `orphaned` | `removed` */
+  kind: string
+  opKey: string
+  method: string
+  path: string
+  summary: string | null
+  localPath: string | null
+  fragment: string | null
+  /** The file no longer matches what we generated — i.e. it was edited by hand. */
+  locallyEdited: boolean
+  /** What the UI pre-selects. Never destructive. */
+  defaultAction: OpenApiResyncAction
+}
+
+/** `skip` keeps the local file; `deprecate` tags it rather than deleting it. */
+export type OpenApiResyncAction = 'skip' | 'add' | 'update' | 'deprecate' | 'untrack'
+
+export interface OpenApiResyncPreview {
+  slug: string
+  layout: OpenApiLayout
+  sourceUrl: string | null
+  previouslyFetchedAt: string
+  previousApiVersion: string | null
+  newApiVersion: string | null
+  documentUnchanged: boolean
+  added: number
+  changed: number
+  conflicts: number
+  removed: number
+  changes: OpenApiChange[]
+}
+
+export interface OpenApiResyncResult {
+  added: number
+  updated: number
+  deprecated: number
+  untracked: number
+  skipped: number
+  writtenPaths: string[]
   warnings: string[]
 }
 
@@ -935,8 +1210,8 @@ export interface Variable {
   value: string | null
   isSensitive: boolean
   scope: VariableScope
-  /** Workspace-relative path of the file that declared it. For stage vars: `{collectionPath}#{stageName}`,
-   *  for provider vars: `provider:{name}`. */
+  /** Workspace-relative path of the file that declared it; for provider vars,
+   *  `provider:{name}`. */
   sourcePath: string
   providerName: string | null
 }
@@ -969,7 +1244,6 @@ export interface VariableContext {
   requestPath?: string
   collectionPath?: string
   envPath?: string
-  stage?: string
 }
 
 export interface CompileResult {
@@ -1017,6 +1291,10 @@ export interface WorkspaceDetail {
   tags: string[]
   body: string
   source: string
+  /** Response caps as they stand in `workspace.tap`, or null when it leaves them alone. */
+  response: ResponseLimits | null
+  /** Workspace-wide history defaults, or null when the manifest is silent (which means off). */
+  history: HistoryOptions | null
 }
 
 export interface RenderedRequest {
@@ -1025,9 +1303,9 @@ export interface RenderedRequest {
   headers: Record<string, string>
   body: string | null
   variablesUsed: VariableTrace[]
-  /** Name of the stage that resolved the request, or null if the collection has no
-   *  stages or the caller didn't pick one. */
-  stage: string | null
+  /** Path of the environment that actually applied, or null when none did — a scoped env out
+   *  of range for this request's collection drops out of the render. */
+  env: string | null
   protocol: RequestProtocol
 }
 
@@ -1049,10 +1327,23 @@ export interface ExecutionResult {
   responseHeaders: Record<string, string>
   responseBody: string | null
   contentType: string | null
+  /** What the upstream sent, whether or not we kept all of it. */
   responseBodyBytes: number
+  /** How many bytes of the body `responseBody` actually carries. Below `responseBodyBytes`
+   *  when the workspace's `response.maxBytes` cut it short. Zero for protocols with no HTTP
+   *  body (WebSocket) — the panel reads the pair together, so zero reads as "nothing to
+   *  expand" rather than "everything was truncated". */
+  responseBodyInlineBytes?: number
+  /** Handle for the copy the server held back, or absent when the whole body rode inline.
+   *  Backs "Show all" and the full download. */
+  bodyId?: string
+  /** How much of the body that retained copy holds — the ceiling on what "Show all" can
+   *  return, and on what a download will contain. */
+  retainedBytes?: number
   durationMs: number
   variablesUsed: VariableTrace[]
-  stage: string | null
+  /** Path of the environment the request actually resolved under, or null. */
+  env: string | null
   error: string | null
   protocol: RequestProtocol
   /** Snapshot of how the auth profile contributed — surfaced by the stream's `meta` event.
@@ -1176,4 +1467,89 @@ export interface FileUploadResponse {
   name: string
   size: number
   contentType: string | null
+}
+
+// ---------------------------------------------------------------------------------------
+// Request history — `.tap-history/`, one folder per request id, one file per exchange.
+// ---------------------------------------------------------------------------------------
+
+/** A timeline / list row. Carries everything a row needs and no bodies. */
+export interface HistorySummary {
+  id: string
+  requestId: string
+  at: string
+  requestPath: string | null
+  requestName: string | null
+  collection: string | null
+  env: string | null
+  method: string
+  url: string
+  status: number | null
+  statusText: string | null
+  durationMs: number
+  bodyBytes: number
+  ok: boolean
+  assertSummary: AssertSummary | null
+  error: string | null
+  encrypted: boolean
+  /** Encrypted, and this machine has no key for it. The row still renders — "there are entries
+   *  here you can't open" beats an empty list. */
+  locked: boolean
+  /** The request this belongs to no longer exists. Not an error: it re-links by itself if a
+   *  file with that id comes back. */
+  orphaned: boolean
+}
+
+/** One recorded exchange in full. */
+export interface HistoryEntry {
+  v: number
+  id: string
+  at: string
+  requestId: string
+  requestPath: string | null
+  requestName: string | null
+  collection: string | null
+  env: string | null
+  source: string
+  /** False means the file held real credentials and was encrypted at rest. */
+  redacted: boolean
+  request: HistoryEntryRequest
+  response: HistoryEntryResponse | null
+  durationMs: number
+  variablesUsed: HistoryVariable[]
+  assertions: AssertResult[]
+  assertSummary: AssertSummary | null
+  error: string | null
+}
+
+export interface HistoryEntryRequest {
+  method: string
+  url: string
+  headers: Record<string, string>
+  body: string | null
+  protocol: string
+}
+
+export interface HistoryEntryResponse {
+  status: number
+  statusText: string | null
+  headers: Record<string, string>
+  contentType: string | null
+  body: string | null
+  bodyBytes: number
+  /** The stored body is a prefix — the response outgrew `history.maxBodyBytes`. */
+  bodyTruncated: boolean
+}
+
+/** Which provider/name pairs a render touched. Never carries a value. */
+export interface HistoryVariable {
+  provider: string
+  name: string
+  secret: boolean
+}
+
+/** Where history lives and whether encrypted entries are readable on this machine. */
+export interface HistoryStatus {
+  directory: string
+  hasEncryptionKey: boolean
 }

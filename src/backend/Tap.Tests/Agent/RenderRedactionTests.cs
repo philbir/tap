@@ -13,7 +13,7 @@ namespace Tap.Tests.Agent;
 /// </summary>
 public class RenderRedactionTests
 {
-    private static readonly WorkspaceFile DevEnv = Parse("environments/dev.env.md", """
+    private static readonly WorkspaceFile DevEnv = Parse("environments/dev.env.tap", """
         ---
         kind: env
         name: Dev
@@ -22,7 +22,7 @@ public class RenderRedactionTests
         ---
         """);
 
-    private static readonly WorkspaceFile PostRequest = Parse("collections/demo/create.req.md", """
+    private static readonly WorkspaceFile PostRequest = Parse("collections/demo/create.req.tap", """
         ---
         kind: request
         name: Create thing
@@ -95,7 +95,7 @@ public class RenderRedactionTests
     [Fact]
     public async Task An_absolute_url_reports_no_base_join()
     {
-        var absolute = Parse("collections/demo/abs.req.md", """
+        var absolute = Parse("collections/demo/abs.req.tap", """
             ---
             kind: request
             name: Absolute

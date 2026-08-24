@@ -64,7 +64,7 @@ public sealed record ProviderSettingField
 
     public string? Placeholder { get; init; }
 
-    /// <summary>Marks a setting the workspace is not allowed to supply. A <c>tap.md</c> arrives
+    /// <summary>Marks a setting the workspace is not allowed to supply. A <c>workspace.tap</c> arrives
     /// with a cloned repository, so anything that decides which binary gets spawned (a
     /// <c>cliPath</c>) must come from system-scope config only — the registry drops these keys
     /// when the config's origin is <see cref="ProviderOrigin.Workspace"/>.</summary>

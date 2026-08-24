@@ -23,8 +23,10 @@ public sealed record CollectionSummaryDto(
     string Path,
     /// <summary>The baseUrl template as written — may carry <c>{{tokens}}</c>.</summary>
     string? BaseUrl,
-    IReadOnlyList<string> Stages,
-    string? DefaultStage,
+    /// <summary>Paths of the environments scoped to this collection — the ones that can move
+    /// its baseUrl. Global environments are listed once on
+    /// <see cref="WorkspaceInventoryDto.Envs"/> and apply here too.</summary>
+    IReadOnlyList<string> Environments,
     IReadOnlyList<string> Tags,
     /// <summary>Members of the collection, whether or not they are listed under
     /// <see cref="WorkspaceInventoryDto.Requests"/> — a disabled collection still truthfully
@@ -37,21 +39,32 @@ public sealed record CollectionSummaryDto(
 public sealed record RequestSummaryDto(
     string Name,
     string Path,
-    /// <summary>Path of the owning collection's <c>_collection.md</c>, or null for a request
+    /// <summary>Path of the owning collection's <c>_collection.tap</c>, or null for a request
     /// outside any collection.</summary>
     string? Collection,
     string Method,
     /// <summary>The URL as written in the http block — unexpanded, possibly relative.</summary>
     string UrlTemplate,
     string Protocol,
-    /// <summary>Display name of the effective auth profile (request &lt; stage &lt; collection
+    /// <summary>Display name of the effective auth profile (request &lt; env &lt; collection
     /// default), or null when the request goes out anonymous.</summary>
     string? Auth,
     string? AuthType,
     IReadOnlyList<string> Tags,
     int AssertionCount);
 
-public sealed record EnvSummaryDto(string Name, string Path, bool IsDefault);
+/// <summary>One environment. <see cref="Collections"/> is empty for a global env — selectable
+/// anywhere, overriding nothing — and otherwise names the collections it is assigned to,
+/// each with the base URL it points that one at.</summary>
+public sealed record EnvSummaryDto(
+    string Name,
+    string Path,
+    bool IsDefault,
+    IReadOnlyList<EnvCollectionDto> Collections);
+
+/// <summary>One collection an environment is assigned to. <see cref="BaseUrl"/> is the override
+/// as written, or null when that collection keeps its own.</summary>
+public sealed record EnvCollectionDto(string Collection, string? BaseUrl);
 
 public sealed record TestTargetSummaryDto(
     string Name,
@@ -81,8 +94,9 @@ public sealed record RequestDescriptionDto(
     string? BodyTemplate,
     string? Auth,
     string? AuthType,
-    /// <summary>Stage names available on the owning collection.</summary>
-    IReadOnlyList<string> Stages,
+    /// <summary>Paths of the environments this request can be sent under — every global env
+    /// plus the ones scoped to its collection.</summary>
+    IReadOnlyList<string> Environments,
     /// <summary>Unprefixed <c>{{name}}</c> tokens the http block and the collection baseUrl
     /// reference — the variables a caller may want to override per run.</summary>
     IReadOnlyList<string> VariablesReferenced,

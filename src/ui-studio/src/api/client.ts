@@ -28,9 +28,18 @@ import type {
   GitStatus,
   GraphQLSchemaMode,
   GraphQLSchemaResponse,
+  HttpFileParseResult,
   KnownWorkspace,
   OidcDiscovery,
   PostmanImportResponse,
+  OpenApiDocument,
+  OpenApiImportRequest,
+  OpenApiImportResponse,
+  OpenApiLink,
+  OpenApiSuggestResponse,
+  OpenApiResyncAction,
+  OpenApiResyncPreview,
+  OpenApiResyncResult,
   RenderedRequest,
   RequestDetail,
   RequestSpec,
@@ -53,6 +62,8 @@ import type {
   ProviderTypeDescriptor,
   ProviderVariable,
   ProviderVariableValue,
+  ProviderVariableWrite,
+  EncryptionKeyStatus,
   TestProviderResult,
   SaveSystemSettings,
   SetVariablePayload,
@@ -74,6 +85,10 @@ import type {
   AiModels,
   AiAssistRequest,
   AiAssistResponse,
+  SavedSpec,
+  HistorySummary,
+  HistoryEntry,
+  HistoryStatus,
 } from './types'
 
 async function get<T>(path: string): Promise<T> {
@@ -150,13 +165,26 @@ export const api = {
   // Workspace
   workspace: () => get<WorkspaceInfo>('/api/workspace'),
   workspaceManifest: () => get<WorkspaceDetail>('/api/workspace/manifest'),
-  saveWorkspaceSpec: (spec: WorkspaceSpec) => put('/api/workspace/manifest/spec', spec),
+  saveWorkspaceSpec: (spec: WorkspaceSpec) => putJson<SavedSpec>('/api/workspace/manifest/spec', spec),
 
   /** Save a workspace file by its raw text content. The server validates by parsing
    *  through `FileParser` before writing — invalid YAML/kind/etc. rejects with 400 +
    *  WorkspaceErrorDto, and nothing is written. Used by every editor's Source tab. */
+  /** Raw text of one workspace file. Used by the .http editor, which has no structured spec. */
+  source: (path: string) =>
+    get<{ path: string; content: string }>(`/api/workspace/source?path=${encodeURIComponent(path)}`)
+      .then((r) => r.content),
+
   saveSource: (path: string, content: string) =>
     put('/api/workspace/source', { path, content }),
+
+  /** Parse unsaved `.http` text server-side, listing the requests it currently holds.
+   *  The `.http` editor drives its request list off this rather than off the workspace tree:
+   *  a request's name is derived from its own content, so an unsaved edit can add, rename or
+   *  remove requests. Same parser the loader and the executor use, so the row the user clicks
+   *  and the request the server then runs cannot disagree. */
+  parseHttpFile: (path: string, content: string) =>
+    post<HttpFileParseResult>('/api/http/parse', { path, content }),
   tree: () => get<TreeNode[]>('/api/workspace/tree'),
 
   /** Create an empty folder under `.tap/`. Folders are pure grouping — no spec file is written. */
@@ -167,7 +195,7 @@ export const api = {
   deleteFolder: (path: string) =>
     del(`/api/workspace/folders?path=${encodeURIComponent(path)}`),
 
-  /** Delete a single workspace file (request / auth / env / `_collection.md`). */
+  /** Delete a single workspace file (request / auth / env / `_collection.tap`). */
   deleteFile: (path: string) =>
     del(`/api/workspace/files?path=${encodeURIComponent(path)}`),
 
@@ -191,7 +219,7 @@ export const api = {
   // Requests
   requests: () => get<RequestSummary[]>('/api/requests'),
   request: (path: string) => get<RequestDetail>(`/api/requests/${encodePath(path)}`),
-  saveRequestSpec: (spec: RequestSpec) => put('/api/requests/spec', spec),
+  saveRequestSpec: (spec: RequestSpec) => putJson<SavedSpec>('/api/requests/spec', spec),
 
   /** Re-check assertions against a response the client already holds, without sending the
    *  request again. Backs the Asserts tab's live pass/fail while you edit: the verdicts are
@@ -202,13 +230,12 @@ export const api = {
   evaluateAssertions: (
     assertions: AssertSpec[],
     response: AssertResponseSnapshot,
-    context: { path?: string; env?: string | null; stage?: string | null },
+    context: { path?: string; env?: string | null },
   ) => post<EvaluateAssertsResponse>('/api/assertions/evaluate', {
     assertions,
     response,
     path: context.path,
     env: context.env ?? undefined,
-    stage: context.stage ?? undefined,
   }),
 
   /** Upload a binary payload to the workspace's sideband store. The server writes it
@@ -229,17 +256,17 @@ export const api = {
   // Auths
   auths: () => get<AuthSummary[]>('/api/auths'),
   authDetail: (path: string) => get<AuthDetail>(`/api/auths/${encodePath(path)}`),
-  saveAuthSpec: (spec: AuthSpec) => put('/api/auths/spec', spec),
+  saveAuthSpec: (spec: AuthSpec) => putJson<SavedSpec>('/api/auths/spec', spec),
 
   // Environments
   environments: () => get<EnvSummary[]>('/api/environments'),
   envDetail: (path: string) => get<EnvDetail>(`/api/environments/${encodePath(path)}`),
-  saveEnvSpec: (spec: EnvSpec) => put('/api/environments/spec', spec),
+  saveEnvSpec: (spec: EnvSpec) => putJson<SavedSpec>('/api/environments/spec', spec),
 
   // Collections
   collections: () => get<CollectionSummary[]>('/api/collections'),
   collectionDetail: (slug: string) => get<CollectionDetail>(`/api/collections/${encodeURIComponent(slug)}`),
-  saveCollectionSpec: (spec: CollectionSpec) => put('/api/collections/spec', spec),
+  saveCollectionSpec: (spec: CollectionSpec) => putJson<SavedSpec>('/api/collections/spec', spec),
   deleteCollection: (slug: string) => del(`/api/collections/${encodeURIComponent(slug)}`),
 
   /** Import a Postman v2.1 collection JSON. <c>collection</c> is the parsed JSON body of
@@ -248,30 +275,87 @@ export const api = {
   importPostmanCollection: (collection: unknown, slug: string | null, overwrite: boolean) =>
     post<PostmanImportResponse>('/api/collections/import/postman', { collection, slug, overwrite }),
 
+  // OpenAPI import.
+  //
+  // Staging is a separate call from importing on purpose: the operation list the user picks from
+  // and the document that gets written are then provably the same one, and a URL is fetched once.
+  // The spec is sent as raw text — it may be YAML, and all parsing is server-side.
+
+  /** Parse + stage an uploaded document. Writes nothing; returns the operation list. */
+  stageOpenApiDocument: (text: string, fileName: string | null) =>
+    post<OpenApiDocument>('/api/openapi/documents', { text, fileName }),
+
+  /** Fetch a document by URL, then stage it. The server owns the redirect/SSRF guard. */
+  fetchOpenApiDocument: (url: string) =>
+    post<OpenApiDocument>('/api/openapi/documents/fetch', { url }),
+
+  /** Write the selected operations into a collection. */
+  importOpenApiCollection: (request: OpenApiImportRequest) =>
+    post<OpenApiImportResponse>('/api/collections/import/openapi', request),
+
+  /** Ask the configured AI CLI to propose values for the variables an import will generate.
+   *  503 when AI isn't set up — the import works fine without ever calling this. */
+  suggestOpenApiValues: (documentId: string, operationKeys: string[] | null, model?: string | null) =>
+    post<OpenApiSuggestResponse>('/api/ai/openapi/suggest', { documentId, operationKeys, model }),
+
+  /** Diff a tracked collection against a freshly staged document. Writes nothing. */
+  previewOpenApiResync: (slug: string, documentId: string) =>
+    post<OpenApiResyncPreview>(
+      `/api/collections/${encodeURIComponent(slug)}/openapi/resync/preview`, { documentId }),
+
+  /** Apply the chosen action per operation. Anything omitted is skipped. */
+  applyOpenApiResync: (
+    slug: string, documentId: string, decisions: { opKey: string; action: OpenApiResyncAction }[],
+  ) =>
+    post<OpenApiResyncResult>(
+      `/api/collections/${encodeURIComponent(slug)}/openapi/resync`, { documentId, decisions }),
+
+  /** The document a collection was imported from, or null when it wasn't (or the lock is gone). */
+  openApiLink: async (slug: string): Promise<OpenApiLink | null> => {
+    try {
+      return await get<OpenApiLink>(`/api/collections/${encodeURIComponent(slug)}/openapi`)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null
+      throw e
+    }
+  },
+
   // Tags
   tags: () => get<TaggedItem[]>('/api/tags'),
-  /** Workspace tag dictionary: union of curated tags from `tap.md` and tags currently
+  /** Workspace tag dictionary: union of curated tags from `workspace.tap` and tags currently
    *  in use on any entity. Source for every TagsInput's autocomplete + the Tags-view
    *  filter picker. */
   tagDictionary: () => get<string[]>('/api/tags/dictionary'),
 
   // Render — request path goes in body since ASP.NET routing can't suffix /render after a catch-all
-  render: (path: string, env: string | null, stage: string | null, overrides?: Record<string, string>) =>
-    post<RenderedRequest>('/api/render', { path, env, stage, overrides }),
+  render: (path: string, env: string | null, overrides?: Record<string, string>) =>
+    post<RenderedRequest>('/api/render', { path, env, overrides }),
 
   /** Probe a GraphQL endpoint for its schema. Uses the request's URL + headers + auth from
    *  the usual render pipeline but swaps the body for a standard introspection POST (or
    *  appends `?sdl` for SDL mode). Returns the raw upstream payload; the client builds a
    *  `GraphQLSchema` from it. */
-  graphqlSchema: (path: string, env: string | null, stage: string | null, mode: GraphQLSchemaMode) =>
-    post<GraphQLSchemaResponse>('/api/graphql/schema', { path, env, stage, mode }),
+  graphqlSchema: (path: string, env: string | null, mode: GraphQLSchemaMode) =>
+    post<GraphQLSchemaResponse>('/api/graphql/schema', { path, env, mode }),
 
   // Actually fire the request against the upstream and return status/headers/body/timing.
-  execute: (path: string, env: string | null, stage: string | null, overrides?: Record<string, string>) =>
-    post<ExecutionResult>('/api/execute', { path, env, stage, overrides }),
+  execute: (path: string, env: string | null, overrides?: Record<string, string>) =>
+    post<ExecutionResult>('/api/execute', { path, env, overrides }),
 
-  diagnoseTls: (path: string, env: string | null, stage: string | null, spec?: RequestSpec) =>
-    post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, stage, spec }),
+  diagnoseTls: (path: string, env: string | null, spec?: RequestSpec) =>
+    post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, spec }),
+
+  /** Fetch more of a response the panel showed truncated. `max` is a byte ceiling — the
+   *  server clamps it to what it actually retained (and to its own text ceiling). The
+   *  request is never re-sent; this reads the copy spooled during the original send. */
+  responseBodyText: (bodyId: string, max?: number) =>
+    get<ResponseBodyText>(`/api/execute/body/${encodeURIComponent(bodyId)}/text${max ? `?max=${Math.floor(max)}` : ''}`),
+
+  /** URL that streams the whole retained body as a download. Used as an anchor href rather
+   *  than fetched — letting the browser stream it straight to disk is the point, since the
+   *  body is by definition bigger than what we were willing to hold in the page. */
+  responseBodyUrl: (bodyId: string, filename?: string) =>
+    `/api/execute/body/${encodeURIComponent(bodyId)}${filename ? `?name=${encodeURIComponent(filename)}` : ''}`,
 
   /**
    * Streaming variant of `execute()`. Drives a single fetch + ReadableStream against
@@ -286,17 +370,20 @@ export const api = {
    * Pass `spec` to send an unsaved (dirty) draft: the server builds the request from the
    * spec in-memory — same emit pipeline as Save — without writing it to disk, then renders
    * and executes that transient request instead of the on-disk file.
+   *
+   * `source` is the same idea for a `.http` file, which has no spec — it carries the raw
+   * editor text, and `path` names which request inside it to run.
    */
   executeStream(
     path: string,
     env: string | null,
-    stage: string | null,
     handler: (event: StreamEvent) => void,
     overrides?: Record<string, string>,
     spec?: RequestSpec,
+    source?: string,
   ): AbortController {
     const ctrl = new AbortController()
-    void runExecuteStream(path, env, stage, overrides, handler, ctrl.signal, spec)
+    void runExecuteStream(path, env, overrides, handler, ctrl.signal, spec, source)
     return ctrl
   },
 
@@ -304,11 +391,47 @@ export const api = {
 
   flows: () => get<FlowSummary[]>('/api/flows'),
   flow: (path: string) => get<FlowDetail>(`/api/flows/${encodePath(path)}`),
-  saveFlowSpec: (spec: FlowSpec) => put('/api/flows/spec', spec),
+  saveFlowSpec: (spec: FlowSpec) => putJson<SavedSpec>('/api/flows/spec', spec),
 
   testSets: () => get<TestSetSummary[]>('/api/test-sets'),
   testSet: (path: string) => get<TestSetDetail>(`/api/test-sets/${encodePath(path)}`),
-  saveTestSetSpec: (spec: TestSetSpec) => put('/api/test-sets/spec', spec),
+  saveTestSetSpec: (spec: TestSetSpec) => putJson<SavedSpec>('/api/test-sets/spec', spec),
+
+  // ---- Request history ------------------------------------------------------------------
+  // `.tap-history/`, one folder per request id. The listings return summaries only — a
+  // timeline row needs a status and a URL, not every recorded body.
+
+  /** Newest exchanges across the workspace. */
+  history: (params?: { limit?: number; collection?: string; status?: string; includeOrphans?: boolean }) => {
+    const q = new URLSearchParams()
+    if (params?.limit !== undefined) q.set('limit', String(params.limit))
+    if (params?.collection) q.set('collection', params.collection)
+    if (params?.status) q.set('status', params.status)
+    if (params?.includeOrphans === false) q.set('includeOrphans', 'false')
+    const query = q.toString()
+    return get<HistorySummary[]>(`/api/history/${query ? `?${query}` : ''}`)
+  },
+
+  /** One request's recorded exchanges, newest first. */
+  requestHistory: (requestId: string, limit?: number) =>
+    get<HistorySummary[]>(
+      `/api/history/request/${encodeURIComponent(requestId)}${limit ? `?limit=${limit}` : ''}`),
+
+  /** One entry in full. Throws 423 when the entry is encrypted and this machine has no key. */
+  historyEntry: (requestId: string, entryId: string) =>
+    get<HistoryEntry>(`/api/history/entry/${encodeURIComponent(requestId)}/${encodeURIComponent(entryId)}`),
+
+  deleteHistoryEntry: (requestId: string, entryId: string) =>
+    del(`/api/history/entry/${encodeURIComponent(requestId)}/${encodeURIComponent(entryId)}`),
+
+  clearRequestHistory: (requestId: string) =>
+    del(`/api/history/request/${encodeURIComponent(requestId)}`),
+
+  /** Drops every folder whose request no longer exists. */
+  clearOrphanedHistory: () => del('/api/history/orphans'),
+
+  /** Where history lives, and whether encrypted entries can be opened here. */
+  historyStatus: () => get<HistoryStatus>('/api/history/status'),
 
   /**
    * Run a test set or a flow — `path` points at either kind and the server decides from the
@@ -322,12 +445,11 @@ export const api = {
   runTests(
     path: string,
     env: string | null,
-    stage: string | null,
     handler: (event: TestRunEvent) => void,
     options?: { only?: number | null; overrides?: Record<string, string> },
   ): AbortController {
     const ctrl = new AbortController()
-    void runTestStream(path, env, stage, options, handler, ctrl.signal)
+    void runTestStream(path, env, options, handler, ctrl.signal)
     return ctrl
   },
 
@@ -335,27 +457,24 @@ export const api = {
 
   /** Fetch the OpenID Connect discovery document for a given authority URL. `authPath` is
    *  the profile being edited — passing it lets a collection-scoped profile resolve an
-   *  authority that references its collection's (or stage's) variables. `env` is the active
-   *  environment, without which the authority resolves against the workspace default. */
-  oidcDiscovery: (authority: string, authPath?: string, stage?: string, env?: string) => {
+   *  authority that references its collection's variables. `env` is the active environment,
+   *  without which the authority resolves against the workspace default. */
+  oidcDiscovery: (authority: string, authPath?: string, env?: string) => {
     const q = new URLSearchParams({ authority })
     if (authPath) q.set('authPath', authPath)
-    if (stage) q.set('stage', stage)
     if (env) q.set('env', env)
     return get<OidcDiscovery>(`/api/auth/discovery?${q}`)
   },
 
   /** Run an auth profile. For OAuth2 client_credentials returns tokens synchronously;
    *  for authorization_code+PKCE returns a loginUrl + flowId for the UI to drive.
-   *  `context` carries the caller's request + stage so a collection-scoped profile expands
-   *  against the right stage (and caches its token there); ignored for workspace-scoped ones.
-   *  `env` applies to every profile — it must be the environment the editor previewed the
-   *  profile's fields against, or the runner resolves `{{…}}` refs against a different one. */
-  executeAuth: (path: string, forceReauthenticate = false,
-                context?: { requestPath?: string; stage?: string; env?: string }) =>
+   *  `env` must be the environment the editor previewed the profile's fields against, or the
+   *  runner resolves `{{…}}` refs against a different one and caches the token under the wrong
+   *  key. A collection-scoped profile picks its collection's variables up from its own
+   *  location, so nothing else needs passing. */
+  executeAuth: (path: string, forceReauthenticate = false, context?: { env?: string }) =>
     post<AuthExecuteResponse>('/api/auth/execute', {
-      path, forceReauthenticate,
-      requestPath: context?.requestPath, stage: context?.stage, env: context?.env,
+      path, forceReauthenticate, env: context?.env,
     }),
 
   /** Poll a pending flow until it transitions to completed or failed. */
@@ -421,6 +540,27 @@ export const api = {
     return get<ProviderVariableValue>(
       `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}${q}`)
   },
+
+  /** Upsert one variable in a ReadWrite provider. Idempotent — the key is in the URL. */
+  setProviderVariable: (name: string, key: string, body: ProviderVariableWrite) =>
+    put(
+      `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}`,
+      body),
+
+  /** Remove one variable from a ReadWrite provider. Absent keys succeed. */
+  deleteProviderVariable: (name: string, key: string, env?: string | null) => {
+    const q = env ? `?env=${encodeURIComponent(env)}` : ''
+    return del(
+      `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}${q}`)
+  },
+
+  // --- Encryption key ------------------------------------------------------------------
+
+  /** Whether this machine can encrypt at rest, and where its key comes from. */
+  encryptionKey: () => get<EncryptionKeyStatus>('/api/encryption-key'),
+
+  /** Generate a key file on this machine. Fails if a key already exists or the env var wins. */
+  generateEncryptionKey: () => post<EncryptionKeyStatus>('/api/encryption-key/generate', {}),
 
   // --- Azure discovery (Key Vault picker) ----------------------------------------------
 
@@ -550,13 +690,28 @@ export interface StreamMeta {
 export interface StreamBody {
   responseBody: string | null
   responseBodyBytes: number
+  /** Bytes of the body this event carries — below `responseBodyBytes` when the workspace's
+   *  `response.maxBytes` cut it short. */
+  responseBodyInlineBytes: number
+  /** Handle for the copy held back on the server, or null when nothing was. */
+  bodyId: string | null
+  retainedBytes: number
+}
+
+/** A longer prefix of a retained body, from `GET /api/execute/body/{id}/text`. */
+export interface ResponseBodyText {
+  text: string | null
+  inlineBytes: number
+  totalBytes: number
+  retainedBytes: number
 }
 
 export interface StreamDone {
   durationMs: number
   responseBodyBytes: number
   variablesUsed: VariableTrace[]
-  stage: string | null
+  /** Path of the environment the request actually resolved under, or null. */
+  env: string | null
   error: string | null
   /** Assertion verdicts, evaluated server-side once the body is complete. */
   assertions: AssertResult[]
@@ -588,15 +743,15 @@ export type TestRunEvent =
 async function runExecuteStream(
   path: string,
   env: string | null,
-  stage: string | null,
   overrides: Record<string, string> | undefined,
   handler: (event: StreamEvent) => void,
   signal: AbortSignal,
   spec?: RequestSpec,
+  source?: string,
 ): Promise<void> {
   await postSse(
     '/api/execute/stream',
-    { path, env, stage, overrides, spec },
+    { path, env, overrides, spec, source },
     signal,
     (name, payload) => {
       switch (name) {
@@ -615,14 +770,13 @@ async function runExecuteStream(
 async function runTestStream(
   path: string,
   env: string | null,
-  stage: string | null,
   options: { only?: number | null; overrides?: Record<string, string> } | undefined,
   handler: (event: TestRunEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
   await postSse(
     '/api/tests/run',
-    { path, env, stage, only: options?.only ?? null, overrides: options?.overrides },
+    { path, env, only: options?.only ?? null, overrides: options?.overrides },
     signal,
     (name, payload) => {
       switch (name) {

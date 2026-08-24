@@ -16,7 +16,7 @@ public class ReportWriterTests : IDisposable
     public void Dispose() => Directory.Delete(_dir, recursive: true);
 
     private static TestStepResultDto Step(bool ok, string name = "step", params AssertResultDto[] assertions) => new(
-        Index: 0, Name: name, RequestPath: "collections/demo/a.req.md",
+        Index: 0, Name: name, RequestPath: "collections/demo/a.req.tap",
         Method: "GET", Url: "https://example.test/a", Status: ok ? 200 : 500, StatusText: "OK",
         ContentType: "application/json", ResponseBody: "{}", ResponseBodyBytes: 2, DurationMs: 12,
         Assertions: assertions,
@@ -24,12 +24,12 @@ public class ReportWriterTests : IDisposable
         Extracted: [], Ok: ok, Skipped: false, Error: null);
 
     private static TestEntryResultDto Entry(int index, string name, bool ok, bool skipped = false, string? error = null)
-        => new(index, name, "request", "collections/demo/a.req.md",
+        => new(index, name, "request", "collections/demo/a.req.tap",
             skipped ? [] : [Step(ok, name, new AssertResultDto(0, "status = 200", ok, false, ok ? "200" : "500", "200", ok ? null : "expected 200, got 500"))],
             ok, skipped, 12, error);
 
     private static TestRunResultDto Run(params TestEntryResultDto[] entries) => new(
-        Path: "tests/orders.test.md", Kind: "test", Name: "Order API", Entries: entries,
+        Path: "tests/orders.test.tap", Kind: "test", Name: "Order API", Entries: entries,
         Ok: entries.All(e => e.Ok), Passed: entries.Count(e => e.Ok && !e.Skipped),
         Failed: entries.Count(e => !e.Ok && !e.Skipped), Skipped: entries.Count(e => e.Skipped),
         DurationMs: 42, Error: null);
@@ -157,7 +157,7 @@ public class ReportWriterTests : IDisposable
     public void JUnit_gives_each_target_its_own_suite()
     {
         var first = Run(Entry(0, "passes", true));
-        var second = Run(Entry(0, "fails", false)) with { Path = "tests/other.test.md", Name = "Other" };
+        var second = Run(Entry(0, "fails", false)) with { Path = "tests/other.test.tap", Name = "Other" };
 
         var path = Path.Combine(_dir, "multi.xml");
         Assert.True(ReportWriter.TryWrite("junit", path, new[] { first, second }, out _, out var error), error);
@@ -176,7 +176,7 @@ public class ReportWriterTests : IDisposable
     public void Trx_merges_targets_into_one_run_with_unique_ids()
     {
         var first = Run(Entry(0, "passes", true));
-        var second = Run(Entry(0, "passes", true)) with { Path = "tests/other.test.md", Name = "Other" };
+        var second = Run(Entry(0, "passes", true)) with { Path = "tests/other.test.tap", Name = "Other" };
 
         var path = Path.Combine(_dir, "multi.trx");
         Assert.True(ReportWriter.TryWrite("trx", path, new[] { first, second }, out _, out var error), error);
@@ -247,7 +247,7 @@ public class ReportWriterTests : IDisposable
     {
         // GitHub only renders Markdown inside <details> when a blank line follows <summary> —
         // without it the table below comes out as literal pipes.
-        var second = Run(Entry(0, "passes", true)) with { Path = "tests/other.test.md", Name = "Other" };
+        var second = Run(Entry(0, "passes", true)) with { Path = "tests/other.test.tap", Name = "Other" };
         var lines = WriteMarkdown(Run(Entry(0, "passes", true)), second).Split('\n');
 
         for (var i = 0; i < lines.Length; i++)
@@ -264,7 +264,7 @@ public class ReportWriterTests : IDisposable
     [Fact]
     public void Markdown_gives_each_target_a_section()
     {
-        var second = Run(Entry(0, "passes", true)) with { Path = "tests/other.test.md", Name = "Other" };
+        var second = Run(Entry(0, "passes", true)) with { Path = "tests/other.test.tap", Name = "Other" };
         var md = WriteMarkdown(Run(Entry(0, "passes", true)), second);
 
         Assert.StartsWith("# 2 test sets", md, StringComparison.Ordinal);
@@ -294,10 +294,10 @@ public class ReportWriterTests : IDisposable
     {
         // Content in a code span is literal — escaping it prints the backslashes, so a path
         // with an underscore would render as `my\_tests/...`.
-        var run = Run(Entry(0, "passes", true)) with { Path = "tests/my_tests/orders.test.md" };
+        var run = Run(Entry(0, "passes", true)) with { Path = "tests/my_tests/orders.test.tap" };
         var md = WriteMarkdown(run);
 
-        Assert.Contains("`tests/my_tests/orders.test.md`", md, StringComparison.Ordinal);
+        Assert.Contains("`tests/my_tests/orders.test.tap`", md, StringComparison.Ordinal);
     }
 
     [Fact]

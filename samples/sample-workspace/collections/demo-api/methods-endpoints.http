@@ -1,0 +1,48 @@
+# MethodsEndpoints
+# Generated from an OpenAPI description by Tap Studio.
+#
+# An ordinary .http file — it opens and sends in Visual Studio, VS Code REST Client,
+# JetBrains, httpyac, and Kulala. The '# @tap-*' lines are inert comments there and
+# Tap features here.
+
+### GET /demo/methods
+# tap-openapi methods-get
+# @name methods-get
+# @tap-tag MethodsEndpoints
+GET /demo/methods
+Accept: application/json
+
+### POST /demo/methods
+# tap-openapi methods-post
+# @name methods-post
+# @tap-tag MethodsEndpoints
+POST /demo/methods
+Accept: application/json
+
+### PUT /demo/methods
+# tap-openapi methods-put
+# @name methods-put
+# @tap-tag MethodsEndpoints
+PUT /demo/methods
+Accept: application/json
+
+### PATCH /demo/methods
+# tap-openapi methods-patch
+# @name methods-patch
+# @tap-tag MethodsEndpoints
+PATCH /demo/methods
+Accept: application/json
+
+### DELETE /demo/methods
+# tap-openapi methods-delete
+# @name methods-delete
+# @tap-tag MethodsEndpoints
+DELETE /demo/methods
+Accept: application/json
+
+### HEAD /demo/methods
+# tap-openapi methods-head
+# @name methods-head
+# @tap-tag MethodsEndpoints
+HEAD /demo/methods
+Accept: application/json

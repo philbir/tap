@@ -33,7 +33,6 @@ public sealed class ConsoleReporter(IAnsiConsole console, bool verbose)
 
         var scope = new List<string> { Escape(start.Path) };
         if (start.Env is { Length: > 0 }) scope.Add($"env {Escape(start.Env)}");
-        if (start.Stage is { Length: > 0 }) scope.Add($"stage {Escape(start.Stage)}");
         console.MarkupLine($"[dim]{string.Join(" · ", scope)}[/]");
         console.WriteLine();
 

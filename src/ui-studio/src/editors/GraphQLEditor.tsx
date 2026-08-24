@@ -18,7 +18,6 @@ interface Props {
    *  when the user clicks "Fetch schema". */
   requestPath: string
   env: string | null
-  stage: string | null
   /** Raw wire-format body string: usually `{ "query": "...", "variables": {...} }`. */
   body: string
   /** Whether the parent request has unsaved changes. We disable the schema-fetch button
@@ -34,7 +33,7 @@ const SCHEMA_MODE_LABEL: Record<GraphQLSchemaMode, string> = {
   sdl: 'SDL (?sdl)',
 }
 
-export function GraphQLEditor({ requestPath, env, stage, body, dirty, onChange }: Props) {
+export function GraphQLEditor({ requestPath, env, body, dirty, onChange }: Props) {
   const initial = useMemo(() => parseGraphQLBody(body), [body])
   const [query, setQuery] = useState(initial.query)
   const [variables, setVariables] = useState(initial.variables)
@@ -80,7 +79,7 @@ export function GraphQLEditor({ requestPath, env, stage, body, dirty, onChange }
     setStatus('loading')
     setSchemaError(null)
     try {
-      const result = await api.graphqlSchema(requestPath, env, stage, nextMode)
+      const result = await api.graphqlSchema(requestPath, env, nextMode)
       if (result.error || !result.schema) {
         setStatus('error')
         setSchemaError(result.error ?? 'Empty response from upstream')

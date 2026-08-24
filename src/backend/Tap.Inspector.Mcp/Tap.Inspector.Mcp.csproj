@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Tap.Inspector.Mcp</RootNamespace>
+    <AssemblyName>Tap.Inspector.Mcp</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Tap.Core only. This library is referenced BY Tap.Server (to serve /mcp in-process),
+         so it must never reference Tap.Server back — which is why the captured DTOs live in
+         Tap.Core rather than beside the RequestRecord they are projected from. -->
+    <ProjectReference Include="..\Tap.Core\Tap.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Only the MCP core (attributes, McpException, server plumbing shared by every
+         transport). Hosting stays with the hosts: the CLI adds stdio, Tap.Server adds
+         ModelContextProtocol.AspNetCore — this library must not force either on the other. -->
+    <PackageReference Include="ModelContextProtocol" />
+  </ItemGroup>
+
+</Project>

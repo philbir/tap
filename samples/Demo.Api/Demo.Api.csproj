@@ -7,6 +7,14 @@
     <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
   </PropertyGroup>
   <ItemGroup>
+    <!-- Publishes /openapi/v1.json so the Aspire sample can scaffold real requests from it.
+         VersionOverride is load-bearing: CentralPackageTransitivePinningEnabled would otherwise
+         force this project onto the Microsoft.OpenApi 3.x that Tap.Studio's importer uses, and
+         AddOpenApi's source generator is built against 2.x (it assigns IOpenApiMediaType.Example,
+         which 3.x made read-only). 2.12.0 rather than the 2.0.0 it asks for: that one carries
+         GHSA-v5pm-xwqc-g5wc. The two versions never meet — different assemblies, no shared types. -->
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" />
+    <PackageReference Include="Microsoft.OpenApi" VersionOverride="2.12.0" />
     <PackageReference Include="HotChocolate.AspNetCore" />
     <PackageReference Include="HotChocolate.Subscriptions.InMemory" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.InMemory" />

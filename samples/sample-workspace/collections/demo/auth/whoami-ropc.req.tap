@@ -1,0 +1,14 @@
+---
+kind: request
+name: Whoami (password / ROPC)
+auth: ../../../auth/demo-oauth-ropc.auth.tap
+tags: [demo, auth, oauth2, password]
+---
+# Authenticated request — password (ROPC)
+
+The ROPC profile mints a user token (`alice` / `wonderland`) and stamps the
+access token onto this request.
+
+```http
+GET /demo/auth/whoami
+```

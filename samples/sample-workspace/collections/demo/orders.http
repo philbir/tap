@@ -1,0 +1,20 @@
+# A portable .http file inside a Tap collection. It inherits the collection's baseUrl,
+# default headers, and auth, so request lines stay relative. The # @tap-* directives below
+# are inert comments in Visual Studio, REST Client, JetBrains, httpyac, and Kulala.
+# @tap-tag demo, http-format
+# @tap-assert status == 200
+
+@methodsPath = /demo/methods
+
+### List methods
+# @name list-methods
+# @tap-assert header content-type contains application/json
+GET {{methodsPath}}/
+Accept: application/json
+
+### Echo a payload
+# @tap-assert $.method == POST
+POST {{methodsPath}}/
+Content-Type: application/json
+
+{"correlationId":"{{$guid}}","at":"{{$isoTimestamp}}"}

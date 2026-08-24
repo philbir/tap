@@ -1,14 +1,15 @@
 <div align="center">
   <p>
-    <img src="assets/tap-logo.svg" alt="Tap" width="150">
+    <img src="assets/tap-platform-icon.svg" alt="Tap Platform" width="76">
   </p>
 
+  <h1>Tap Platform</h1>
+
   <picture>
-    <source srcset="assets/tap-hero-dark.png" media="(prefers-color-scheme: dark)">
-    <img src="assets/tap-hero.png" alt="Tap tunnel and HTTP inspector illustration" width="620">
+    <img src="assets/tap-platform-hero.png" alt="Tap Platform distributing HTTP flow between Studio and Tunnels" width="720">
   </picture>
 
-  <p><strong>Two local-first tools for HTTP: one to watch traffic arrive, one to send it.</strong></p>
+  <p><strong>The local-first HTTP workbench: craft requests in Studio, route and inspect traffic with Tunnels.</strong></p>
 
   <p>
     <a href="https://philbir.github.io/tap/"><strong>Landing page and docs</strong></a>
@@ -26,7 +27,7 @@
 
 ---
 
-## The big picture
+## The Tap story
 
 Local HTTP development has two halves. Sometimes the internet needs to reach your laptop —
 a webhook, an OAuth callback, a mobile build, a partner poking at your machine for ten minutes
@@ -34,12 +35,12 @@ a webhook, an OAuth callback, a mobile build, a partner poking at your machine f
 compose a request, authenticate properly, send it, and keep it somewhere your team can find it
 next month.
 
-Tap is two products, one for each half:
+**Tap Platform** is the umbrella HTTP workbench. It brings two focused products into one story:
 
 | | | |
 |---|---|---|
-| 🔌 | **[Tap Tunnel + Inspector](#-tap-tunnel--inspector)** | Give localhost a real public URL through Cloudflare Tunnel or Tailscale, and capture every request, response, SSE event, and WebSocket frame that flows through it. Runs as the `tap` CLI or as .NET Aspire resources. |
-| 🧪 | **[Tap Studio](#-tap-studio)** | An HTTP workbench: compose requests, run real authentication flows, execute, chain them into flows and test sets that also run in CI, and keep the whole workspace in your git repo as Markdown. Ships as a desktop app, with an AI assistant built in. |
+| <img src="assets/tap-studio-icon.svg" alt="" width="42"> | **[Tap Studio](#tap-studio)** | The HTTP request and auth credential crafter. Compose requests, run real authentication flows, execute, chain them into flows and CI tests, and keep the workspace in git-native Markdown. |
+| <img src="assets/tap-tunnels-icon.svg" alt="" width="42"> | **[Tap Tunnels](#tap-tunnels)** | Tunnels with inspection built in. Give localhost a URL through Cloudflare or Tailscale and inspect every request, response, SSE event, and WebSocket frame that flows through it. |
 
 They share a philosophy more than they share code:
 
@@ -54,22 +55,28 @@ They share a philosophy more than they share code:
   public exposure is something you opt into with your eyes open.
 
 ```text
-inbound    Internet ─▶ Cloudflare Tunnel / Tailscale ─▶ Tap capture proxy ─▶ your service
+inbound    Internet ─▶ Tap Tunnels (Cloudflare / Tailscale) ─▶ your service
                                                               │
                                                               ▼
-                                                        Inspector UI
+                                                   built-in Inspector
                                                         requests · SSE · WS · replay
 
-outbound   request.req.md + auth profile + environment ─▶ Tap Studio ─▶ any API
+outbound   request.req.tap + auth profile + environment ─▶ Tap Studio ─▶ any API
            └──────── Markdown, in your repo ─────────┘     executor
 ```
 
-Use either on its own. Used together, Studio composes the call and the Inspector shows you what
-your service actually received.
+Use either product on its own. Used together, Studio crafts the authenticated call and Tap
+Tunnels' built-in Inspector shows you what your service actually received.
 
 ---
 
-## 🔌 Tap Tunnel + Inspector
+## Tap Tunnels
+
+<img src="assets/tap-tunnels-icon.svg" alt="Tap Tunnels" width="64">
+
+> **Tunnels with inspection built in.**
+
+<img src="assets/tap-tunnels-hero.png" alt="Tap Tunnels carrying and inspecting HTTP traffic" width="680">
 
 For the moment when localhost needs to behave like a real internet endpoint, but you still want
 full visibility into every request. Mobile app hooks, webhook deliveries, third-party OAuth
@@ -168,7 +175,7 @@ or `.WithTailscaleFunnel(...)` to put a tunnel in front — the
 
 | Package | Purpose |
 |---|---|
-| `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `WithTunnel`, `WithQuickTunnel`, `WithTailscaleServe` (tailnet-only, default), `WithTailscaleFunnel` (public, opt-in), `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon` / `WithEphemeralDaemon` / `WithFunnelPort`. |
+| `Tap.Hosting` | Aspire AppHost extensions: `AddTap`, `AddTapContainer`, `WithTap`, `WithTunnel`, `WithQuickTunnel`, `WithTailscaleServe` (tailnet-only, default), `WithTailscaleFunnel` (public, opt-in), `WithExistingTunnel`, `WithApiManagedTunnel`, `WithDynamicHostname`, `WithSystemDaemon` / `WithEphemeralDaemon` / `WithFunnelPort` — plus `AddTapStudio` / `AddTapStudioContainer` for Studio. |
 | `Tap.Server` | ASP.NET Core capture server: YARP reverse proxy, capture middleware, WebSocket-terminating proxy, SSE event parser, REST API, `/api/stream` push channel, and the bundled React Inspector UI. |
 | `Tap.Cli` | Local command host that reuses the same server code. |
 
@@ -178,11 +185,19 @@ environment variables.
 
 ---
 
-## 🧪 Tap Studio
+## Tap Studio
 
-The other direction: **you** are the client. Studio is a full HTTP request workbench —
-compose, authenticate, execute, document — with a workspace that lives in your repository as
-plain Markdown.
+<img src="assets/tap-studio-icon.svg" alt="Tap Studio" width="64">
+
+<img src="assets/tap-studio-workbench-hero.png" alt="Tap Studio crafting requests and auth credentials" width="680">
+
+The other direction: **you** are the client. Studio is the HTTP request and auth credential
+crafter—compose, authenticate, execute, and document—with a workspace that lives in your
+repository as plain Markdown.
+
+Already using Aspire? `builder.AddTapStudio<Projects.Tap_Studio>().WithApi(orders)` runs Studio
+as a companion resource of your AppHost, pinned to a workspace folder in the repo and pointed at
+your APIs — see [Run it from your Aspire AppHost](docs/studio.md#run-it-from-your-aspire-apphost).
 
 📖 **Full reference: [docs/studio.md](docs/studio.md)** ·
 📄 **On-disk format: [docs/workspace-format.md](docs/workspace-format.md)**
@@ -197,11 +212,11 @@ plain Markdown.
 | **Real responses** | Status, duration, size, syntax-highlighted body with image and binary previews, plus **Headers**, the exact **Request** that went on the wire, the auth/variable **Flow**, and which **Secrets** were resolved. |
 | **Streaming** | SSE responses stream in live; requests marked `protocol: websocket` open a real socket and append frames as they arrive. |
 | **Many authentication flows** | OAuth 2.0 / OIDC (authorization code + PKCE, client credentials, ROPC, device code), Microsoft Entra, Azure CLI (direct + on-behalf-of), GitHub (PAT / `gh` CLI / GitHub App / OAuth App), AWS SigV4, signed JWT, bearer, basic, API key, and custom headers. |
-| **Flows and test sets** | A **flow** (`*.flow.md`) runs requests in order and carries values out of one response into the next; a **test set** (`*.test.md`) groups checks that each run one request or one whole flow. The **Testing** tab authors both and streams every result as it lands. |
+| **Flows and test sets** | A **flow** (`*.flow.tap`) runs requests in order and carries values out of one response into the next; a **test set** (`*.test.tap`) groups checks that each run one request or one whole flow. The **Testing** tab authors both and streams every result as it lands. |
 | **The same verdict in CI** | The `tap-studio` .NET tool runs those flows and test sets headlessly — JUnit, TRX, JSON, or Markdown reports, and exit codes a pipeline can branch on. Same engine as the UI, so a pull-request check and the Testing tab are one computation. |
 | **AI assistance** | Hand the request to GitHub Copilot CLI or Claude Code — running locally, with your existing CLI login — and get a proposed edit you review before saving. |
 | **Git-native workspace** | Requests, collections, auth profiles, environments, flows, and test sets are Markdown files. Built-in branch, diff, stage, and commit. |
-| **Variables and secrets** | A six-level cascade (workspace → collection → stage → environment → request → per-run) over pluggable providers: process env with allowlists, an encrypted workspace file, Azure Key Vault, and machine-local system variables. |
+| **Variables and secrets** | A five-level cascade (workspace → collection → environment → request → per-run) over pluggable providers: process env with allowlists, an encrypted workspace file, Azure Key Vault, and machine-local system variables. |
 
 ### Authentication, properly
 
@@ -240,16 +255,16 @@ decide whether to keep it. Secrets are always referenced as `{{variables}}`, nev
 
 ```
 .tap/
-├── tap.md                                ← workspace: name, providers, default env
-├── auth/corp-entra.auth.md               ← auth profile shared by every collection
-├── environments/local.env.md             ← named variable set
+├── workspace.tap                                ← workspace: name, providers, default env
+├── auth/corp-entra.auth.tap               ← auth profile shared by every collection
+├── environments/local.env.tap             ← named variable set
 ├── tests/
-│   ├── checkout.flow.md                  ← requests in order, values carried across
-│   └── billing.test.md                   ← a set of checks over requests and flows
+│   ├── checkout.flow.tap                  ← requests in order, values carried across
+│   └── billing.test.tap                   ← a set of checks over requests and flows
 └── collections/billing/
-    ├── _collection.md                    ← baseUrl, stages, default auth/headers
-    ├── billing-oauth.auth.md             ← auth profile scoped to this collection
-    └── create-customer.req.md            ← one request, as a fenced http block
+    ├── _collection.tap                    ← baseUrl, default auth/headers
+    ├── billing-oauth.auth.tap             ← auth profile scoped to this collection
+    └── create-customer.req.tap            ← one request, as a fenced http block
 ```
 
 Because a request is a couple of lines of Markdown, review, blame, cherry-pick, and revert all
@@ -269,12 +284,12 @@ kind: flow
 name: Checkout
 steps:
 - name: Create the order
-  request: ../collections/demo/create-order.req.md
+  request: ../collections/demo/create-order.req.tap
   extract:
   - var: orderId                          # bind it out of the response…
     jsonpath: $.order.id
 - name: Read it back
-  request: ../collections/demo/get-order.req.md
+  request: ../collections/demo/get-order.req.tap
   vars:
     id: '{{orderId}}'                     # …and the next step reads it
 ```
@@ -318,6 +333,19 @@ This repo runs its own sample set that way on every push — see
 Studio ships as a native desktop app (Tauri 2 wrapping the self-contained `Tap.Studio`
 sidecar). Grab the `.dmg`, `.msi`/`.exe`, or `.deb` from
 [Releases](https://github.com/philbir/tap/releases); it self-updates from there.
+
+There is also a container — `ghcr.io/philbir/tap-studio`, the same UI, API, and engine on port
+8080 with the workspace bind-mounted at `/workspace`. In an Aspire AppHost,
+`AddTapStudioContainer()` runs it for you; by hand it is:
+
+```bash
+docker run --rm -p 127.0.0.1:8080:8080 -v "$PWD:/workspace" ghcr.io/philbir/tap-studio:latest
+```
+
+Bind the published port to loopback like that unless you mean otherwise: Studio reads and writes
+the workspace and holds cached tokens, and a plain `-p 8080:8080` offers all of it to the
+network. What the container cannot do is reach your machine — no coding CLI for the assistant to
+spawn, no browser to open for an interactive sign-in, no `op` or `az` on PATH.
 
 From source, the whole dev loop is one command:
 
@@ -385,6 +413,8 @@ samples/                      Sample AppHosts, the demo API, and a sample worksp
 ```
 
 ## Documentation
+
+- [Product story and naming](docs/product-story.md)
 
 | Document | Contents |
 |---|---|

@@ -5,6 +5,10 @@ using System.Threading.RateLimiting;
 using Tap.Core.Auth;
 using Yarp.ReverseProxy.Configuration;
 
+using Tap.Core.Capture;
+using Tap.Inspector.Mcp;
+using Tap.Server.Agent;
+
 namespace Tap.Server;
 
 /// <summary>
@@ -148,6 +152,35 @@ public static class TapInspectorHost
 
         builder.Services.AddSingleton<InMemoryRequestStore>();
         builder.Services.AddSingleton<IRequestStore>(sp => sp.GetRequiredService<InMemoryRequestStore>());
+
+        // The agent read surface. Registered even when disabled so the type graph is the same
+        // either way; AgentEndpoints maps nothing unless Inspector:Agent:Enabled is set. One
+        // provider for the process lifetime, because its redactor's salt has to be stable —
+        // fingerprints only correlate within a single instance.
+        var agentOptions = InspectorAgentOptions.FromConfiguration(builder.Configuration);
+        builder.Services.AddSingleton(agentOptions);
+        builder.Services.AddSingleton(new AgentActivity(agentOptions.Enabled));
+        builder.Services.AddSingleton<IMcpCaptureProvider>(sp =>
+            new StoreCaptureProvider(
+                sp.GetRequiredService<IRequestStore>(),
+                agentOptions,
+                sp.GetRequiredService<AgentActivity>(),
+                agentOptions.AllowReplay
+                    ? new CaptureReplayer(
+                        sp.GetRequiredService<IHttpClientFactory>(),
+                        sp.GetRequiredService<IRequestStore>(),
+                        options.ProxyPort)
+                    : null));
+
+        if (agentOptions.Enabled)
+        {
+            // The same tool layer the stdio bridge serves, hosted in-process over streamable
+            // HTTP — no hop, no copy, and wait_for_request is a real subscription to the ring.
+            builder.Services
+                .AddMcpServer()
+                .WithHttpTransport()
+                .WithTools<TapInspectorTools>();
+        }
         builder.Services.AddSingleton(options.Ingress);
 
         builder.Services.AddHttpClient("replay").ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
@@ -233,14 +266,34 @@ public static class TapInspectorHost
                 options.UiHost);
         }
 
+        var agentGate = StartAgentBridge(app, options, app.Services.GetRequiredService<InspectorAgentOptions>());
+
         app.MapWhen(ctx => ctx.Connection.LocalPort == options.UiPort, ui =>
         {
             ui.Use(HostAllowlist(uiHosts, allowAnyUiHost));
             ui.Use(RejectCrossOriginRequests);
+
+            // Before anything routes: the agent surface is loopback-and-token-only, whatever
+            // the UI port itself is bound to.
+            ui.Use(async (ctx, next) =>
+            {
+                if (IsAgentPath(ctx.Request.Path) && (agentGate is null || !agentGate.Allows(ctx)))
+                {
+                    await AgentGate.Reject(ctx);
+                    return;
+                }
+
+                await next(ctx);
+            });
+
             ui.UseDefaultFiles();
             ui.UseStaticFiles();
             ui.UseRouting();
-            ui.UseEndpoints(ep => MapUiEndpoints(ep, options, cloudflareOptions));
+            ui.UseEndpoints(ep =>
+            {
+                MapUiEndpoints(ep, options, cloudflareOptions);
+                if (agentGate is not null) ep.MapMcp("/mcp");
+            });
         });
 
         return app;
@@ -425,6 +478,46 @@ public static class TapInspectorHost
         return Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
             string.Equals(uri.Host, host.Host, StringComparison.OrdinalIgnoreCase) &&
             uri.Port == (host.Port ?? (uri.Scheme.Equals("https", StringComparison.OrdinalIgnoreCase) ? 443 : 80));
+    }
+
+    /// <summary>Paths that carry captured traffic and must clear <see cref="AgentGate"/>.
+    /// <c>/api/agent/*</c> answers even when the feature is off — see AgentEndpoints — so the
+    /// gate has to cover the prefix rather than the individual routes.</summary>
+    private static bool IsAgentPath(PathString path)
+        => path.StartsWithSegments("/api/agent") || path.StartsWithSegments("/mcp");
+
+    /// <summary>
+    /// Mints this run's bridge token and publishes it to a <c>0600</c> file, so
+    /// <c>tap mcp</c> can find the inspector without anyone pasting a credential. Returns null
+    /// when agent access is off, which is what leaves the gate closed.
+    /// </summary>
+    private static AgentGate? StartAgentBridge(
+        WebApplication app, TapInspectorOptions options, InspectorAgentOptions agentOptions)
+    {
+        if (!agentOptions.Enabled) return null;
+
+        // The token is minted now — the gate needs it before the first request — but the file
+        // is published only once Kestrel has actually bound the port. Writing it earlier means
+        // a process that fails to bind (because another inspector already owns the port) still
+        // advertises a handle for it, and the next `tap mcp` would then send this run's token
+        // to a server that is not ours.
+        var token = AgentBridgeFile.MintToken();
+
+        app.Lifetime.ApplicationStarted.Register(() =>
+        {
+            var handle = AgentBridgeFile.Write(options.UiPort, token);
+            app.Logger.LogInformation(
+                "Agent access is on. Redacted capture surface at /api/agent/* and /mcp (loopback only). " +
+                "Bridge handle: {Path}. Connect with: tap mcp",
+                AgentBridgeFile.PathFor(options.UiPort));
+            _ = handle;
+        });
+
+        // Remove the handle on the way out: a token that outlives its process authorizes
+        // nothing, but a stale file sends the next bridge to a port that may not be ours.
+        app.Lifetime.ApplicationStopping.Register(() => AgentBridgeFile.Delete(options.UiPort));
+
+        return new AgentGate(token);
     }
 
     private static void MapUiEndpoints(IEndpointRouteBuilder ep, TapInspectorOptions options, CloudflareOptions cloudflareOptions)
@@ -758,6 +851,14 @@ public static class TapInspectorHost
         ep.MapGet("/api/health", () => Results.Ok(new { ok = true }));
 
         ProfileEndpoints.Map(ep);
+        AgentEndpoints.Map(ep, ep.ServiceProvider.GetRequiredService<InspectorAgentOptions>());
+
+        // Deliberately outside the gated /api/agent prefix and free of the token: this is what
+        // the inspector UI polls to show a human that an agent is reading. Locking the
+        // visibility of surveillance behind the surveiller's own credential would be backwards.
+        // It carries counts only — never which requests were read.
+        ep.MapGet("/api/agent-status", (AgentActivity activity) =>
+            Results.Json(activity.Snapshot(), AgentActivityJson.Default.AgentActivitySnapshot));
 
         ep.MapFallbackToFile("index.html");
     }

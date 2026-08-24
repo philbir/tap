@@ -30,10 +30,10 @@ export function FilesystemView({ tree, search, activePath, onOpenFile }: Props) 
   }, [allPaths, search])
 
   // A collection tab is keyed on its directory (`collections/<slug>`); the row that opened
-  // it is the `_collection.md` inside — highlight that one.
+  // it is the collection file inside — highlight that one, in whichever family it exists.
   const selectedPath = useMemo(() => {
     if (!activePath || fileByPath.has(activePath)) return activePath
-    const metaPath = collectionFileOf(activePath)
+    const metaPath = collectionFileOf(activePath, (p) => fileByPath.has(p))
     return fileByPath.has(metaPath) ? metaPath : activePath
   }, [activePath, fileByPath])
 

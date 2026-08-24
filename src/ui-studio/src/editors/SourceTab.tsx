@@ -1,19 +1,20 @@
-import { Alert, Box, Button, Code, Group, Stack, Text } from '@mantine/core'
+import { Alert, Button, Code, Group, Stack, Text } from '@mantine/core'
 import { IconAlertCircle, IconDeviceFloppy, IconRotateClockwise } from '@tabler/icons-react'
-import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react'
-import * as monaco from 'monaco-editor'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { WorkspaceErrorDto } from '../api/types'
-import { ensureThemes, useMonacoTheme } from './monacoSetup'
+import { SourceCodeEditor } from './SourceCodeEditor'
 
 interface Props {
-  /** Workspace-relative file path (e.g. `apis/foo.api.md`, `tap.md`). */
+  /** Workspace-relative file path (e.g. `apis/foo.api.md`, `workspace.tap`). */
   path: string
   /** Canonical YAML emitted by the server — the snapshot the editor starts from. */
   source: string
   /** Filename shown above the editor (defaults to the basename of `path`). */
   label?: string
+  /** Monaco language id. `.http` files are raw-first — they have no canonical YAML form —
+   *  so they reuse this whole editor with their own highlighting. */
+  language?: 'yaml' | 'http'
 }
 
 /**
@@ -33,18 +34,11 @@ interface Props {
  * with a line number we pin a Monaco marker on that line so the squiggle + gutter
  * indicator point straight at the problem.
  */
-export function SourceTab({ path, source, label }: Props) {
-  // We drive Monaco's theme explicitly off Mantine's color scheme (see effect below)
-  // because @monaco-editor/react's prop-driven theme switch is unreliable when the same
-  // editor instance is kept mounted across toggles.
-  const monacoTheme = useMonacoTheme()
+export function SourceTab({ path, source, label, language = 'yaml' }: Props) {
   const [draft, setDraft] = useState(source)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<WorkspaceErrorDto | null>(null)
   const [genericError, setGenericError] = useState<string | null>(null)
-  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
-  // Latest save fn — captured by Cmd+S Monaco action so we don't re-bind on every render.
-  const saveRef = useRef<() => void>(() => {})
 
   // Sync the local draft whenever the parent refetches (after a successful save,
   // or when the user switches to a different file in the same editor instance).
@@ -53,38 +47,6 @@ export function SourceTab({ path, source, label }: Props) {
     setError(null)
     setGenericError(null)
   }, [source, path])
-
-  // Push server-side parse errors into Monaco's marker channel so they render as a
-  // red squiggle + gutter glyph on the offending line. Cleared whenever the error
-  // clears (successful save, revert, or fresh edit).
-  useEffect(() => {
-    const editor = editorRef.current
-    if (!editor) return
-    const model = editor.getModel()
-    if (!model) return
-    if (!error || error.line == null) {
-      monaco.editor.setModelMarkers(model, 'tap-source', [])
-      return
-    }
-    const line = Math.max(1, error.line)
-    monaco.editor.setModelMarkers(model, 'tap-source', [{
-      severity: monaco.MarkerSeverity.Error,
-      message: `${error.code}: ${error.message}`,
-      startLineNumber: line,
-      endLineNumber: line,
-      startColumn: 1,
-      endColumn: model.getLineMaxColumn(line),
-    }])
-    editor.revealLineInCenterIfOutsideViewport(line)
-  }, [error])
-
-  // Drive Monaco's theme directly off the Mantine color scheme. The Editor's `theme`
-  // prop is set on mount, but explicit setTheme keeps follow-up toggles in lockstep
-  // even when @monaco-editor/react's internal effect skips a re-application.
-  useEffect(() => {
-    if (!editorRef.current) return
-    monaco.editor.setTheme(monacoTheme)
-  }, [monacoTheme])
 
   const dirty = useMemo(() => draft !== source, [draft, source])
   const fileName = label ?? path.split('/').pop() ?? path
@@ -103,14 +65,6 @@ export function SourceTab({ path, source, label }: Props) {
     } finally {
       setSaving(false)
     }
-  }
-  saveRef.current = save
-
-  const beforeMount: BeforeMount = (m) => ensureThemes(m)
-  const onMount: OnMount = (editor) => {
-    editorRef.current = editor
-    // Cmd/Ctrl+S inside the editor triggers a save just like the toolbar button.
-    editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => saveRef.current())
   }
 
   return (
@@ -140,9 +94,12 @@ export function SourceTab({ path, source, label }: Props) {
         </Group>
       </Group>
       <Text size="xs" c="dimmed">
-        Canonical YAML for this file. Edits are validated server-side (parsing + schema)
-        before being written. Invalid content stays in the editor and the file on disk
-        is untouched.
+        {language === 'http'
+          // A .http file has no canonical form — saying otherwise would promise a reformat
+          // that will never happen, and the promise NOT to reformat is the whole contract
+          // for a file shared with other tools.
+          ? 'This file is the source of truth and is never reformatted by Tap. Edits are parsed server-side before being written; invalid content stays in the editor and the file on disk is untouched.'
+          : 'Canonical YAML for this file. Edits are validated server-side (parsing + schema) before being written. Invalid content stays in the editor and the file on disk is untouched.'}
       </Text>
 
       {error && (
@@ -163,37 +120,13 @@ export function SourceTab({ path, source, label }: Props) {
         </Alert>
       )}
 
-      <Box
-        style={{
-          border: '1px solid var(--mantine-color-default-border)',
-          borderRadius: 'var(--mantine-radius-sm)',
-          overflow: 'hidden',
-        }}
-      >
-        <Editor
-          height="60vh"
-          language="yaml"
-          value={draft}
-          onChange={(v) => setDraft(v ?? '')}
-          theme={monacoTheme}
-          beforeMount={beforeMount}
-          onMount={onMount}
-          options={{
-            minimap: { enabled: false },
-            fontSize: 12,
-            fontFamily: 'var(--mono)',
-            tabSize: 2,
-            insertSpaces: true,
-            renderWhitespace: 'selection',
-            scrollBeyondLastLine: false,
-            scrollbar: { verticalScrollbarSize: 10, horizontalScrollbarSize: 10 },
-            automaticLayout: true,
-            wordWrap: 'on',
-            lineNumbersMinChars: 3,
-            padding: { top: 8, bottom: 8 },
-          }}
-        />
-      </Box>
+      <SourceCodeEditor
+        value={draft}
+        onChange={setDraft}
+        language={language}
+        error={error}
+        onSave={save}
+      />
     </Stack>
   )
 }

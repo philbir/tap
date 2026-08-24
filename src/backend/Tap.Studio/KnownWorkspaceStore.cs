@@ -13,7 +13,7 @@ namespace Tap.Studio;
 /// every Studio process for the same user profile.
 ///
 /// The store is the source of truth for the header's workspace switcher. Adding a workspace
-/// here bootstraps a <c>tap.md</c> manifest in the selected folder when missing, then
+/// here bootstraps a <c>workspace.tap</c> manifest in the selected folder when missing, then
 /// registers a pointer to it.
 /// </summary>
 public sealed class KnownWorkspaceStore
@@ -190,8 +190,11 @@ public sealed class KnownWorkspaceStore
     /// <summary>Bootstrap a workspace manifest in the selected folder if missing.</summary>
     private static void EnsureWorkspaceScaffold(string root)
     {
+        // Dual-read: a folder that already has a legacy workspace.tap is a workspace, so scaffolding a
+        // second manifest beside it would create two.
+        if (WorkspaceLoader.HasManifest(root)) return;
+
         var manifestPath = Path.Combine(root, WorkspaceLoader.ManifestFileName);
-        if (File.Exists(manifestPath)) return;
 
         var folderName = Path.GetFileName(root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
         var spec = new WorkspaceSpecDto

@@ -2,10 +2,10 @@ namespace Tap.Workspace.Model;
 
 /// <summary>
 /// The file kinds defined by <c>docs/workspace-format.md</c> §2. The filename suffix is canonical
-/// (<c>*.req.md</c>, <c>*.auth.md</c>, <c>*.env.md</c>, <c>*.flow.md</c>, <c>*.test.md</c>,
-/// <c>_collection.md</c>, <c>tap.md</c>); the <c>kind:</c> frontmatter field must agree with the
+/// (<c>*.req.tap</c>, <c>*.auth.tap</c>, <c>*.env.tap</c>, <c>*.flow.tap</c>, <c>*.test.tap</c>,
+/// <c>_collection.tap</c>, <c>workspace.tap</c>); the <c>kind:</c> frontmatter field must agree with the
 /// suffix or parsing fails with <see cref="WorkspaceErrorCode.E_KIND_MISMATCH"/>. Collections own
-/// a baseUrl, optional stages, and default headers/auth — they replace the older <c>api</c> kind
+/// a baseUrl and default headers/auth — they replace the older <c>api</c> kind
 /// that used to live in a separate <c>apis/</c> directory.
 /// </summary>
 public enum WorkspaceKind

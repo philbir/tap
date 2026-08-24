@@ -22,8 +22,20 @@ public class WorkspaceLocatorTests : IDisposable
         return path;
     }
 
-    private static void Manifest(string directory)
-        => File.WriteAllText(Path.Combine(directory, "tap.md"), "---\nkind: workspace\nname: t\n---\n");
+    private static void Manifest(string directory, string fileName = "workspace.tap")
+        => File.WriteAllText(Path.Combine(directory, fileName), "---\nkind: workspace\nname: t\n---\n");
+
+    [Fact]
+    public void Finds_a_workspace_that_still_uses_the_legacy_manifest_name()
+    {
+        // Dual-read: a workspace that hasn't run `tap-studio migrate` must still be locatable,
+        // or the migration command itself would be unreachable from inside it.
+        var workspace = Dir("legacy-ws");
+        Manifest(workspace, "tap.md");
+
+        Assert.True(WorkspaceLocator.TryLocate(null, workspace, out var found, out var error), error);
+        Assert.Equal(workspace, found);
+    }
 
     [Fact]
     public void Finds_a_manifest_in_the_starting_directory()
@@ -88,7 +100,7 @@ public class WorkspaceLocatorTests : IDisposable
         // that directory, and silently testing a different workspace is worse than failing.
         var empty = Dir("empty");
         Assert.False(WorkspaceLocator.TryLocate(empty, null, out _, out var error));
-        Assert.Contains("does not contain a tap.md", error, StringComparison.Ordinal);
+        Assert.Contains("does not contain a workspace.tap", error, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -102,12 +114,12 @@ public class WorkspaceLocatorTests : IDisposable
     public void No_workspace_anywhere_explains_both_ways_to_fix_it()
     {
         var orphan = Dir("orphan");
-        // A temp directory has no tap.md above it, up to the filesystem root.
+        // A temp directory has no manifest above it, up to the filesystem root.
         if (WorkspaceLocator.TryLocate(null, orphan, out _, out _)) return; // a real one exists above temp; skip
 
         Assert.False(WorkspaceLocator.TryLocate(null, orphan, out _, out var error));
         Assert.Contains("--workspace", error, StringComparison.Ordinal);
-        Assert.Contains("tap.md", error, StringComparison.Ordinal);
+        Assert.Contains("workspace.tap", error, StringComparison.Ordinal);
     }
 
     // ---- The downward fallback -----------------------------------------------------------

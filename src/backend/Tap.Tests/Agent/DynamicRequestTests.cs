@@ -26,7 +26,7 @@ public class DynamicRequestTests
     {
         var ws = BuildWorkspace(DemoCollection(), BearerAuth);
         var request = DynamicRequestFactory.Create(ws, "Demo", Spec());
-        Assert.Equal("collections/demo/_dynamic.req.md", request.RelativePath);
+        Assert.Equal("collections/demo/_dynamic.req.tap", request.RelativePath);
         Assert.Equal("GET /users/1", request.Name);
         Assert.Contains("GET /users/1", request.HttpBlock);
     }
@@ -35,10 +35,10 @@ public class DynamicRequestTests
     public void The_collection_resolves_by_name_directory_or_path()
     {
         var ws = BuildWorkspace(DemoCollection(), BearerAuth);
-        foreach (var key in new[] { "Demo", "demo", "collections/demo", "collections/demo/_collection.md" })
+        foreach (var key in new[] { "Demo", "demo", "collections/demo", "collections/demo/_collection.tap" })
         {
             Assert.Equal(
-                "collections/demo/_dynamic.req.md",
+                "collections/demo/_dynamic.req.tap",
                 DynamicRequestFactory.Create(ws, key, Spec()).RelativePath);
         }
     }
@@ -55,7 +55,7 @@ public class DynamicRequestTests
     [Fact]
     public void An_ambiguous_collection_name_is_refused()
     {
-        var other = Parse("collections/demo2/_collection.md", """
+        var other = Parse("collections/demo2/_collection.tap", """
             ---
             kind: collection
             name: Demo
@@ -70,7 +70,7 @@ public class DynamicRequestTests
     [Fact]
     public void The_synthetic_path_never_shadows_a_real_file()
     {
-        var occupant = Parse("collections/demo/_dynamic.req.md", """
+        var occupant = Parse("collections/demo/_dynamic.req.tap", """
             ---
             kind: request
             name: Occupied
@@ -82,7 +82,7 @@ public class DynamicRequestTests
             """);
         var ws = BuildWorkspace(DemoCollection(), BearerAuth, occupant);
         Assert.Equal(
-            "collections/demo/_dynamic-2.req.md",
+            "collections/demo/_dynamic-2.req.tap",
             DynamicRequestFactory.Create(ws, "Demo", Spec()).RelativePath);
     }
 
@@ -100,8 +100,8 @@ public class DynamicRequestTests
     public void An_auth_ref_is_carried_through()
     {
         var ws = BuildWorkspace(DemoCollection(), BearerAuth);
-        var request = DynamicRequestFactory.Create(ws, "Demo", Spec() with { Auth = "./bearer.auth.md" });
-        Assert.Equal("./bearer.auth.md", request.Auth?.SourceText);
+        var request = DynamicRequestFactory.Create(ws, "Demo", Spec() with { Auth = "./bearer.auth.tap" });
+        Assert.Equal("./bearer.auth.tap", request.Auth?.SourceText);
     }
 
     [Fact]

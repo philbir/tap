@@ -23,11 +23,11 @@ export function useTestRun(path: string) {
 
   useEffect(() => () => { ctrl.current?.abort() }, [])
 
-  const run = useCallback((env: string | null, stage: string | null, only?: number | null) => {
+  const run = useCallback((env: string | null, only?: number | null) => {
     ctrl.current?.abort()
     setState({ ...emptyRunState(), running: true })
 
-    ctrl.current = api.runTests(path, env, stage, (event) => {
+    ctrl.current = api.runTests(path, env, (event) => {
       setState((s) => {
         switch (event.kind) {
           case 'start':

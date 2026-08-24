@@ -7,7 +7,7 @@ namespace Tap.Workspace.Rendering;
 /// Builds the layered + merged variable view for a given editor context. There are two
 /// flavors of layer:
 /// <list type="bullet">
-///   <item><b>Cascade layers</b> — workspace/collection/stage/env/request file vars.
+///   <item><b>Cascade layers</b> — workspace/collection/env/request file vars.
 ///     These come out of the loaded workspace and override one another in scope order.</item>
 ///   <item><b>Provider layers</b> — one per registered <see cref="IVariableProvider"/> (env,
 ///     file, azkv, …). Asynchronously enumerated; the UI sees provider name and isSecret per
@@ -28,8 +28,7 @@ public static class VariableViewBuilder
         CancellationToken ct,
         string? requestPath = null,
         string? collectionPath = null,
-        string? envPath = null,
-        string? stageName = null)
+        string? envPath = null)
     {
         var sets = new List<VariableSet>();
 
@@ -66,6 +65,18 @@ public static class VariableViewBuilder
                 Variables: providerVariables));
         }
 
+        // Portable layer first: a .http file's own `@name = value` lines are the weakest scope,
+        // so listing (and merging) them before the workspace is what makes the panel agree with
+        // the renderer about which definition actually wins.
+        if (requestPath is not null && workspace.FindByPath(requestPath) is RequestFile portableReq
+            && portableReq.PortableVars.Count > 0)
+        {
+            sets.Add(BuildSet(
+                VariableScope.Portable, portableReq.RelativePath,
+                Path.GetFileName(HttpFragment.FilePath(portableReq.RelativePath)),
+                portableReq.PortableVars));
+        }
+
         if (workspace.Manifest is { } manifest)
         {
             sets.Add(BuildSet(VariableScope.Workspace, manifest.RelativePath, manifest.Name ?? "workspace", manifest.Vars));
@@ -78,19 +89,13 @@ public static class VariableViewBuilder
         }
         else if (requestPath is not null)
         {
-            collection = CollectionLocator.ForFile(workspace, requestPath);
+            collection = CollectionLocator.ForRequestPath(workspace, requestPath);
         }
 
         if (collection is not null)
         {
             var label = collection.Name ?? Path.GetFileName(Path.GetDirectoryName(collection.RelativePath) ?? string.Empty);
             sets.Add(BuildSet(VariableScope.Collection, collection.RelativePath, label, collection.Vars));
-
-            var stage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
-            if (stage is not null)
-            {
-                sets.Add(BuildSet(VariableScope.Stage, collection.RelativePath + "#" + stage.Name, stage.Name, stage.Vars));
-            }
         }
 
         EnvFile? env = null;
@@ -102,6 +107,9 @@ public static class VariableViewBuilder
         {
             env = workspace.Resolve(defaultRef) as EnvFile;
         }
+        // Same scope test the renderer applies: an env confined to other collections does not
+        // contribute here either, or the panel would report a winner the send would never use.
+        if (env is not null && !env.AppliesTo(SlugOf(collection))) env = null;
         if (env is not null)
         {
             sets.Add(BuildSet(VariableScope.Env, env.RelativePath, env.Name ?? Path.GetFileNameWithoutExtension(env.RelativePath), env.Vars));
@@ -110,6 +118,29 @@ public static class VariableViewBuilder
         if (requestPath is not null && workspace.FindByPath(requestPath) is RequestFile req2)
         {
             sets.Add(BuildSet(VariableScope.Request, req2.RelativePath, req2.Name ?? Path.GetFileNameWithoutExtension(req2.RelativePath), req2.Vars));
+        }
+
+        // The built-in `baseUrl`, mirroring WorkspaceRenderer.BindBaseUrlAsync: bound only when no
+        // *Tap* scope claimed the name, and carrying the raw template (the panel resolves tokens
+        // itself, exactly as the collection chip does). Without it, a portable `{{baseUrl}}` would
+        // paint as an unknown variable in the very editors this feature exists to serve.
+        //
+        // Portable is excluded from the check on purpose, and it is the case that matters: a file
+        // declaring its own `@baseUrl` is precisely when the built-in has to win, or this panel
+        // would report the standalone fallback as the winner while the renderer sends elsewhere.
+        if (collection is not null && !sets.Any(s => s.Scope is not (VariableScope.Provider or VariableScope.Portable)
+                                                  && s.Variables.Any(v => v.Name == WorkspaceRenderer.BaseUrlVariable)))
+        {
+            var overridden = env?.BindingFor(SlugOf(collection))?.BaseUrl;
+            var template = !string.IsNullOrWhiteSpace(overridden) ? overridden : collection.BaseUrl;
+            if (!string.IsNullOrWhiteSpace(template))
+            {
+                sets.Add(new VariableSet(
+                    VariableScope.Collection, collection.RelativePath, "baseUrl", ProviderName: null,
+                    [new Variable(
+                        WorkspaceRenderer.BaseUrlVariable, template!.TrimEnd('/'), IsSensitive: false,
+                        VariableScope.Collection, collection.RelativePath, ProviderName: null)]));
+            }
         }
 
         // Merged result mirrors what a bare {{name}} token actually resolves to. Provider
@@ -143,7 +174,7 @@ public static class VariableViewBuilder
         }
 
         // Cascade layers override providers, most specific last (list order is already
-        // workspace → collection → stage → env → request).
+        // workspace → collection → env → request).
         foreach (var set in sets.Where(s => s.Scope != VariableScope.Provider))
         {
             foreach (var v in set.Variables) merged[v.Name] = v;
@@ -151,6 +182,9 @@ public static class VariableViewBuilder
 
         return new VariableView(sets, [.. merged.Values]);
     }
+
+    private static string? SlugOf(CollectionFile? collection)
+        => collection is null ? null : CollectionLocator.SlugForFile(collection.RelativePath);
 
     private static VariableSet BuildSet(VariableScope scope, string sourcePath, string label, IReadOnlyDictionary<string, VarSpec> vars)
     {
@@ -174,9 +208,13 @@ public enum VariableScope
     /// <summary>Materialized from a configured <see cref="IVariableProvider"/> (env, file,
     /// azkv, …). The set's <c>ProviderName</c> identifies which one.</summary>
     Provider,
+
+    /// <summary>A <c>.http</c> file's own <c>@name = value</c> lines — what the file resolves to
+    /// outside Tap, and therefore the weakest scope inside it. See
+    /// <see cref="Model.RequestFile.PortableVars"/>.</summary>
+    Portable,
     Workspace,
     Collection,
-    Stage,
     Env,
     Request,
 }

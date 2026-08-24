@@ -37,7 +37,7 @@ public class DynamicSendTests
         var step = await runner.SendAsync(
             requestFile,
             new RunTestRequestDto(
-                Path: requestFile.RelativePath, Env: null, Stage: null, Only: null,
+                Path: requestFile.RelativePath, Env: null, Only: null,
                 Overrides: new Dictionary<string, string> { ["TARGET"] = "http://evil.example" }),
             CancellationToken.None);
 

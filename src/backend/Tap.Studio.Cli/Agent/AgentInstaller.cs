@@ -72,12 +72,14 @@ public sealed class AgentInstaller(string projectDir, string home)
             return;
         }
 
-        // No skills system: write the files somewhere neutral and leave one managed,
-        // marker-fenced pointer block in the instructions file that environment reads.
+        // No native skills system: write the files to the cross-agent convention
+        // (.agents/skills/<name>/SKILL.md) and leave one managed, marker-fenced pointer
+        // block in the instructions file that environment reads.
         var skillsRoot = scope == InstallScope.Project
-            ? Path.Combine(projectDir, ".tap", "agent")
-            : Path.Combine(home, ".tap", "agent");
+            ? Path.Combine(projectDir, ".agents", "skills")
+            : Path.Combine(home, ".agents", "skills");
         WriteSkillFiles(skillsRoot, report);
+        RemoveLegacySkills(scope, report);
 
         var instructionsPath = (env, scope) switch
         {
@@ -105,6 +107,40 @@ public sealed class AgentInstaller(string projectDir, string home)
         report.Actions.Add($"skills → {Display(root)} ({count} files: tap-studio, tap-author)");
     }
 
+    /// <summary>Before 0.7.1 the neutral skills went to <c>.tap/agent/</c>; they now go to
+    /// the cross-agent <c>.agents/skills/</c> convention. Re-running has to clear the old
+    /// copy, or a stale second set of guides sits there for an agent to find. Only the skill
+    /// directories this tool wrote are removed — anything else under <c>.tap/</c> is somebody
+    /// else's, and the parent directories go only if emptied by the removal.</summary>
+    private void RemoveLegacySkills(InstallScope scope, InstallReport report)
+    {
+        var legacyRoot = scope == InstallScope.Project
+            ? Path.Combine(projectDir, ".tap", "agent")
+            : Path.Combine(home, ".tap", "agent");
+        if (!Directory.Exists(legacyRoot)) return;
+
+        var removed = 0;
+        foreach (var skill in AgentAssets.Skills()
+            .Select(f => f.RelativePath.Split('/')[0]).Distinct(StringComparer.Ordinal))
+        {
+            var path = Path.Combine(legacyRoot, skill);
+            if (!Directory.Exists(path)) continue;
+            Directory.Delete(path, recursive: true);
+            removed++;
+        }
+
+        if (removed == 0) return;
+        report.Actions.Add($"removed legacy skills ← {Display(legacyRoot)} ({removed} skill directories)");
+
+        // Only prune upwards while our removal is what emptied the directory.
+        for (var dir = legacyRoot; dir is not null; dir = Path.GetDirectoryName(dir))
+        {
+            if (!Directory.Exists(dir) || Directory.EnumerateFileSystemEntries(dir).Any()) break;
+            Directory.Delete(dir);
+            if (Path.GetFileName(dir) == ".tap") break;
+        }
+    }
+
     /// <summary>The block dropped into an instructions file. Paths are relative for project
     /// scope (the file is checked in and must work on every machine) and absolute for user
     /// scope (the file is personal and cwd is unknowable).</summary>
@@ -121,8 +157,8 @@ public sealed class AgentInstaller(string projectDir, string home)
             run by the `tap-studio` CLI or its MCP tools, with auth handled by the workspace).
 
             - Before running requests against it, read `{root}/tap-studio/SKILL.md`.
-            - Before creating or editing workspace files (`*.req.md`, `_collection.md`,
-              `*.auth.md`, `*.env.md`, `*.flow.md`, `*.test.md`), read
+            - Before creating or editing workspace files (`*.req.tap`, `_collection.tap`,
+              `*.auth.tap`, `*.env.tap`, `*.flow.tap`, `*.test.tap`), read
               `{root}/tap-author/SKILL.md` and the files under `{root}/tap-author/references/`.
             {BlockEnd}
             """;

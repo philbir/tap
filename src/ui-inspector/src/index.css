@@ -257,3 +257,10 @@ code {
     background: color-mix(in srgb, var(--ok) 16%, transparent);
   }
 }
+
+/* The agent chip's dot pulses only while an agent is parked on wait_for_request — that state
+   means somebody is expecting the person at this screen to go and make something happen. */
+@keyframes tap-agent-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}

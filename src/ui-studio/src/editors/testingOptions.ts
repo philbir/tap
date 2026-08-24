@@ -1,6 +1,7 @@
 import type { ComboboxItem, ComboboxItemGroup } from '@mantine/core'
 import type { CollectionSummary, FlowSummary, RequestSummary } from '../api/types'
 import { relativizeFrom } from './authOptions'
+import { labelForPath } from '../shell/tapFiles'
 
 export { relativizeFrom }
 
@@ -52,8 +53,8 @@ export function flowSelectItems(flows: FlowSummary[], fromPath: string): Combobo
 /**
  * The option value a picker should show for `ref`.
  *
- * A ref is matched by where it *points*, not by how it was spelled: `./checkout.flow.md` and
- * `checkout.flow.md` are the same file, and a picker that compares strings shows an empty
+ * A ref is matched by where it *points*, not by how it was spelled: `./checkout.flow.tap` and
+ * `checkout.flow.tap` are the same file, and a picker that compares strings shows an empty
  * select over a perfectly good file — then silently rewrites the ref the moment the user
  * touches it. Falls back to the raw ref so a dangling one stays visible rather than vanishing.
  */
@@ -97,5 +98,5 @@ function collectionSlugOf(path: string): string | null {
 }
 
 function displayName(request: RequestSummary): string {
-  return request.name || request.path.split('/').pop()?.replace(/\.req\.md$/i, '') || request.path
+  return request.name || labelForPath(request.path) || request.path
 }

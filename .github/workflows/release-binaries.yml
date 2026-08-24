@@ -49,6 +49,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Verify published brand assets
+        run: bash scripts/verify-brand-assets.sh
+
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: "10.0.x"
@@ -113,6 +116,9 @@ jobs:
           name="tap-${version}-${rid}"
           mkdir -p "stage/${name}"
           cp -R "publish/${rid}/." "stage/${name}/"
+          # Keep the release archive self-describing outside the browser UI.
+          cp assets/tap-tunnels-icon.svg "stage/${name}/tap-tunnels-icon.svg"
+          cp assets/tap-tunnels-icon-128.png "stage/${name}/tap-tunnels-icon.png"
           # Drop debug symbols if any slipped through
           find "stage/${name}" -name "*.pdb" -delete || true
           ls -la "stage/${name}"
@@ -181,7 +187,7 @@ jobs:
         uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           tag_name: ${{ steps.ver.outputs.version }}
-          name: Tap ${{ steps.ver.outputs.version }}
+          name: Tap Tunnels ${{ steps.ver.outputs.version }}
           generate_release_notes: true
           # Any SemVer pre-release tag carries a `-` (0.5.0-beta.2). Without
           # this, whichever of this job and desktop.yml creates the release

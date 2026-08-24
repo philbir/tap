@@ -24,6 +24,9 @@ FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 COPY global.json Directory.Build.props Directory.Packages.props ./
 COPY src/backend/Tap.Core/ ./src/Tap.Core/
+# Tap.Server references Tap.Inspector.Mcp to serve the agent surface at /mcp, so the
+# project has to be here or the restore cannot resolve it.
+COPY src/backend/Tap.Inspector.Mcp/ ./src/Tap.Inspector.Mcp/
 COPY src/backend/Tap.Server/ ./src/Tap.Server/
 COPY --from=ui /ui/dist ./src/Tap.Server/wwwroot/
 RUN dotnet publish src/Tap.Server/Tap.Server.csproj \
@@ -34,6 +37,13 @@ RUN dotnet publish src/Tap.Server/Tap.Server.csproj \
 FROM mcr.microsoft.com/dotnet/aspnet:10.0
 WORKDIR /app
 COPY --from=build /app ./
+LABEL org.opencontainers.image.title="Tap Tunnels" \
+      org.opencontainers.image.description="Local HTTP tunnels with inspection built in" \
+      org.opencontainers.image.url="https://philbir.github.io/tap/#/tunnels" \
+      org.opencontainers.image.source="https://github.com/philbir/tap" \
+      org.opencontainers.image.licenses="MIT" \
+      io.tap.product="Tap Tunnels" \
+      io.tap.product.icon="/app/wwwroot/tap-tunnels-icon.svg"
 # Default ports — overridable via Inspector__ProxyPort / Inspector__UiPort.
 ENV ASPNETCORE_URLS=http://0.0.0.0:5299;http://0.0.0.0:5298 \
     Inspector__ProxyHost=0.0.0.0 \

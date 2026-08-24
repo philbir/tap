@@ -11,7 +11,9 @@
 
     <ItemGroup>
         <PackageReference Include="Yarp.ReverseProxy" />
+        <PackageReference Include="ModelContextProtocol.AspNetCore" />
         <ProjectReference Include="..\Tap.Core\Tap.Core.csproj" />
+        <ProjectReference Include="..\Tap.Inspector.Mcp\Tap.Inspector.Mcp.csproj" />
     </ItemGroup>
 
     <!-- Build the React inspector UI and sync it into wwwroot so the shipped binary

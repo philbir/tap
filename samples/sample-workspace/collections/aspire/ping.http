@@ -1,0 +1,6 @@
+### Ping demo-api through Aspire service discovery
+# @name aspire-ping
+# @tap-assert status == 200
+# @tap-assert $.path == /demo/methods/
+GET /demo/methods/
+Accept: application/json

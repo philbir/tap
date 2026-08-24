@@ -18,6 +18,13 @@
     <!-- Tap.Studio is referenced for the spec emitters: the parse -> emit -> parse
          round-trip is the contract that keeps hand-written and editor-written files
          interchangeable, so it has to be tested against the real emitter. -->
+    <!-- Tap.Core carries the inspector's CaptureRedactor: pure detection logic, testable
+         without standing up a server. -->
+    <ProjectReference Include="../Tap.Core/Tap.Core.csproj" />
+    <!-- Tap.Server carries RequestRecord and CaptureProjection. AdditionalProperties pins
+         SkipTapUiBuild so running the tests never shells out to yarn for the inspector UI —
+         the documented test command stays a plain `dotnet test`. -->
+    <ProjectReference Include="../Tap.Server/Tap.Server.csproj" AdditionalProperties="SkipTapUiBuild=true" />
     <ProjectReference Include="../Tap.Workspace/Tap.Workspace.csproj" />
     <ProjectReference Include="../Tap.Studio/Tap.Studio.csproj" />
     <ProjectReference Include="../Tap.Studio.Cli/Tap.Studio.Cli.csproj" />

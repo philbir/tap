@@ -27,4 +27,11 @@ public interface IVariableProviderFactory
 
 /// <summary>Per-instantiation context passed to a factory. Holds the absolute workspace root
 /// (for the file provider) and an opportunity for future per-workspace services.</summary>
-public sealed record ProviderFactoryContext(string WorkspaceRoot);
+public sealed record ProviderFactoryContext(string WorkspaceRoot)
+{
+    /// <summary>The machine's encryption passphrase source. Defaults to the conventional
+    /// resolution (<c>TAP_ENCRYPTION_KEY</c>, then <c>&lt;system-dir&gt;/encryption.key</c>) so
+    /// hosts get the right behaviour without wiring anything; tests and alternative hosts
+    /// substitute their own.</summary>
+    public Security.IEncryptionKeySource KeySource { get; init; } = Security.MachineEncryptionKeySource.Default;
+}

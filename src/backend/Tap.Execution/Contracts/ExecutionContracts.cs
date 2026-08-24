@@ -71,7 +71,6 @@ public sealed record TestRunStartDto(
     string Kind,
     string Name,
     string? Env,
-    string? Stage,
     IReadOnlyList<TestRunPlanEntryDto> Entries);
 
 /// <summary>Emitted as each step completes, so a long flow reports progress rather than
@@ -96,7 +95,6 @@ public sealed record TestRunResultDto(
 public sealed record RunTestRequestDto(
     string Path,
     string? Env,
-    string? Stage,
     int? Only,
     IReadOnlyDictionary<string, string>? Overrides,
     /// <summary>Stop at the first failure regardless of the set's own <c>onFailure</c>. A

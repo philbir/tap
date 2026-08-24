@@ -34,6 +34,7 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     private readonly ProviderRegistryBuilder _registryBuilder;
     private readonly SystemSettingsStore _systemSettings;
     private readonly AuthTokenStore _tokens;
+    private readonly StudioOptions _options;
     private readonly CachedAuthTokenSource _tokenSource;
     private readonly RequestPipeline _pipeline;
     private FileSystemWatcher? _watcher;
@@ -46,14 +47,25 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
         ILogger<WorkspaceService> logger,
         ProviderRegistryBuilder registryBuilder,
         SystemSettingsStore systemSettings,
-        AuthTokenStore tokens)
+        AuthTokenStore tokens,
+        StudioOptions options)
     {
         _knownWorkspaces = knownWorkspaces;
         _logger = logger;
         _registryBuilder = registryBuilder;
         _systemSettings = systemSettings;
         _tokens = tokens;
-        _root = knownWorkspaces.ActivePath;
+        _options = options;
+
+        // The pin. Normally the boot root is whatever the user last activated, which is right
+        // for a tool they own — but an AppHost-launched Studio must open the folder the AppHost
+        // named, every time, on every machine. Without this, a developer who once opened a
+        // different workspace on this machine gets that one instead, and the AppHost's
+        // WithWorkspaceFolder silently does nothing. The known-workspace list is left alone;
+        // this only decides where *this* process starts.
+        _root = options.IsWorkspacePinned ? options.WorkspaceRoot : knownWorkspaces.ActivePath;
+        if (options.IsWorkspacePinned) Directory.CreateDirectory(_root);
+
         _workspace = Load(_root);
         _watcher = StartWatcher(_root);
         _tokenSource = new CachedAuthTokenSource(tokens, () => RootDirectory);
@@ -82,6 +94,12 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     {
         get { lock (_gate) return _root; }
     }
+
+    /// <summary>How this Studio is hosted. Surfaced to the UI so it can lock the switcher
+    /// and badge the header rather than offering an action that will 409.</summary>
+    public StudioMode Mode => _options.Mode;
+
+    public bool IsWorkspacePinned => _options.IsWorkspacePinned;
 
     /// <summary>Builds a fresh <see cref="VariableProviderRegistry"/> for the current
     /// workspace. Each call returns an independent instance with its own resolution cache
@@ -130,6 +148,13 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// Fires <see cref="Changed"/> so SSE listeners reload the UI.</summary>
     public void SwitchTo(string newRoot)
     {
+        if (_options.IsWorkspacePinned)
+        {
+            throw new InvalidOperationException(
+                "This Studio is hosted by an Aspire AppHost and is pinned to its workspace folder. "
+                + "Change it in the AppHost's WithWorkspaceFolder(...) call.");
+        }
+
         var canonical = Path.GetFullPath(newRoot);
         FileSystemWatcher? oldWatcher;
         lock (_gate)
@@ -176,8 +201,17 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     {
         try
         {
-            var w = new FileSystemWatcher(root, "*.md")
+            // Filters (plural) rather than the single-pattern constructor: the loader reads both
+            // extension families, so the watcher has to see both or edits to half the workspace
+            // would silently not reload.
+            var w = new FileSystemWatcher(root)
             {
+                Filters =
+                {
+                    "*" + KindResolver.CanonicalExtension,
+                    "*" + KindResolver.LegacyExtension,
+                    "*" + KindResolver.HttpExtension,
+                },
                 IncludeSubdirectories = true,
                 NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName,
                 EnableRaisingEvents = true,
@@ -198,15 +232,18 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// <param name="templateOverrides">Overrides whose values are templates — a flow step's
     /// <c>vars:</c>, which have to see what earlier steps bound. See
     /// <see cref="WorkspaceRenderer.RenderAsync"/>.</param>
+    /// <param name="draftSource">Unsaved raw text of the <c>.http</c> file
+    /// <paramref name="requestPath"/> points into. See <see cref="ResolveRequestFile"/>.</param>
     public ValueTask<ResolvedRequest> RenderAsync(string requestPath, string? envPath,
         IReadOnlyDictionary<string, string>? overrides, CancellationToken ct,
-        string? stageName = null, RequestSpecDto? draftSpec = null,
-        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
+        RequestSpecDto? draftSpec = null,
+        IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null,
+        string? draftSource = null)
     {
         // Resolving an unsaved editor draft is the one part of the render path that is purely
         // Studio's — the engine only ever sees a RequestFile.
-        var req = ResolveRequestFile(Current, requestPath, draftSpec);
-        return _pipeline.RenderAsync(req, envPath, overrides, ct, stageName, templateOverrides);
+        var req = ResolveRequestFile(Current, requestPath, draftSpec, draftSource);
+        return _pipeline.RenderAsync(req, envPath, overrides, ct, templateOverrides);
     }
 
 
@@ -216,12 +253,12 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// re-checks edited assertions against a response the client already has.
     /// </summary>
     public ValueTask<IReadOnlyList<ResolvedAssert>> RenderAssertionsAsync(
-        IReadOnlyList<AssertSpec> assertions, string? requestPath, string? envPath, string? stageName,
+        IReadOnlyList<AssertSpec> assertions, string? requestPath, string? envPath,
         CancellationToken ct, bool tolerant = false,
         IReadOnlyDictionary<string, string>? overrides = null,
         IReadOnlyList<KeyValuePair<string, string>>? templateOverrides = null)
         => _pipeline.RenderAssertionsAsync(
-            assertions, requestPath, envPath, stageName, ct, tolerant, overrides, templateOverrides);
+            assertions, requestPath, envPath, ct, tolerant, overrides, templateOverrides);
 
     private static EnvFile? ResolveEnv(LoadedWorkspace ws, string? envPath)
     {
@@ -239,10 +276,15 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// is supplied (an unsaved editor draft), the request is built in-memory through the same
     /// emit pipeline as Save — <see cref="RequestSpecEmitter.ToFileSource"/> + <see cref="FileParser"/>
     /// — but never written to disk. Otherwise the on-disk file at <paramref name="requestPath"/> is used.
-    /// Either way the request keeps its workspace-relative path, so auth/collection/stage resolution
+    /// Either way the request keeps its workspace-relative path, so auth/collection/env resolution
     /// in the renderer behaves identically to the saved file.
+    ///
+    /// <para><paramref name="draftSource"/> is the same idea for a <c>.http</c> file, which has no
+    /// spec to emit — the raw text <em>is</em> the document, so the draft arrives as text and is
+    /// parsed rather than emitted-then-parsed.</para>
     /// </summary>
-    private static RequestFile ResolveRequestFile(LoadedWorkspace ws, string requestPath, RequestSpecDto? draftSpec)
+    private static RequestFile ResolveRequestFile(
+        LoadedWorkspace ws, string requestPath, RequestSpecDto? draftSpec, string? draftSource = null)
     {
         if (draftSpec is not null)
         {
@@ -254,6 +296,8 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
                     draftSpec.Path));
             return parsed;
         }
+        if (draftSource is not null)
+            return HttpDraftResolver.Resolve(requestPath, draftSource);
         if (ws.FindByPath(requestPath) is not RequestFile req)
             throw new FileNotFoundException($"Request '{requestPath}' not in workspace.");
         return req;
@@ -320,7 +364,7 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
     /// </summary>
     private ResolvedRequest InjectAuthToken(LoadedWorkspace ws, RequestFile req, ResolvedRequest rendered, string? envPath)
     {
-        var auth = ResolveAuth(ws, req, rendered.Metadata.StageName);
+        var auth = ResolveAuth(ws, req, rendered.Metadata.EnvPath);
         if (auth is null || auth.Type is "none" or "basic" or "bearer" or "apiKey" or "custom" or "aws-sigv4")
             return rendered;
 
@@ -333,10 +377,10 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
                 return rendered;
         }
 
-        // A profile has one cached token per stage and env — read the one minted for the stage
-        // and env this render resolved to, not whichever entry happens to exist.
+        // A profile has one cached token per env — read the one minted for the env this render
+        // actually resolved under, not whichever entry happens to exist.
         var scope = AuthScopeResolver
-            .ContextFor(ws, auth.RelativePath, req.RelativePath, rendered.Metadata.StageName, envPath)
+            .ContextFor(ws, auth.RelativePath, rendered.Metadata.EnvPath)
             .ScopeFor(auth.RelativePath);
         var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
@@ -351,28 +395,27 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
 
     /// <summary>
     /// Snapshot the auth state the executor would see for <paramref name="requestPath"/>:
-    /// which profile is bound (via request &lt; stage &lt; collection precedence), whether a
+    /// which profile is bound (via request &lt; env &lt; collection precedence), whether a
     /// usable runtime token is cached, and whether running the flow would be interactive.
     /// The Flow tab uses this to decide between "already authorized" vs "Run auth" affordances.
     ///
-    /// <para><paramref name="stageName"/> is the stage the caller has selected. It only changes
-    /// the answer for a profile that lives inside the request's own collection, where each
-    /// stage caches its own token. <paramref name="envPath"/> is the selected env, which caches
-    /// its own token for every profile — pass the same one the render used or the Flow tab
-    /// reports on an entry the executor will never read.</para>
+    /// <para><paramref name="envPath"/> is the env the caller has selected. Each env caches its
+    /// own token for every profile — pass the same one the render used or the Flow tab reports
+    /// on an entry the executor will never read.</para>
     /// </summary>
     public AuthStatusDto BuildAuthStatus(
-        string requestPath, RequestSpecDto? draftSpec = null, string? stageName = null, string? envPath = null)
+        string requestPath, RequestSpecDto? draftSpec = null, string? envPath = null,
+        string? draftSource = null)
     {
         var ws = Current;
         RequestFile req;
-        try { req = ResolveRequestFile(ws, requestPath, draftSpec); }
+        try { req = ResolveRequestFile(ws, requestPath, draftSpec, draftSource); }
         catch (Exception ex) when (ex is FileNotFoundException or WorkspaceParseException)
         {
             return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
         }
 
-        var auth = ResolveAuth(ws, req, stageName);
+        var auth = ResolveAuth(ws, req, envPath);
         if (auth is null)
             return new AuthStatusDto(Path: null, Type: null, Source: "none", Interactive: false, ExpiresAt: null);
 
@@ -392,7 +435,7 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
 
         var interactive = IsInteractive(auth);
         var scope = AuthScopeResolver
-            .ContextFor(ws, auth.RelativePath, req.RelativePath, stageName, envPath)
+            .ContextFor(ws, auth.RelativePath, envPath)
             .ScopeFor(auth.RelativePath);
         var cached = _tokens.Get(_root, scope);
         if (cached is null || string.IsNullOrEmpty(cached.AccessToken))
@@ -424,28 +467,11 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
         }
     }
 
-    /// <summary>
-    /// Mirrors <see cref="WorkspaceRenderer"/>'s auth resolution order — request &lt; stage &lt; collection —
-    /// so the token injector targets the same file the renderer's static <c>ApplyAuthHeaders</c>
-    /// saw. <paramref name="stageName"/> is the stage the render resolved to; null falls back
-    /// to the collection's default stage, same as the renderer. Returning null means there's
-    /// no auth attached (or the ref didn't resolve).
-    /// </summary>
-    private static AuthFile? ResolveAuth(LoadedWorkspace ws, RequestFile req, string? stageName)
-    {
-        var requestDir = Path.GetDirectoryName(req.RelativePath) ?? string.Empty;
-        if (ws.Resolve(req.Auth, requestDir) is AuthFile direct) return direct;
-
-        var collection = CollectionLocator.ForFile(ws, req.RelativePath);
-        if (collection is null) return null;
-        var collectionDir = Path.GetDirectoryName(collection.RelativePath) ?? string.Empty;
-        var stage = collection.FindStage(stageName) ?? collection.FindStage(collection.DefaultStage);
-        if (stage?.DefaultAuth is { } stageAuthRef && ws.Resolve(stageAuthRef, collectionDir) is AuthFile stageAuth)
-            return stageAuth;
-        if (collection.DefaultAuth is { } collectionAuthRef && ws.Resolve(collectionAuthRef, collectionDir) is AuthFile collectionAuth)
-            return collectionAuth;
-        return null;
-    }
+    /// <summary>Request &lt; env &lt; collection, exactly as the renderer resolves it. Delegated
+    /// to the engine so the Studio's static preview and a real send can never disagree about
+    /// which profile is bound.</summary>
+    private static AuthFile? ResolveAuth(LoadedWorkspace ws, RequestFile req, string? envPath)
+        => RequestPipeline.ResolveAuth(ws, req, envPath);
 
     /// <summary>Reads the raw source text of a workspace file. Used by detail endpoints so
     /// the UI can offer a "Source" tab for raw-markdown editing. The path goes through the
@@ -458,19 +484,43 @@ public sealed class WorkspaceService : IWorkspaceHost, IDisposable
         return File.ReadAllText(full);
     }
 
-    public void Save(string relativePath, string content)
+    /// <summary>
+    /// Writes one workspace file, parse-validating it first so a malformed save is rejected
+    /// before it lands on disk. Returns the path actually written, which differs from
+    /// <paramref name="relativePath"/> only when the caller asked for a canonical <c>.tap</c>
+    /// name and the file already exists under the legacy extension — see
+    /// <see cref="LoadedWorkspace.ResolveWritePath"/>.
+    /// </summary>
+    public string Save(string relativePath, string content)
     {
-        if (!WorkspacePaths.TryResolve(RootDirectory, relativePath, out var full, out var err))
+        var target = Current.ResolveWritePath(relativePath);
+
+        if (!WorkspacePaths.TryResolve(RootDirectory, target, out var full, out var err))
             throw new InvalidOperationException(err);
 
-        var fileName = Path.GetFileName(relativePath);
-        if (KindResolver.FromFileName(fileName) is null)
-            throw new InvalidOperationException($"'{relativePath}' is not a recognized Tap file suffix.");
+        var fileName = Path.GetFileName(target);
+        if (KindResolver.Resolve(fileName) is not { } match)
+            throw new InvalidOperationException($"'{target}' is not a recognized Tap file suffix.");
 
-        FileParser.Parse(relativePath, content);
+        // A .http file has no frontmatter and holds N requests, so FileParser — whose whole job is
+        // enforcing the frontmatter-and-one-kind contract — would reject every valid one. Validate
+        // it with its own parser instead, and surface the first hard error so the editor can put a
+        // marker on the right line. Warnings (foreign constructs) must NOT block a save: the file
+        // may legitimately be shared with another tool.
+        if (match.IsHttpFile)
+        {
+            var parsed = HttpFileParser.Parse(target, content);
+            var failure = parsed.Errors.FirstOrDefault(e => e.Severity == WorkspaceErrorSeverity.Error);
+            if (failure is not null) throw new WorkspaceParseException(failure);
+        }
+        else
+        {
+            FileParser.Parse(target, content);
+        }
 
         Directory.CreateDirectory(Path.GetDirectoryName(full)!);
         File.WriteAllText(full, content);
+        return target;
     }
 
     /// <summary>Synchronously reload the workspace model from disk. For endpoints that

@@ -5,8 +5,9 @@
     <AssemblyName>Tap.Aspire.Hosting</AssemblyName>
     <IsPackable>true</IsPackable>
     <PackageId>Tap.Aspire.Hosting</PackageId>
+    <TapProductIcon>Tunnels</TapProductIcon>
     <Title>Tap.Aspire.Hosting</Title>
-    <Description>Aspire AppHost integration for Tap — an ngrok-style HTTP inspector with optional Cloudflare tunnels. Adds AddTap(), tap.WithTunnel()/WithQuickTunnel(), and the WithTap() resource decorator to your Aspire AppHost.</Description>
+    <Description>Aspire AppHost integration for Tap Tunnels — local HTTP tunnels with inspection built in. Adds AddTap(), tap.WithTunnel()/WithQuickTunnel(), and the WithTap() resource decorator to your Aspire AppHost.</Description>
     <PackageTags>aspire;integration;hosting;http;inspector;proxy;cloudflare;cloudflared;tunnel;ngrok;tap</PackageTags>
   </PropertyGroup>
 

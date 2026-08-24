@@ -94,9 +94,49 @@ public sealed class AgentInstallerTests : IDisposable
         Assert.Equal("stdio", server.GetProperty("type").GetString());
         Assert.Contains("api/tap", server.GetProperty("args").EnumerateArray().Select(a => a.GetString()));
 
-        Assert.True(File.Exists(ProjectFile(".tap/agent/tap-author/SKILL.md")));
+        Assert.True(File.Exists(ProjectFile(".agents/skills/tap-author/SKILL.md")));
         var instructions = File.ReadAllText(ProjectFile(".github/copilot-instructions.md"));
-        Assert.Contains(".tap/agent/tap-studio/SKILL.md", instructions);
+        Assert.Contains(".agents/skills/tap-studio/SKILL.md", instructions);
+    }
+
+    [Fact]
+    public void A_legacy_tap_agent_directory_is_cleared_but_a_neighbour_survives()
+    {
+        // What a pre-0.7.1 `agent init` left behind, plus something that isn't ours.
+        Directory.CreateDirectory(ProjectFile(".tap/agent/tap-studio"));
+        File.WriteAllText(ProjectFile(".tap/agent/tap-studio/SKILL.md"), "stale");
+        Directory.CreateDirectory(ProjectFile(".tap/agent/tap-author"));
+        File.WriteAllText(ProjectFile(".tap/agent/tap-author/SKILL.md"), "stale");
+        Directory.CreateDirectory(ProjectFile(".tap/state"));
+        File.WriteAllText(ProjectFile(".tap/state/notes.txt"), "not ours");
+
+        var report = _installer.Install(
+            AgentEnv.Codex, InstallScope.Project, skills: true, mcp: false, null, false);
+
+        Assert.False(Directory.Exists(ProjectFile(".tap/agent")));
+        Assert.True(File.Exists(ProjectFile(".tap/state/notes.txt")));
+        Assert.True(File.Exists(ProjectFile(".agents/skills/tap-studio/SKILL.md")));
+        Assert.Contains(report.Actions, a => a.Contains("legacy skills"));
+    }
+
+    [Fact]
+    public void The_dot_tap_directory_goes_too_when_the_cleanup_empties_it()
+    {
+        Directory.CreateDirectory(ProjectFile(".tap/agent/tap-studio"));
+        File.WriteAllText(ProjectFile(".tap/agent/tap-studio/SKILL.md"), "stale");
+
+        _installer.Install(AgentEnv.Codex, InstallScope.Project, skills: true, mcp: false, null, false);
+
+        Assert.False(Directory.Exists(ProjectFile(".tap")));
+    }
+
+    [Fact]
+    public void Cleanup_is_silent_when_there_is_nothing_legacy_to_remove()
+    {
+        var report = _installer.Install(
+            AgentEnv.Codex, InstallScope.Project, skills: true, mcp: false, null, false);
+
+        Assert.DoesNotContain(report.Actions, a => a.Contains("legacy skills"));
     }
 
     [Fact]

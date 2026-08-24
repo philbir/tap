@@ -1,5 +1,6 @@
 using Tap.Workspace;
 using Tap.Workspace.Model;
+using Tap.Workspace.Parsing;
 using Tap.Workspace.Rendering;
 
 namespace Tap.Execution.Agent;
@@ -21,7 +22,7 @@ public static class AgentAccess
     /// <summary>Whether agents may use <paramref name="request"/> — i.e. its owning
     /// collection (if any) has not opted out. Requests outside any collection are allowed.</summary>
     public static bool IsEnabled(LoadedWorkspace workspace, RequestFile request)
-        => IsEnabled(CollectionLocator.ForFile(workspace, request.RelativePath));
+        => IsEnabled(CollectionLocator.ForRequest(workspace, request));
 
     public static void EnsureAllowed(CollectionFile collection)
     {
@@ -29,13 +30,13 @@ public static class AgentAccess
         throw new WorkspaceParseException(new WorkspaceError(
             WorkspaceErrorCode.E_AGENT_ACCESS_DISABLED,
             $"Collection '{collection.Name ?? collection.RelativePath}' has agent access disabled "
-            + "(agent: false in its _collection.md). Ask the user to enable it if this call is wanted.",
+            + $"(agent: false in its {KindResolver.CollectionFileName}). Ask the user to enable it if this call is wanted.",
             collection.RelativePath));
     }
 
     public static void EnsureAllowed(LoadedWorkspace workspace, RequestFile request)
     {
-        var collection = CollectionLocator.ForFile(workspace, request.RelativePath);
+        var collection = CollectionLocator.ForRequest(workspace, request);
         if (collection is not null) EnsureAllowed(collection);
     }
 }

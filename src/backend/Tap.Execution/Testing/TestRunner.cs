@@ -39,6 +39,10 @@ public sealed class TestRunner(RequestPipeline pipeline)
     /// sending it.</summary>
     public Action<ResolvedRequest>? OnRendered { get; init; }
 
+    /// <summary>A one-request send has no <c>vars:</c> block above it, so nothing in its bag
+    /// is a template — whatever the caller passed as an override is the literal value.</summary>
+    private static readonly IReadOnlySet<string> NoDeclaredVars = new HashSet<string>(StringComparer.Ordinal);
+
     /// <summary>Ceiling on how many requests one run may fire. A flow can reference a flow —
     /// not through the file format, but a test set can name a flow and a future edit could make
     /// that recursive — and a runaway run is a lot of real traffic against someone's API.</summary>
@@ -90,7 +94,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         var bag = RunVariables.Literals(new Dictionary<string, VarSpec>(), request.Overrides);
 
         var outcome = await RunStepAsync(
-            requestFile, stepIndex: 0, name, bag, templateVars: null,
+            requestFile, stepIndex: 0, name, bag, NoDeclaredVars, templateVars: null,
             extra: [], extract: [], request, new StepBudget(), ct).ConfigureAwait(false);
         return outcome.Result;
     }
@@ -106,7 +110,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         var selected = Select(ws, set, request);
 
         await callbacks.OnStart(new TestRunStartDto(
-            set.RelativePath, "test", name, request.Env, request.Stage,
+            set.RelativePath, "test", name, request.Env,
             selected.Select(s => new TestRunPlanEntryDto(
                 s.Index,
                 EntryName(ws, set, s.Value),
@@ -115,8 +119,11 @@ public sealed class TestRunner(RequestPipeline pipeline)
                 s.Value.Skip)).ToArray()), ct).ConfigureAwait(false);
 
         // The set's own variables sit under everything a run produces — the "overwrite at last"
-        // tier relative to the workspace files, but still below anything a flow binds.
+        // tier relative to the workspace files, but still below anything a flow binds. Their
+        // names travel alongside: a value the *file* declared may reference another variable,
+        // and one the run produced may not.
         var baseBag = RunVariables.Literals(set.Vars, request.Overrides);
+        var baseDeclared = RunVariables.DeclaredNames(set.Vars, request.Overrides);
 
         var clock = Stopwatch.StartNew();
         var entries = new List<TestEntryResultDto>(selected.Count);
@@ -124,7 +131,8 @@ public sealed class TestRunner(RequestPipeline pipeline)
 
         foreach (var (index, entry) in selected)
         {
-            var result = await RunEntryAsync(ws, set, entry, index, baseBag, request, callbacks, budget, ct)
+            var result = await RunEntryAsync(
+                ws, set, entry, index, baseBag, baseDeclared, request, callbacks, budget, ct)
                 .ConfigureAwait(false);
             entries.Add(result);
             await callbacks.OnEntry(result, ct).ConfigureAwait(false);
@@ -143,6 +151,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         TestEntry entry,
         int index,
         IReadOnlyDictionary<string, string> baseBag,
+        IReadOnlySet<string> baseDeclared,
         RunTestRequestDto request,
         Callbacks callbacks,
         StepBudget budget,
@@ -162,6 +171,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
             // Entry variables join the bag before the target runs, so every step of a flow entry
             // sees them. They are templates, expanded against the bag as it stands.
             var bag = new Dictionary<string, string>(baseBag, StringComparer.Ordinal);
+            var declared = new HashSet<string>(baseDeclared, StringComparer.Ordinal);
 
             if (entry.Flow is not null)
             {
@@ -170,8 +180,9 @@ public sealed class TestRunner(RequestPipeline pipeline)
                         $"'{entry.Flow.SourceText}' does not resolve to a flow in this workspace.");
 
                 RunVariables.MergeLiterals(bag, flow.Vars);
+                RunVariables.MergeDeclaredNames(declared, flow.Vars);
                 var steps = await RunFlowStepsAsync(
-                    ws, flow, bag, entry.Vars, entry.Assertions, request, index, callbacks, budget, ct)
+                    ws, flow, bag, declared, entry.Vars, entry.Assertions, request, index, callbacks, budget, ct)
                     .ConfigureAwait(false);
                 clock.Stop();
                 return EntryFrom(index, name, "flow", targetPath, steps, clock.Elapsed.TotalMilliseconds);
@@ -182,7 +193,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
                     $"'{entry.Request!.SourceText}' does not resolve to a request in this workspace.");
 
             var step = await RunStepAsync(
-                requestFile, stepIndex: 0, name, bag, RunVariables.Templates(entry.Vars, null),
+                requestFile, stepIndex: 0, name, bag, declared, RunVariables.Templates(entry.Vars, null),
                 extra: entry.Assertions, extract: [], request, budget, ct).ConfigureAwait(false);
             await callbacks.OnStep(new TestRunStepEventDto(index, step.Result), ct).ConfigureAwait(false);
 
@@ -219,17 +230,18 @@ public sealed class TestRunner(RequestPipeline pipeline)
         }
 
         await callbacks.OnStart(new TestRunStartDto(
-            flow.RelativePath, "flow", name, request.Env, request.Stage,
+            flow.RelativePath, "flow", name, request.Env,
             [new TestRunPlanEntryDto(0, name, "flow", flow.RelativePath, false)]), ct).ConfigureAwait(false);
 
         var clock = Stopwatch.StartNew();
         var bag = RunVariables.Literals(flow.Vars, request.Overrides);
+        var declared = RunVariables.DeclaredNames(flow.Vars, request.Overrides);
         TestEntryResultDto entry;
 
         try
         {
             var steps = await RunFlowStepsAsync(
-                ws, flow, bag, entryVars: null, entryAssertions: [], request, 0, callbacks,
+                ws, flow, bag, declared, entryVars: null, entryAssertions: [], request, 0, callbacks,
                 new StepBudget(), ct).ConfigureAwait(false);
             entry = EntryFrom(0, name, "flow", flow.RelativePath, steps, clock.Elapsed.TotalMilliseconds);
         }
@@ -256,6 +268,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         LoadedWorkspace ws,
         FlowFile flow,
         Dictionary<string, string> bag,
+        HashSet<string> declared,
         IReadOnlyDictionary<string, string>? entryVars,
         IReadOnlyList<AssertSpec> entryAssertions,
         RunTestRequestDto request,
@@ -295,12 +308,19 @@ public sealed class TestRunner(RequestPipeline pipeline)
                 : step.Assertions;
 
             var outcome = await RunStepAsync(
-                requestFile, i, name, bag, templates, extra, step.Extract, request, budget, ct).ConfigureAwait(false);
+                requestFile, i, name, bag, declared, templates, extra, step.Extract, request, budget, ct)
+                .ConfigureAwait(false);
 
             results.Add(outcome.Result);
             await callbacks.OnStep(new TestRunStepEventDto(entryIndex, outcome.Result), ct).ConfigureAwait(false);
 
-            foreach (var (key, value) in outcome.Bound) bag[key] = value;
+            foreach (var (key, value) in outcome.Bound)
+            {
+                bag[key] = value;
+                // Whatever the file declared under this name is gone, and what replaced it came
+                // out of a response — so it stops being a template the moment it is bound.
+                declared.Remove(key);
+            }
 
             // A failed step invalidates everything after it: those steps were going to run
             // against a state that never happened.
@@ -340,6 +360,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         int stepIndex,
         string name,
         IReadOnlyDictionary<string, string> bag,
+        IReadOnlySet<string> declared,
         IReadOnlyList<KeyValuePair<string, string>>? templateVars,
         IReadOnlyList<AssertSpec> extra,
         IReadOnlyList<ExtractSpec> extract,
@@ -356,7 +377,7 @@ public sealed class TestRunner(RequestPipeline pipeline)
         try
         {
             rendered = await pipeline.RenderAsync(
-                requestFile, request.Env, bag, ct, request.Stage, templates).ConfigureAwait(false);
+                requestFile, request.Env, bag, ct, templates, declared).ConfigureAwait(false);
 
             HttpExecutionHelpers.ValidateScheme(rendered);
             rendered = HttpExecutionHelpers.WithDefaultUserAgent(rendered);
@@ -379,7 +400,13 @@ public sealed class TestRunner(RequestPipeline pipeline)
             using var response = await HttpExecutionHelpers.SendFollowingRedirectsAsync(
                 client, message, HttpCompletionOption.ResponseHeadersRead, timeout.Token).ConfigureAwait(false);
 
-            var (bytes, total) = await ReadBodyAsync(response, timeout.Token).ConfigureAwait(false);
+            // A run keeps only what it will report — there is no "show the rest" affordance
+            // in a test result, so the retain sink stays null and the cap is the workspace's.
+            var bodyCap = pipeline.Workspace.ResponseLimits.EffectiveMaxBytes;
+            using var bodyStream = await response.Content.ReadAsStreamAsync(timeout.Token).ConfigureAwait(false);
+            var captured = await ResponseCapture.ReadAsync(
+                bodyStream, bodyCap, retain: null, maxRetained: bodyCap, timeout.Token).ConfigureAwait(false);
+            var (bytes, total) = (captured.Inline, captured.TotalBytes);
             clock.Stop();
 
             var contentType = response.Content.Headers.ContentType?.ToString();
@@ -395,20 +422,21 @@ public sealed class TestRunner(RequestPipeline pipeline)
             if (extra.Count > 0)
             {
                 var resolvedExtra = await pipeline.RenderAssertionsAsync(
-                    extra, requestFile.RelativePath, request.Env, request.Stage, ct,
-                    tolerant: true, overrides: bag, templateOverrides: templates).ConfigureAwait(false);
+                    extra, requestFile.RelativePath, request.Env, ct,
+                    tolerant: true, overrides: bag, templateOverrides: templates, declaredOverrides: declared)
+                    .ConfigureAwait(false);
                 assertions = [.. assertions, .. resolvedExtra];
             }
 
             var (results, summary) = AssertRunner.Run(
-                assertions, rendered.Protocol, status, headers, bodyText, total, elapsed);
+                assertions, rendered.Protocol, status, headers, bodyText, total, elapsed, bodyCap);
 
             var snapshot = new ResponseSnapshot
             {
                 Status = status,
                 Headers = headers.Select(h => new KeyValuePair<string, string>(h.Key, h.Value)).ToArray(),
                 BodyText = bodyText,
-                BodyTruncated = total > HttpExecutionHelpers.BodyCap,
+                BodyTruncated = total > bodyCap,
                 DurationMs = elapsed,
             };
 
@@ -451,26 +479,6 @@ public sealed class TestRunner(RequestPipeline pipeline)
                 Failed(stepIndex, name, requestFile.RelativePath, rendered, clock.Elapsed.TotalMilliseconds, Describe(ex)),
                 []);
         }
-    }
-
-    private static async Task<(byte[] Bytes, long Total)> ReadBodyAsync(
-        HttpResponseMessage response, CancellationToken ct)
-    {
-        var stream = await response.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
-        using var buffer = new MemoryStream();
-        var chunk = new byte[64 * 1024];
-        long total = 0;
-        int read;
-        while ((read = await stream.ReadAsync(chunk.AsMemory(0, chunk.Length), ct).ConfigureAwait(false)) > 0)
-        {
-            total += read;
-            if (buffer.Length < HttpExecutionHelpers.BodyCap)
-            {
-                var slack = HttpExecutionHelpers.BodyCap - (int)buffer.Length;
-                buffer.Write(chunk, 0, Math.Min(read, slack));
-            }
-        }
-        return (buffer.ToArray(), total);
     }
 
     // -------------------------------------------------------------------------------------

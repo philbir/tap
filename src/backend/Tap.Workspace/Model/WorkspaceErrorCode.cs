@@ -61,15 +61,43 @@ public static class WorkspaceErrorCode
 
     /// <summary>An agent surface tried to use a collection whose <c>agent:</c> option
     /// disables agent access. Policy set by the collection's author in
-    /// <c>_collection.md</c>; the human-facing Studio and CLI commands ignore it.</summary>
+    /// <c>_collection.tap</c>; the human-facing Studio and CLI commands ignore it.</summary>
     public const string E_AGENT_ACCESS_DISABLED = nameof(E_AGENT_ACCESS_DISABLED);
+
+    /// <summary>The same logical file exists under both extension families —
+    /// <c>orders.req.md</c> beside <c>orders.req.tap</c>, which is what a half-finished
+    /// migration leaves behind. The canonical file wins; the legacy one is not loaded.</summary>
+    public const string E_EXTENSION_COLLISION = nameof(E_EXTENSION_COLLISION);
+
+    /// <summary>A <c>.http</c> file used a construct belonging to another tool's dialect — a
+    /// JetBrains script block, an httpyac <c>??</c> assertion, <c>run</c>/<c>import</c>, a
+    /// <c>&gt;&gt;</c> response redirect, or request chaining. The construct is skipped and the
+    /// rest of the file loads; the message names the Tap equivalent. Warning severity.</summary>
+    public const string W_HTTP_UNSUPPORTED_CONSTRUCT = nameof(W_HTTP_UNSUPPORTED_CONSTRUCT);
+
+    /// <summary>The file loaded fine but carries the pre-0.7.0 <c>.md</c> extension. Advisory
+    /// only for the whole 0.7.x line — the legacy family stops loading in 0.8.0, and
+    /// <c>tap-studio migrate</c> converts a workspace in one pass. Warning severity.</summary>
+    public const string W_LEGACY_EXTENSION = nameof(W_LEGACY_EXTENSION);
+}
+
+/// <summary>
+/// Whether a <see cref="WorkspaceError"/> blocks or merely advises. Everything predating 0.7.0
+/// is an <see cref="Error"/>; the tier exists so deprecations can be surfaced without failing
+/// <c>tap-studio lint</c> (and therefore CI) on a workspace that still works perfectly.
+/// </summary>
+public enum WorkspaceErrorSeverity
+{
+    Error,
+    Warning,
 }
 
 public sealed record WorkspaceError(
     string Code,
     string Message,
     string? RelativePath = null,
-    int? Line = null);
+    int? Line = null,
+    WorkspaceErrorSeverity Severity = WorkspaceErrorSeverity.Error);
 
 public sealed class WorkspaceParseException(WorkspaceError error)
     : Exception($"{error.Code}: {error.Message}" + (error.RelativePath is null ? "" : $" ({error.RelativePath}{(error.Line is null ? "" : $":{error.Line}")})"))

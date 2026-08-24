@@ -238,7 +238,7 @@ export function generateHar(record: RequestRecord): string {
   const har: HarDocument = {
     log: {
       version: '1.2',
-      creator: { name: 'Tap Inspector', version: '0.1' },
+      creator: { name: 'Tap Tunnels Inspector', version: '0.1' },
       entries: [entry],
     },
   }

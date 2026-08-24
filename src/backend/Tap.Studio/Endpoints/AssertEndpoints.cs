@@ -39,7 +39,7 @@ public static class AssertEndpoints
                 // client can line results up with its rows one-to-one.
                 var renderable = converted.Where(c => c.Error is null).Select(c => c.Spec).ToArray();
                 var rendered = await svc
-                    .RenderAssertionsAsync(renderable, body.Path, body.Env, body.Stage, ct, tolerant: true)
+                    .RenderAssertionsAsync(renderable, body.Path, body.Env, ct, tolerant: true)
                     .ConfigureAwait(false);
 
                 var resolved = new List<ResolvedAssert>(converted.Count);

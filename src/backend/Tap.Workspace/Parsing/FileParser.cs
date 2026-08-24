@@ -16,7 +16,7 @@ public static class FileParser
         var suffixKind = KindResolver.FromFileName(fileName)
             ?? throw new WorkspaceParseException(new WorkspaceError(
                 WorkspaceErrorCode.E_KIND_MISMATCH,
-                $"Filename '{fileName}' does not match any known Tap workspace suffix. Expected one of: *.req.md, *.auth.md, *.env.md, _collection.md, tap.md.",
+                $"Filename '{fileName}' does not match any known Tap workspace suffix. Expected one of: {KindResolver.KnownNamesDescription}.",
                 relativePath));
 
         var split = FrontmatterReader.Read(content, relativePath);
@@ -41,23 +41,30 @@ public static class FileParser
                 relativePath));
         }
 
-        var common = ReadCommon(split.Frontmatter, relativePath, suffixKind);
+        var common = ReadCommon(split.Frontmatter, split.Body, relativePath, suffixKind);
         return suffixKind switch
         {
-            WorkspaceKind.Request => ParseRequest(common, split.Frontmatter, split.Body, relativePath),
+            WorkspaceKind.Request => ParseRequest(common, split.Frontmatter, relativePath),
             WorkspaceKind.Auth => ParseAuth(common, split.Frontmatter, relativePath),
-            WorkspaceKind.Env => ParseEnv(common, split.Frontmatter),
-            WorkspaceKind.Collection => ParseCollection(common, split.Frontmatter, split.Body, relativePath),
+            WorkspaceKind.Env => ParseEnv(common, split.Frontmatter, relativePath),
+            WorkspaceKind.Collection => ParseCollection(common, split.Frontmatter, relativePath),
             WorkspaceKind.Workspace => ParseWorkspace(common, split.Frontmatter),
-            WorkspaceKind.Flow => ParseFlow(common, split.Frontmatter, split.Body, relativePath),
-            WorkspaceKind.Test => ParseTestSet(common, split.Frontmatter, split.Body, relativePath),
+            WorkspaceKind.Flow => ParseFlow(common, split.Frontmatter, relativePath),
+            WorkspaceKind.Test => ParseTestSet(common, split.Frontmatter, relativePath),
             _ => throw new InvalidOperationException(),
         };
     }
 
     private readonly record struct Common(WorkspaceKind Kind, string RelativePath, string? Id, string? Name, IReadOnlyList<string> Tags, string Body);
 
-    private static Common ReadCommon(YamlMappingNode fm, string relativePath, WorkspaceKind kind)
+    /// <summary>
+    /// Everything read the same way for every kind — including the Markdown body, which is
+    /// user-authored documentation and belongs to the file regardless of what the frontmatter
+    /// declares. It is filled here rather than per-kind on purpose: the Studio rewrites the
+    /// whole file from the parsed model on every save, so a kind whose parser forgot to carry
+    /// the body would silently delete it on the next unrelated edit.
+    /// </summary>
+    private static Common ReadCommon(YamlMappingNode fm, string body, string relativePath, WorkspaceKind kind)
     {
         return new Common(
             kind,
@@ -65,12 +72,12 @@ public static class FileParser
             fm.String("id"),
             fm.String("name"),
             fm.StringList("tags"),
-            string.Empty); // body filled per-kind below
+            body);
     }
 
-    private static RequestFile ParseRequest(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static RequestFile ParseRequest(Common c, YamlMappingNode fm, string relativePath)
     {
-        var block = HttpBlockExtractor.Extract(body, relativePath);
+        var block = HttpBlockExtractor.Extract(c.Body, relativePath);
         var protoRaw = fm.String("protocol");
         var protocol = protoRaw is null
             ? RequestProtocol.Http
@@ -86,10 +93,11 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             Auth = fm.Ref("auth"),
             Protocol = protocol,
             Transport = ParseTransport(fm, relativePath),
+            History = ParseHistory(fm, relativePath),
             HttpBlock = block.Content,
             HttpBlockStartLine = block.StartLine,
             Vars = fm.VarSpecMap("vars"),
@@ -97,41 +105,32 @@ public static class FileParser
         };
     }
 
-    private static IReadOnlyList<CollectionStage> ParseStages(YamlMappingNode fm, string relativePath)
+    /// <summary>
+    /// Rejects the pre-0.8.0 <c>stages:</c> / <c>defaultStage:</c> keys. Stages and environments
+    /// answered the same question — "the same requests, pointed somewhere else" — so stages were
+    /// removed, and an environment's assignment to a collection grew the two fields a stage had
+    /// that an env lacked (<c>baseUrl</c>, <c>defaultAuth</c>). Failing loudly is the point:
+    /// silently dropping the block would leave a workspace sending prod traffic at a dev host
+    /// with nothing on screen to say why.
+    /// </summary>
+    private static void RejectStages(YamlMappingNode fm, string relativePath)
     {
-        if (!fm.Children.TryGetValue(new YamlScalarNode("stages"), out var node) || node is not YamlSequenceNode seq)
-            return [];
+        var key = fm.Children.ContainsKey(new YamlScalarNode("stages")) ? "stages"
+            : fm.Children.ContainsKey(new YamlScalarNode("defaultStage")) ? "defaultStage"
+            : null;
+        if (key is null) return;
 
-        var list = new List<CollectionStage>(seq.Children.Count);
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var entry in seq.Children)
-        {
-            if (entry is not YamlMappingNode stageMap) continue;
-
-            var stageName = stageMap.String("name") ?? throw new WorkspaceParseException(new WorkspaceError(
-                WorkspaceErrorCode.E_UNKNOWN_FIELD,
-                "Each entry under 'stages:' requires a 'name'.",
-                relativePath));
-
-            if (!seen.Add(stageName))
-            {
-                throw new WorkspaceParseException(new WorkspaceError(
-                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
-                    $"Duplicate stage name '{stageName}'. Stage names must be unique within a collection.",
-                    relativePath));
-            }
-
-            list.Add(new CollectionStage
-            {
-                Name = stageName,
-                BaseUrl = stageMap.String("baseUrl"),
-                DefaultAuth = stageMap.Ref("defaultAuth"),
-                Vars = stageMap.VarSpecMap("vars"),
-            });
-        }
-
-        return list;
+        throw new WorkspaceParseException(new WorkspaceError(
+            WorkspaceErrorCode.E_UNKNOWN_FIELD,
+            $"'{key}:' was removed — collection stages are now environments. Move each stage into "
+            + "its own '*.env.tap' file whose 'collections:' entry names this collection and "
+            + "carries the stage's baseUrl and defaultAuth, with the stage's vars at the "
+            + "environment's top level:\n"
+            + "  collections:\n"
+            + "  - collection: <slug>\n"
+            + "    baseUrl: <the stage's baseUrl>\n"
+            + $"Then delete '{key}:' from this file.",
+            relativePath));
     }
 
     private static AuthFile ParseAuth(Common c, YamlMappingNode fm, string relativePath)
@@ -165,6 +164,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
+            Body = c.Body,
             Type = type,
             Fields = bag,
             Headers = fm.StringMap("headers"),
@@ -173,7 +173,84 @@ public static class FileParser
         };
     }
 
-    private static EnvFile ParseEnv(Common c, YamlMappingNode fm)
+    /// <summary>
+    /// Parses an env's <c>collections:</c> assignments. Two spellings, because most assignments
+    /// carry no overrides and a list of bare slugs is the honest way to write that:
+    ///
+    /// <code>
+    /// collections:
+    /// - billing                                  # bare — variables only
+    /// - collection: orders                       # with overrides
+    ///   baseUrl: https://orders-uat.acme.test
+    ///   defaultAuth: ../../auth/uat.auth.tap
+    /// </code>
+    /// </summary>
+    private static IReadOnlyList<EnvCollectionBinding> ParseEnvCollections(
+        YamlMappingNode fm, string relativePath)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("collections"), out var node)) return [];
+
+        if (node is not YamlSequenceNode seq)
+        {
+            throw new WorkspaceParseException(new WorkspaceError(
+                WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                "'collections:' must be a list of collection slugs, optionally as mappings "
+                + "carrying 'baseUrl' / 'defaultAuth' for that collection.",
+                relativePath));
+        }
+
+        var list = new List<EnvCollectionBinding>(seq.Children.Count);
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var entry in seq.Children)
+        {
+            var binding = entry switch
+            {
+                YamlScalarNode { Value: { Length: > 0 } slug } => new EnvCollectionBinding { Collection = slug },
+                YamlMappingNode map => new EnvCollectionBinding
+                {
+                    Collection = map.String("collection") ?? throw new WorkspaceParseException(new WorkspaceError(
+                        WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                        "Each mapping under 'collections:' requires a 'collection' slug.",
+                        relativePath)),
+                    BaseUrl = map.String("baseUrl"),
+                    DefaultAuth = map.Ref("defaultAuth"),
+                },
+                _ => throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    "Entries under 'collections:' must be a slug or a mapping with a 'collection' key.",
+                    relativePath)),
+            };
+
+            // A path here is the likely mistake — the field names collections the way the
+            // directory does, not the way a ref does.
+            if (binding.Collection.Contains('/') || binding.Collection.Contains('\\'))
+            {
+                var guess = binding.Collection.Split('/', '\\').LastOrDefault(x => x.Length > 0 && !x.Contains('.'))
+                            ?? binding.Collection;
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"'collections:' takes collection slugs, not paths — write '{guess}' "
+                    + "rather than a path to the collection file.",
+                    relativePath));
+            }
+
+            if (!seen.Add(binding.Collection))
+            {
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"Collection '{binding.Collection}' is assigned twice. One assignment per collection — "
+                    + "its baseUrl and defaultAuth belong on that single entry.",
+                    relativePath));
+            }
+
+            list.Add(binding);
+        }
+
+        return list;
+    }
+
+    private static EnvFile ParseEnv(Common c, YamlMappingNode fm, string relativePath)
     {
         return new EnvFile
         {
@@ -182,9 +259,13 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
+            Body = c.Body,
             // Env vars use the same VarSpec shape as workspace/collection/request vars
             // so the `secret: true` flag is uniformly available across every scope.
             Vars = fm.VarSpecMap("vars"),
+            // The assignments, each carrying the overrides for its own collection. An empty
+            // list is a global env — offered everywhere, overriding nothing.
+            Collections = ParseEnvCollections(fm, relativePath),
             // Per-env provider binding: the env can pick which provider bare tokens hit
             // (defaultVariableProvider), re-point stable alias prefixes at concrete
             // providers (providerAliases), and forbid fall-through past its default
@@ -195,17 +276,9 @@ public static class FileParser
         };
     }
 
-    private static CollectionFile ParseCollection(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static CollectionFile ParseCollection(Common c, YamlMappingNode fm, string relativePath)
     {
-        var stages = ParseStages(fm, relativePath);
-        var defaultStage = fm.String("defaultStage");
-        if (defaultStage is not null && !stages.Any(s => string.Equals(s.Name, defaultStage, StringComparison.OrdinalIgnoreCase)))
-        {
-            throw new WorkspaceParseException(new WorkspaceError(
-                WorkspaceErrorCode.E_UNKNOWN_FIELD,
-                $"'defaultStage: {defaultStage}' does not match any defined stage.",
-                relativePath));
-        }
+        RejectStages(fm, relativePath);
 
         return new CollectionFile
         {
@@ -214,15 +287,14 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             BaseUrl = fm.String("baseUrl") ?? string.Empty,
             DefaultAuth = fm.Ref("defaultAuth"),
             DefaultHeaders = fm.StringMap("defaultHeaders"),
             Transport = ParseTransport(fm, relativePath),
             Vars = fm.VarSpecMap("vars"),
-            Stages = stages,
-            DefaultStage = defaultStage,
             Agent = ParseAgent(fm, relativePath),
+            History = ParseHistory(fm, relativePath),
         };
     }
 
@@ -262,7 +334,7 @@ public static class FileParser
             relativePath));
     }
 
-    private static FlowFile ParseFlow(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static FlowFile ParseFlow(Common c, YamlMappingNode fm, string relativePath)
     {
         return new FlowFile
         {
@@ -271,13 +343,13 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             Vars = fm.VarSpecMap("vars"),
             Steps = FlowParser.ParseSteps(fm, relativePath),
         };
     }
 
-    private static TestSetFile ParseTestSet(Common c, YamlMappingNode fm, string body, string relativePath)
+    private static TestSetFile ParseTestSet(Common c, YamlMappingNode fm, string relativePath)
     {
         return new TestSetFile
         {
@@ -286,7 +358,7 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
-            Body = body,
+            Body = c.Body,
             Vars = fm.VarSpecMap("vars"),
             OnFailure = TestSetParser.ParseOnFailure(fm, relativePath),
             Tests = TestSetParser.ParseTests(fm, relativePath),
@@ -325,11 +397,119 @@ public static class FileParser
             Id = c.Id,
             Name = c.Name,
             Tags = c.Tags,
+            Body = c.Body,
             DefaultEnv = fm.Ref("defaultEnv"),
             VariableProviders = providers,
             DefaultVariableProvider = fm.String("defaultVariableProvider") ?? fm.String("defaultProvider"),
             Vars = fm.VarSpecMap("vars"),
+            Response = ParseResponseLimits(fm, c.RelativePath),
+            History = ParseHistory(fm, c.RelativePath, workspaceScope: true),
         };
+    }
+
+    /// <summary>
+    /// Reads a <c>history:</c> block. Accepts the same bool-or-mapping shape as <c>agent:</c> —
+    /// <c>history: true</c> is the common case and shouldn't cost four lines — and leaves every
+    /// unmentioned key null so the tier below still has a say (see
+    /// <see cref="HistoryOptions.Resolve"/>).
+    ///
+    /// <para><c>orphanRetentionDays</c> is workspace-only: by the time a history folder is
+    /// orphaned, the collection and request that would have configured it are the very things
+    /// that no longer exist. Accepting it elsewhere would be accepting a value nothing can
+    /// ever read.</para>
+    /// </summary>
+    private static HistoryOptions ParseHistory(YamlMappingNode fm, string relativePath, bool workspaceScope = false)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("history"), out var node))
+            return new HistoryOptions();
+
+        if (node is YamlScalarNode scalar)
+        {
+            if (bool.TryParse(scalar.Value, out var enabled))
+                return new HistoryOptions { Enabled = enabled };
+            throw Invalid($"'history: {scalar.Value}' is not valid. Use true, false, or a mapping like 'history: {{ enabled: true, maxEntries: 50 }}'.");
+        }
+
+        if (node is not YamlMappingNode map)
+            throw Invalid("'history:' must be a bool or a mapping (history: { enabled: true }).");
+
+        return new HistoryOptions
+        {
+            Enabled = Bool(map, "enabled"),
+            MaxEntries = Count(map, "maxEntries"),
+            Encrypt = Bool(map, "encrypt"),
+            MaxBodyBytes = Size(map, "maxBodyBytes"),
+            OrphanRetentionDays = workspaceScope
+                ? Count(map, "orphanRetentionDays")
+                : RejectOrphanRetention(map),
+        };
+
+        bool? Bool(YamlMappingNode m, string key)
+        {
+            var raw = m.String(key);
+            if (raw is null) return null;
+            if (bool.TryParse(raw, out var value)) return value;
+            throw Invalid($"'history.{key}: {raw}' is not valid. Use true or false.");
+        }
+
+        int? Count(YamlMappingNode m, string key)
+        {
+            var raw = m.String(key);
+            if (raw is null) return null;
+            if (int.TryParse(raw, System.Globalization.NumberStyles.None,
+                    System.Globalization.CultureInfo.InvariantCulture, out var value))
+                return value;
+            throw Invalid($"'history.{key}' must be a non-negative whole number. Got '{raw}'.");
+        }
+
+        long? Size(YamlMappingNode m, string key)
+        {
+            var raw = m.String(key);
+            if (raw is null) return null;
+            if (ByteSize.TryParse(raw, out var bytes)) return bytes;
+            throw Invalid($"'history.{key}' must be a byte count, optionally with a kb/mb/gb suffix (e.g. '256kb'). Got '{raw}'.");
+        }
+
+        int? RejectOrphanRetention(YamlMappingNode m)
+        {
+            if (m.String("orphanRetentionDays") is null) return null;
+            throw Invalid("'history.orphanRetentionDays' belongs on workspace.tap — an orphaned history has no collection or request left to read it from.");
+        }
+
+        WorkspaceParseException Invalid(string message) => new(new WorkspaceError(
+            WorkspaceErrorCode.E_UNKNOWN_FIELD, message, relativePath));
+    }
+
+    /// <summary>
+    /// Reads the manifest's <c>response:</c> block. Both caps accept a plain byte count or a
+    /// <c>kb</c>/<c>mb</c>/<c>gb</c> size (§4.1); anything else is rejected rather than
+    /// silently falling back to the default, because a typo'd cap that reads as "no cap
+    /// configured" is exactly the surprise the field exists to remove.
+    /// </summary>
+    private static ResponseLimits ParseResponseLimits(YamlMappingNode fm, string relativePath)
+    {
+        if (!fm.Children.TryGetValue(new YamlScalarNode("response"), out var node) || node is not YamlMappingNode response)
+            return new ResponseLimits();
+
+        return new ResponseLimits
+        {
+            MaxBytes = Size(response, "maxBytes"),
+            MaxRetainedBytes = Size(response, "maxRetainedBytes"),
+        };
+
+        long? Size(YamlMappingNode map, string key)
+        {
+            var raw = map.String(key);
+            if (raw is null) return null;
+            if (!ByteSize.TryParse(raw, out var bytes))
+            {
+                throw new WorkspaceParseException(new WorkspaceError(
+                    WorkspaceErrorCode.E_UNKNOWN_FIELD,
+                    $"'response.{key}' must be a byte count, optionally with a kb/mb/gb suffix (e.g. '8mb'). Got '{raw}'.",
+                    relativePath));
+            }
+            return bytes;
+        }
     }
 
     /// <summary>
@@ -393,7 +573,7 @@ public static class FileParser
 
     /// <summary>
     /// <c>^[A-Za-z][A-Za-z0-9_-]*$</c> — the shape the interpolation regex already assumes for a
-    /// <c>{{provider:name}}</c> prefix, enforced here so a hostile <c>tap.md</c> can't hand a
+    /// <c>{{provider:name}}</c> prefix, enforced here so a hostile <c>workspace.tap</c> can't hand a
     /// path fragment to a file-backed provider.
     /// </summary>
     private static bool IsValidProviderName(string name)

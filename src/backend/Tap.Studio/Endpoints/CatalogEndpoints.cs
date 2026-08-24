@@ -4,6 +4,7 @@ using Tap.Studio.Variables;
 using Tap.Workspace.Model;
 using Tap.Workspace.Rendering;
 using Tap.Workspace.Variables;
+using Tap.Workspace;
 
 namespace Tap.Studio.Endpoints;
 
@@ -45,13 +46,18 @@ public static class CatalogEndpoints
                 Source: svc.ReadSource(a.RelativePath)));
         });
 
-        auths.MapPut("/spec", (AuthSpecDto spec, WorkspaceService svc) => SaveSpec(svc, spec.Path, AuthSpecEmitter.ToFileSource(spec)));
+        auths.MapPut("/spec", (AuthSpecDto spec, WorkspaceService svc) =>
+        {
+            var id = SpecIds.Ensure(spec.Id);
+            return SaveSpec(svc, spec.Path, AuthSpecEmitter.ToFileSource(spec with { Id = id }), id);
+        });
 
         // ----- Environments -----
         var envs = app.MapGroup("/api/environments");
         envs.MapGet("/", (WorkspaceService svc) => Results.Ok(
             (IReadOnlyList<EnvSummaryDto>)svc.Current.Environments
-                .Select(e => new EnvSummaryDto(e.RelativePath, e.Name ?? Stem(e.RelativePath), e.Id))
+                .Select(e => new EnvSummaryDto(
+                    e.RelativePath, e.Name ?? Stem(e.RelativePath), e.Id, ToBindings(e)))
                 .ToArray()));
 
         envs.MapGet("/{*path}", (string path, WorkspaceService svc) =>
@@ -65,12 +71,17 @@ public static class CatalogEndpoints
                 Tags: e.Tags,
                 Body: e.Body,
                 Source: svc.ReadSource(e.RelativePath),
+                Collections: ToBindings(e),
                 DefaultVariableProvider: e.DefaultVariableProvider,
                 ProviderAliases: e.ProviderAliases,
                 StrictVariables: e.StrictVariables));
         });
 
-        envs.MapPut("/spec", (EnvSpecDto spec, WorkspaceService svc) => SaveSpec(svc, spec.Path, EnvSpecEmitter.ToFileSource(spec)));
+        envs.MapPut("/spec", (EnvSpecDto spec, WorkspaceService svc) =>
+        {
+            var id = SpecIds.Ensure(spec.Id);
+            return SaveSpec(svc, spec.Path, EnvSpecEmitter.ToFileSource(spec with { Id = id }), id);
+        });
 
         // ----- Workspace manifest -----
         app.MapGet("/api/workspace/manifest", (WorkspaceService svc, IEnumerable<IVariableProviderFactory> factories) =>
@@ -86,7 +97,11 @@ public static class CatalogEndpoints
                 Vars: m.Vars,
                 Tags: m.Tags,
                 Body: m.Body,
-                Source: svc.ReadSource(m.RelativePath)));
+                Source: svc.ReadSource(m.RelativePath),
+                Response: m.Response.IsEmpty
+                    ? null
+                    : new ResponseLimitsDto(m.Response.MaxBytes, m.Response.MaxRetainedBytes),
+                History: HistoryOptionsMapper.ToDto(m.History)));
         });
 
         app.MapPut("/api/workspace/manifest/spec", (
@@ -96,7 +111,7 @@ public static class CatalogEndpoints
         {
             // Masked (***) secret settings round-trip from the GET above — restore the
             // on-disk values before emitting, and hold saves to the descriptor's required
-            // fields so a typo'd provider doesn't land in tap.md.
+            // fields so a typo'd provider doesn't land in workspace.tap.
             if (spec.VariableProviders is { Count: > 0 } incoming)
             {
                 var stored = svc.Current.Manifest?.VariableProviders ?? [];
@@ -113,20 +128,26 @@ public static class CatalogEndpoints
                         return Results.BadRequest(new WorkspaceErrorDto(
                             WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
                             $"Provider '{p.Name}': required setting '{missing}' is empty.",
-                            "tap.md", null));
+                            WorkspaceLoader.ManifestFileName, null));
                     }
                     restored.Add(p with { Settings = settings });
                 }
                 spec = spec with { VariableProviders = restored };
             }
 
-            return SaveSpec(svc, "tap.md", WorkspaceSpecEmitter.ToFileSource(spec));
+            var id = SpecIds.Ensure(spec.Id);
+            return SaveSpec(svc, WorkspaceLoader.ManifestFileName,
+                WorkspaceSpecEmitter.ToFileSource(spec with { Id = id }), id);
         });
     }
 
-    private static IResult SaveSpec(WorkspaceService svc, string path, string content)
+    /// <summary>Writes a spec and hands back the id it was stored under. The id matters to the
+    /// client: a file created without one gets a fresh id here, and a Send fired before the
+    /// watcher-driven reload lands would otherwise carry <c>id: null</c> and go unrecorded by
+    /// request history.</summary>
+    private static IResult SaveSpec(WorkspaceService svc, string path, string content, string id)
     {
-        try { svc.Save(path, content); return Results.NoContent(); }
+        try { svc.Save(path, content); return Results.Ok(new SavedSpecDto(id)); }
         catch (WorkspaceParseException ex)
         { return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line)); }
     }
@@ -143,6 +164,13 @@ public static class CatalogEndpoints
             Settings: ProviderSettingsMask.Apply(descriptor, p.Settings),
             Origin: p.Origin == ProviderOrigin.System ? "system" : "workspace");
     }
+
+    /// <summary>Projects an env's collection assignments onto the wire. Refs travel as written
+    /// (relative to the env file) so a round-trip through the editor re-emits them unchanged.</summary>
+    private static IReadOnlyList<EnvCollectionDto> ToBindings(EnvFile env)
+        => env.Collections
+            .Select(b => new EnvCollectionDto(b.Collection, b.BaseUrl, b.DefaultAuth?.RelativePath ?? b.DefaultAuth?.Id))
+            .ToArray();
 
     private static string Stem(string path) => Path.GetFileNameWithoutExtension(path);
 }

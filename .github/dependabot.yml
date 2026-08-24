@@ -3,15 +3,40 @@ version: 2
 # Actions are pinned to full commit SHAs (see .github/workflows/*.yml) so a
 # force-pushed tag can't swap code into the job that holds the Apple and Tauri
 # signing keys. Pins only stay safe if something bumps them — that's this file.
+#
+# Every ecosystem is grouped into exactly two PRs: routine minor/patch bumps in
+# one, majors in another. Ungrouped this produced 21 open PRs in a single week
+# and still saturated the github-actions cap, silently withholding four more
+# updates behind it. Grouping is also a correctness property, not just noise
+# control: @mantine/* (7 packages, exact-pinned), @tiptap/*, @codemirror/* and
+# actions/{upload,download}-artifact must move in lockstep or the build breaks,
+# and a single grouped PR is the only thing that guarantees that.
+#
+# Majors stay in their own PR because most workflows here only run on tags —
+# a broken major bump is not caught by PR CI, it is caught on release day.
+#
+# Caveat: a group does NOT span `directories`. The npm entry therefore yields
+# up to one PR per package.json per group, not one PR overall.
 updates:
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     commit-message:
       prefix: "ci"
+    cooldown:
+      semver-major-days: 14
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      actions-major:
+        patterns: ["*"]
+        update-types: ["major"]
 
+  # Versions are centrally managed in Directory.Packages.props, so one
+  # directory covers every project in Tap.slnx.
   - package-ecosystem: nuget
     directory: "/"
     schedule:
@@ -19,6 +44,15 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
+    cooldown:
+      semver-major-days: 14
+    groups:
+      dotnet:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      dotnet-major:
+        patterns: ["*"]
+        update-types: ["major"]
 
   # One entry per package.json — Dependabot does not walk the tree on its own.
   - package-ecosystem: npm
@@ -29,9 +63,18 @@ updates:
       - "/docs-site"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 10
     commit-message:
       prefix: "deps"
+    cooldown:
+      semver-major-days: 14
+    groups:
+      npm:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      npm-major:
+        patterns: ["*"]
+        update-types: ["major"]
 
   - package-ecosystem: cargo
     directory: "/src/desktop/src-tauri"
@@ -40,3 +83,12 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "deps"
+    cooldown:
+      semver-major-days: 14
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+      cargo-major:
+        patterns: ["*"]
+        update-types: ["major"]

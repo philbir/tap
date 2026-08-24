@@ -1,12 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title desc">
   <title id="title">Tap Studio icon</title>
-  <desc id="desc">A simple tap-shaped mark with a flowing request stream.</desc>
+  <desc id="desc">A precision craft studio shaping request and credential flows.</desc>
   <defs>
     <linearGradient id="bg" x1="8" x2="56" y1="6" y2="58" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#7C41FF"/>
       <stop offset="1" stop-color="#3E15A8"/>
     </linearGradient>
-    <linearGradient id="stream" x1="12" x2="52" y1="43" y2="43" gradientUnits="userSpaceOnUse">
+    <linearGradient id="stream" x1="8" x2="56" y1="38" y2="38" gradientUnits="userSpaceOnUse">
       <stop offset="0" stop-color="#2DD4BF"/>
       <stop offset="1" stop-color="#6EA8FF"/>
     </linearGradient>
@@ -15,10 +15,12 @@
     </filter>
   </defs>
   <rect width="64" height="64" rx="16" fill="url(#bg)"/>
-  <path d="M15 43c6.8-6.2 13.2-6.2 20 0s12.7 6.2 18 0" fill="none" stroke="url(#stream)" stroke-linecap="round" stroke-width="5.5"/>
+  <path d="M8 31h16M8 38h16M8 45h16M40 38h16" fill="none" stroke="url(#stream)" stroke-linecap="round" stroke-width="4"/>
   <g filter="url(#shadow)">
-    <path d="M24 18h22a5 5 0 0 1 0 10h-8v19a6 6 0 0 1-12 0V28h-2a5 5 0 0 1 0-10Z" fill="#FFFFFF"/>
-    <path d="M28.5 23h17" fill="none" stroke="#DCD2FF" stroke-linecap="round" stroke-width="2"/>
+    <path d="M19 16h26a4 4 0 0 1 0 8h-9v8h-8v-8h-9a4 4 0 0 1 0-8Z" fill="#FFFFFF"/>
+    <rect x="21" y="32" width="22" height="18" rx="5" fill="#FFFFFF"/>
+    <path d="M26 38h12M26 43h8" fill="none" stroke="#7651E8" stroke-linecap="round" stroke-width="2.5"/>
   </g>
-  <circle cx="49" cy="19" r="4" fill="#F38020"/>
+  <path d="M32 24v8" stroke="#DCD2FF" stroke-linecap="round" stroke-width="3"/>
+  <circle cx="44" cy="20" r="3" fill="#F38020"/>
 </svg>

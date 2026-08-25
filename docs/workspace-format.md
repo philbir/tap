@@ -1171,8 +1171,8 @@ provider shadows a same-named system one. Each provider reports per-value sensit
 | Type | Source | Mode | Settings |
 |---|---|---|---|
 | `env` | Process environment variables, gated by the **host allowlists** (below) | read | none — the gate deliberately lives on the host, not in files |
-| `file` | A YAML store per provider at `<workspace>/.tap/.vars/<name>.yml`; `secret: true` values are encrypted at rest (AES-256-GCM, key derived from the machine's encryption key — §12.4) | read/write | none |
-| `azkv` | Azure Key Vault via `DefaultAzureCredential` (picks up `az login`, managed identity, …). Every value is secret. | read | `vaultName` (required), `tenantId`, `prefix` |
+| `file` | A YAML store per provider at `<workspace>/.vars/<name>.yml`; `secret: true` values are encrypted at rest (AES-256-GCM, key derived from the machine's encryption key — §12.4) | read/write | none |
+| `azkv` | Azure Key Vault via `DefaultAzureCredential` (picks up `az login`, managed identity, …). Every value is secret. | read | `vaultName` (required), `tenantId`, `prefix`, `filter` (below) |
 | `1p` | 1Password via the `op` CLI (desktop-app / biometric auth on the host) | read | `mode`: `environment` (default; a 1Password Environment's variables), `item` (`vault` + `item` — one item's fields), or `vault` (`vault` — one variable per item) |
 | `aspire` | A resource's allocated URL, read from the standard `services__<resource>__<scheme>__<index>` environment variables | read | none — always registered (§12.2) |
 | `system` | The host's `system.json` settings store — the same file the Settings UI edits. Always registered; no declaration needed. | read/write | — |
@@ -1198,6 +1198,29 @@ export TAP_SECRETS_ALLOWED="DEMO_*_TOKEN,AZURE_*"
 
 If neither variable is set, the `env` provider exposes nothing — deny-by-default is the safe
 default. References to names that don't match either pattern list fail as unknown.
+
+#### `azkv` name filter
+
+A team vault usually holds far more than one workspace needs. `filter` narrows the provider to
+the slice that does:
+
+```yaml
+- name: kv-billing
+  type: azkv
+  settings:
+    vaultName: acme-prod
+    filter: '^billing-'
+```
+
+The value is a .NET regular expression matched against the name **as tokens spell it** — after
+any `prefix` has been stripped — and it is **unanchored**, so `billing` matches anywhere in the
+name while `^billing-` matches only at the start. An unparseable pattern is
+`E_PROVIDER_CONFIG_INVALID`.
+
+It is a scope, not a display filter. A name outside it is absent from listings *and* from the
+Studio's Browse drawer, resolves as a miss (so `{{kv-billing:payments-key}}` fails as unknown
+rather than reaching past the filter), and refuses writes — storing a secret the provider would
+then hide is worse than being told no.
 
 ### 12.2 The `aspire` provider and the CI story
 

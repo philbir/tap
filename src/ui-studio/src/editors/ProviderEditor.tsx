@@ -1,14 +1,17 @@
 import {
-  ActionIcon, Alert, Badge, Box, Button, Code, Group, Loader, Stack, Table, Text, TextInput, Tooltip,
+  ActionIcon, Alert, Badge, Box, Button, Code, CopyButton, Group, Loader, Stack, Table, Tabs, Text,
+  TextInput, Tooltip,
 } from '@mantine/core'
 import {
-  IconAlertTriangle, IconEye, IconKey, IconPlus, IconRefresh, IconTrash,
+  IconAlertTriangle, IconCheck, IconCode, IconCopy, IconEye, IconKey, IconPlus, IconRefresh,
+  IconTrash, IconVariable,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ApiError, api } from '../api/client'
-import type { EncryptionKeyStatus, ProviderSummary } from '../api/types'
+import type { EncryptionKeyStatus, ProviderSource, ProviderSummary } from '../api/types'
 import { providerTabPath, useTapStore } from '../store'
 import { EditorShell } from './EditorShell'
+import { SourceTab } from './SourceTab'
 import { restoreDraft, usePublishDraft } from './useDraft'
 import { ProviderTypeIcon } from './providerMeta'
 
@@ -20,6 +23,12 @@ import { ProviderTypeIcon } from './providerMeta'
  * protocol underneath is per-variable REST rather than a whole-document PUT, so Save diffs
  * the draft against what was loaded and issues the writes and deletes that difference
  * implies. A rename is a delete plus a write, in that order.</p>
+ *
+ * <p>A provider that keeps its variables in one file (today: `file`) also gets a Source tab —
+ * the same store, whole, for the edits a row-at-a-time table is the wrong shape for: a rename
+ * of ten keys, a paste from another machine, a look at what is actually committed. The provider
+ * validates the text before it is written, so what the table can read back is exactly what the
+ * source view is allowed to save.</p>
  *
  * <p>Secret values never arrive here. A secret row loads with `value: null` and stays that way
  * unless the user explicitly reveals it; saving such a row sends `value: null`, which the
@@ -50,6 +59,8 @@ export function ProviderEditor({ name }: { name: string }) {
   const [rows, setRows] = useState<Row[]>([])
   const [savedRows, setSavedRows] = useState<Row[]>([])
   const [keyStatus, setKeyStatus] = useState<EncryptionKeyStatus | null>(null)
+  const [source, setSource] = useState<ProviderSource | null>(null)
+  const [sourceError, setSourceError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -63,7 +74,8 @@ export function ProviderEditor({ name }: { name: string }) {
         api.listVariableProviders(activeEnv),
         api.providerVariables(name, refresh, activeEnv),
       ])
-      setProvider(providers.find((p) => p.name === name) ?? null)
+      const summary = providers.find((p) => p.name === name) ?? null
+      setProvider(summary)
       const loaded: Row[] = variables.map((v) => ({
         id: nextRowId(),
         originalKey: v.name,
@@ -76,6 +88,21 @@ export function ProviderEditor({ name }: { name: string }) {
       // away edits that were never saved.
       setRows(refresh ? loaded : restoreDraft(tabPath, loaded))
       setSavedRows(loaded)
+
+      // Only a provider whose whole state IS a file has a source to show; for the rest the
+      // tab isn't rendered at all, so there is nothing to fetch.
+      if (summary?.sourcePath) {
+        setSourceError(null)
+        try {
+          setSource(await api.providerSource(name, activeEnv))
+        } catch (e) {
+          setSource(null)
+          setSourceError(e instanceof ApiError ? e.message : String(e))
+        }
+      } else {
+        setSource(null)
+        setSourceError(null)
+      }
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e))
     } finally {
@@ -161,6 +188,21 @@ export function ProviderEditor({ name }: { name: string }) {
   // user still needs from us is the path, because that file becomes theirs to back up.
   const keyPending = encrypts && keyStatus !== null && !keyStatus.configured
 
+  const table = (
+    <VariableTable
+      rows={rows}
+      readOnly={readOnly}
+      busyRowId={busyKey}
+      onChange={update}
+      onReveal={(row) => void reveal(row)}
+      onRemove={(id) => setRows((cur) => cur.filter((r) => r.id !== id))}
+      onAdd={() => setRows((cur) => [
+        ...cur,
+        { id: nextRowId(), originalKey: null, key: '', value: '', secret: false },
+      ])}
+    />
+  )
+
   return (
     <EditorShell
       title={name}
@@ -187,11 +229,30 @@ export function ProviderEditor({ name }: { name: string }) {
     >
       <Stack gap="md" p="md">
         {provider && (
-          <Group gap="xs">
+          <Group gap="xs" wrap="nowrap">
             <ProviderTypeIcon icon={provider.icon} size={16} />
             <Text size="sm" c="dimmed">
               {provider.typeDisplayName ?? provider.type} · {provider.origin} scope
             </Text>
+            {provider.sourcePath && (
+              <>
+                <Text size="sm" c="dimmed">·</Text>
+                {/* Where the variables actually live. Without it the only answer to "what do I
+                    back up, and what did I just commit?" is to go looking for the file. */}
+                <Tooltip label={source?.fullPath ?? provider.sourcePath} withArrow>
+                  <Code fz="xs">{provider.sourcePath}</Code>
+                </Tooltip>
+                <CopyButton value={source?.fullPath ?? provider.sourcePath}>
+                  {({ copied, copy }) => (
+                    <Tooltip label={copied ? 'Copied' : 'Copy full path'} withArrow>
+                      <ActionIcon size="sm" variant="subtle" color={copied ? 'teal' : 'gray'} onClick={copy} aria-label="Copy full path">
+                        {copied ? <IconCheck size={13} /> : <IconCopy size={13} />}
+                      </ActionIcon>
+                    </Tooltip>
+                  )}
+                </CopyButton>
+              </>
+            )}
           </Group>
         )}
 
@@ -206,20 +267,47 @@ export function ProviderEditor({ name }: { name: string }) {
 
         {loading && rows.length === 0 ? (
           <Group justify="center" p="xl"><Loader size="sm" /></Group>
-        ) : (
-          <VariableTable
-            rows={rows}
-            readOnly={readOnly}
-            busyRowId={busyKey}
-            onChange={update}
-            onReveal={(row) => void reveal(row)}
-            onRemove={(id) => setRows((cur) => cur.filter((r) => r.id !== id))}
-            onAdd={() => setRows((cur) => [
-              ...cur,
-              { id: nextRowId(), originalKey: null, key: '', value: '', secret: false },
-            ])}
-          />
-        )}
+        ) : provider?.sourcePath ? (
+          <Tabs defaultValue="variables">
+            <Tabs.List mb="md">
+              <Tabs.Tab value="variables" leftSection={<IconVariable size={14} />}>Variables</Tabs.Tab>
+              <Tabs.Tab value="source" leftSection={<IconCode size={14} />}>Source</Tabs.Tab>
+            </Tabs.List>
+
+            <Tabs.Panel value="variables">{table}</Tabs.Panel>
+
+            <Tabs.Panel value="source">
+              {sourceError && (
+                <Alert color="red" variant="light" icon={<IconAlertTriangle size={16} />}>
+                  {sourceError}
+                </Alert>
+              )}
+              {source && (
+                <SourceTab
+                  path={source.path}
+                  source={source.content}
+                  save={async (content) => {
+                    await api.saveProviderSource(name, content, activeEnv)
+                    // No workspace file was touched, so no `generation` bump is coming to
+                    // refetch us — the table has to be pulled back in line by hand, or it goes
+                    // on showing the rows the source view just replaced.
+                    await load(true)
+                  }}
+                  note={
+                    <>
+                      The whole store, as it is on disk. The provider validates it before writing:
+                      an entry that isn't a value or a {'`value:`/`secret:`'} pair, or a{' '}
+                      {'`secret: true`'} value that isn't an encrypted envelope, is rejected and
+                      the file is left untouched. Secrets are encrypted when you set them in the
+                      Variables tab — one typed in here would be clear text under a flag saying
+                      otherwise, so it won't save.
+                    </>
+                  }
+                />
+              )}
+            </Tabs.Panel>
+          </Tabs>
+        ) : table}
       </Stack>
     </EditorShell>
   )

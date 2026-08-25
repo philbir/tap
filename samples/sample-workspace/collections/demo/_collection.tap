@@ -8,6 +8,12 @@ defaultHeaders:
 vars:
   OAUTH_TOKEN_PATH: /connect/token
   OAUTH_CLIENT_ID: tap-demo
+  fooacceptCharset:
+    default: '{{kv-dev:fooacceptCharset}}'
+    secret: true
+  contentType:
+    default: '{{file:contentType}}'
+    secret: true
 tags: [demo, local]
 ---
 # Demo

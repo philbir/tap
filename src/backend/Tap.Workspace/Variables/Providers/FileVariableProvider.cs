@@ -8,7 +8,7 @@ namespace Tap.Workspace.Variables.Providers;
 
 /// <summary>
 /// Read-write provider that persists variables to a dedicated YAML file under the workspace:
-/// <c>.tap/.vars/&lt;provider-name&gt;.yml</c>. Each value can be marked <c>secret</c>; secret
+/// <c>.vars/&lt;provider-name&gt;.yml</c>. Each value can be marked <c>secret</c>; secret
 /// values are encrypted at rest using AES-256-GCM with a key derived (PBKDF2-HMAC-SHA256)
 /// from the machine's encryption passphrase (<see cref="IEncryptionKeySource"/>:
 /// <c>TAP_ENCRYPTION_KEY</c>, else <c>&lt;system-dir&gt;/encryption.key</c>).
@@ -24,16 +24,17 @@ namespace Tap.Workspace.Variables.Providers;
 /// on a machine with no key at all.</para>
 ///
 /// <para>On-disk envelope for secret values: <c>enc:v1:&lt;iv-b64&gt;:&lt;ciphertext-b64&gt;:&lt;tag-b64&gt;</c>.
-/// Plain values are stored as YAML scalars. The provider file lives entirely under the
-/// workspace's <c>.tap/</c> directory so it round-trips with the rest of the workspace and
-/// stays out of the per-scope file cascade.</para>
+/// Plain values are stored as YAML scalars. The file sits beside the workspace's own files so
+/// it round-trips with them, and outside the per-scope file cascade — nothing parses it as a
+/// workspace file, which is why raw-source editing goes through this provider
+/// (<see cref="IFileBackedVariableProvider"/>) rather than the shared source endpoint.</para>
 ///
 /// <para>This provider intentionally does NOT touch per-scope <c>vars:</c> blocks (in
 /// workspace/collection/env/request files). Those continue to be edited through the
 /// existing scope-specific file editors. The file provider is the durable place for
 /// "workspace-wide" variables that don't belong to one scope.</para>
 /// </summary>
-public sealed class FileVariableProvider : IVariableProvider
+public sealed class FileVariableProvider : IVariableProvider, IFileBackedVariableProvider
 {
     /// <summary>On-disk marker for encrypted values. Public so the Studio's provider-test
     /// endpoint can detect secrets that failed to decrypt (ListAsync surfaces the raw
@@ -65,6 +66,36 @@ public sealed class FileVariableProvider : IVariableProvider
     /// neither be written nor read back. Surfaced to the Studio so the provider editor can
     /// offer to generate one instead of failing on save.</summary>
     public bool HasEncryptionKey => _keySource.GetPassphrase() is not null;
+
+    /// <summary>Absolute path of the YAML store: <c>&lt;workspace&gt;/.vars/&lt;name&gt;.yml</c>.
+    /// Present whether or not anything has been written yet — a store with no variables in it
+    /// still has a place it would live, and that place is what someone has to back up.</summary>
+    public string StorePath => _storePath;
+
+    /// <inheritdoc />
+    public string ReadSource()
+    {
+        lock (_gate)
+        {
+            return File.Exists(_storePath) ? File.ReadAllText(_storePath) : Header + "variables:\n";
+        }
+    }
+
+    /// <inheritdoc />
+    public void WriteSource(string text)
+    {
+        // Parse strictly first: the whole point of validating before writing is that a file
+        // this provider cannot read back never reaches disk. Every entry is checked, including
+        // ones a tolerant load would have skipped over in silence.
+        ParseStore(text, strict: true);
+        lock (_gate)
+        {
+            var dir = Path.GetDirectoryName(_storePath)!;
+            if (OperatingSystem.IsWindows()) Directory.CreateDirectory(dir);
+            else Directory.CreateDirectory(dir, OwnerOnlyDirectory);
+            WriteAtomicOwnerOnly(_storePath, text);
+        }
+    }
 
     /// <summary>The AES key for this store, or <c>null</c> when the machine has no passphrase.
     /// Resolved per call rather than at construction: providers are cached across requests, and
@@ -146,36 +177,120 @@ public sealed class FileVariableProvider : IVariableProvider
         lock (_gate)
         {
             if (!File.Exists(_storePath)) return new Dictionary<string, Entry>(StringComparer.Ordinal);
-            using var reader = new StreamReader(_storePath);
-            var stream = new YamlStream();
-            stream.Load(reader);
-            var result = new Dictionary<string, Entry>(StringComparer.Ordinal);
-            if (stream.Documents.Count == 0) return result;
-            if (stream.Documents[0].RootNode is not YamlMappingNode root) return result;
-            if (!root.Children.TryGetValue(new YamlScalarNode("variables"), out var varsNode)) return result;
-            if (varsNode is not YamlMappingNode vars) return result;
-
-            foreach (var (k, v) in vars)
-            {
-                if (k is not YamlScalarNode keyNode || keyNode.Value is null) continue;
-                if (v is YamlScalarNode scalar)
-                {
-                    // Compact form: name: value (always non-secret).
-                    result[keyNode.Value] = new Entry(scalar.Value ?? string.Empty, IsSecret: false);
-                }
-                else if (v is YamlMappingNode obj)
-                {
-                    var valueText = (obj.Children.TryGetValue(new YamlScalarNode("value"), out var vnode)
-                        && vnode is YamlScalarNode vs) ? (vs.Value ?? string.Empty) : string.Empty;
-                    var secretFlag = obj.Children.TryGetValue(new YamlScalarNode("secret"), out var snode)
-                        && snode is YamlScalarNode ss
-                        && string.Equals(ss.Value, "true", StringComparison.OrdinalIgnoreCase);
-                    result[keyNode.Value] = new Entry(valueText, secretFlag);
-                }
-            }
-            return result;
+            return ParseStore(File.ReadAllText(_storePath), strict: false);
         }
     }
+
+    /// <summary>
+    /// Reads the store's YAML into entries. Two modes, one grammar: the load path is tolerant
+    /// (anything it doesn't recognise is skipped, so one bad line can't hide every other
+    /// variable), while <paramref name="strict"/> — used by <see cref="WriteSource"/> — refuses
+    /// the same input and says where. Sharing the walk is what keeps "it validated" and "it
+    /// loads" from drifting apart.
+    /// </summary>
+    private Dictionary<string, Entry> ParseStore(string text, bool strict)
+    {
+        var result = new Dictionary<string, Entry>(StringComparer.Ordinal);
+        var stream = new YamlStream();
+        try
+        {
+            stream.Load(new StringReader(text));
+        }
+        catch (YamlDotNet.Core.YamlException ex)
+        {
+            if (!strict) return result;
+            throw Invalid($"{Name}'s store is not valid YAML: {ex.Message}", ex.Start.Line > 0 ? (int)ex.Start.Line : null);
+        }
+
+        if (stream.Documents.Count == 0) return result;   // empty file — an empty store.
+        if (stream.Documents[0].RootNode is not YamlMappingNode root)
+        {
+            if (!strict) return result;
+            throw Invalid("The store must be a YAML mapping with a top-level `variables:` key.", null);
+        }
+        if (!root.Children.TryGetValue(new YamlScalarNode("variables"), out var varsNode))
+        {
+            if (!strict) return result;
+            throw Invalid("The store has no top-level `variables:` key.", Line(root));
+        }
+        // `variables:` with nothing under it parses as a null scalar. That's an empty store,
+        // not a malformed one — it is exactly what a store reads as after its last delete.
+        if (varsNode is YamlScalarNode { Value: null or "" }) return result;
+        if (varsNode is not YamlMappingNode vars)
+        {
+            if (!strict) return result;
+            throw Invalid("`variables:` must be a mapping of name to value.", Line(varsNode));
+        }
+
+        foreach (var (k, v) in vars)
+        {
+            if (k is not YamlScalarNode keyNode || keyNode.Value is null) continue;
+            var name = keyNode.Value;
+            if (v is YamlScalarNode scalar)
+            {
+                // Compact form: name: value (always non-secret).
+                result[name] = new Entry(scalar.Value ?? string.Empty, IsSecret: false);
+            }
+            else if (v is YamlMappingNode obj)
+            {
+                var valueText = (obj.Children.TryGetValue(new YamlScalarNode("value"), out var vnode)
+                    && vnode is YamlScalarNode vs) ? (vs.Value ?? string.Empty) : string.Empty;
+                var secretFlag = obj.Children.TryGetValue(new YamlScalarNode("secret"), out var snode)
+                    && snode is YamlScalarNode ss
+                    && string.Equals(ss.Value, "true", StringComparison.OrdinalIgnoreCase);
+
+                if (strict)
+                {
+                    foreach (var (ck, _) in obj.Children)
+                    {
+                        if (ck is YamlScalarNode { Value: "value" or "secret" }) continue;
+                        throw Invalid(
+                            $"'{name}' has an unknown key '{(ck as YamlScalarNode)?.Value}'. An entry holds `value:` and `secret:`.",
+                            Line(ck));
+                    }
+                    if (!obj.Children.ContainsKey(new YamlScalarNode("value")))
+                        throw Invalid($"'{name}' has no `value:`.", Line(obj));
+                    // A hand-typed secret would be clear text sitting in the file under a flag
+                    // claiming otherwise — and unreadable to every consumer, since resolving it
+                    // expects an envelope. Refuse it here rather than let it be committed.
+                    if (secretFlag && !SecretEnvelope.IsEnvelope(valueText))
+                    {
+                        throw Invalid(
+                            $"'{name}' is marked `secret: true` but its value is not an {EnvelopePrefix}… envelope. "
+                            + "Secrets are encrypted when you set them from the Variables tab (or the API); "
+                            + "writing one here would store it in clear.",
+                            Line(obj));
+                    }
+                }
+
+                result[name] = new Entry(valueText, secretFlag);
+            }
+            else if (strict)
+            {
+                throw Invalid(
+                    $"'{name}' must be a value, or a mapping with `value:` and `secret:`.", Line(v));
+            }
+        }
+        return result;
+    }
+
+    /// <summary>1-based line for an error marker; YamlDotNet counts from 1 already, and 0 means
+    /// "it didn't say".</summary>
+    private static int? Line(YamlNode node) => node.Start.Line > 0 ? (int)node.Start.Line : null;
+
+    private WorkspaceParseException Invalid(string message, int? line) => new(new WorkspaceError(
+        WorkspaceErrorCode.E_PROVIDER_CONFIG_INVALID,
+        message,
+        ".vars/" + Path.GetFileName(_storePath),
+        line));
+
+    /// <summary>Comment block every written store carries, and what an unwritten one is shown
+    /// as. It is the only documentation someone opening this file in an editor gets.</summary>
+    private static string Header =>
+        "# Tap file provider store — written by the Studio UI / API.\n"
+        + "# Secret values use the envelope: enc:v1:<iv-b64>:<ciphertext-b64>:<tag-b64>\n"
+        + $"# Do NOT hand-edit secret values; they are keyed to this machine's {MachineEncryptionKeySource.EnvVar}\n"
+        + $"# (or {MachineEncryptionKeySource.FileName}). Committing this file without that key commits nothing usable.\n";
 
     private void SaveStore(IReadOnlyDictionary<string, Entry> store)
     {
@@ -204,10 +319,7 @@ public sealed class FileVariableProvider : IVariableProvider
         root.Add("variables", varsNode);
 
         var sb = new StringBuilder();
-        sb.Append("# Tap file provider store — written by the Studio UI / API.\n");
-        sb.Append("# Secret values use the envelope: enc:v1:<iv-b64>:<ciphertext-b64>:<tag-b64>\n");
-        sb.Append($"# Do NOT hand-edit secret values; they are keyed to this machine's {MachineEncryptionKeySource.EnvVar}\n");
-        sb.Append($"# (or {MachineEncryptionKeySource.FileName}). Committing this file without that key commits nothing usable.\n");
+        sb.Append(Header);
 
         var doc = new YamlDocument(root);
         var stream = new YamlStream(doc);

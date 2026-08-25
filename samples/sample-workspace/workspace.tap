@@ -14,6 +14,7 @@ variableProviders:
   settings:
     vaultName: tap-studio-01-dev
     tenantId: f6acae55-feb3-4c9a-8a7d-53c383c9fbe8
+    filter: foo
 - name: kv-prod
   type: azkv
   settings:

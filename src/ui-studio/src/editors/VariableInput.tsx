@@ -1,8 +1,11 @@
 import { ActionIcon, Box, Paper, Portal, Stack, Text, Tooltip } from '@mantine/core'
-import { IconBraces, IconEye, IconEyeOff, IconFlask, IconKey, IconRefresh } from '@tabler/icons-react'
+import {
+  IconBraces, IconEye, IconEyeOff, IconFlask, IconKey, IconRefresh, IconVariablePlus,
+} from '@tabler/icons-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Variable, VariableContext } from '../api/types'
 import { useVariableView, variableMap } from '../workspace/useVariables'
+import { ConvertToVariableModal, type ConvertToVariableRequest } from './ConvertToVariableModal'
 import { passwordManagerOptOut, randomFieldName } from './passwordManagerOptOut'
 import styles from './VariableInput.module.css'
 
@@ -35,6 +38,9 @@ export interface VariableInputProps {
   /** Static, full-value suggestions shown when the input is focused and the user is NOT
    *  in the middle of typing a `{{var}}` token. Picking one replaces the entire value. */
   staticSuggestions?: string[]
+  /** Seeds the name in the convert-to-variable panel — pass the field's own key where there
+   *  is one (`X-Api-Key` becomes `xApiKey`). Nothing is guessed from the value itself. */
+  nameHint?: string
 }
 
 // Matches the single interpolation form:
@@ -47,7 +53,7 @@ const TOKEN_REGEX = /\{\{([^}]*)\}\}/g
 
 export function VariableInput({
   value, onChange, placeholder, monospace = true, context, onOpenVariables, disabled, size = 'sm',
-  staticSuggestions,
+  staticSuggestions, nameHint,
 }: VariableInputProps) {
   const inputRef = useRef<HTMLInputElement | null>(null)
   const measureRef = useRef<HTMLSpanElement | null>(null)
@@ -109,6 +115,13 @@ export function VariableInput({
     }
     setBoxes(out)
   }, [value, view, vars, isLoading])
+
+  // -- Convert to variable ---------------------------------------------------------------
+  // Offered only for a plain literal. A value already carrying a `{{token}}` is at least
+  // partly a variable, and converting the whole string — token markup and all — into one
+  // more variable is never what someone means by it.
+  const [converting, setConverting] = useState<ConvertToVariableRequest | null>(null)
+  const canConvert = !!context && !disabled && value.trim().length > 0 && !value.includes('{{')
 
   // -- Preview mode ----------------------------------------------------------------------
   const [previewOn, setPreviewOn] = useState(false)
@@ -362,8 +375,23 @@ export function VariableInput({
         style={inputStyle}
       />
 
-      {/* Right-side actions — preview toggle + flask (open Variables panel) + token indicator. */}
+      {/* Right-side actions — convert + preview toggle + flask (open Variables panel) + token indicator. */}
       <div className={styles.actions}>
+        {canConvert && (
+          <Tooltip label="Convert to variable" withArrow>
+            <ActionIcon
+              size="sm" variant="subtle" color="gray"
+              // The input is focused when this is clicked, and a plain click would blur it
+              // first — which closes the suggestions popup and, on a table cell, can commit
+              // a row edit before the modal reads the value it is meant to convert.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setConverting({ value, nameHint, context })}
+              aria-label="Convert to variable"
+            >
+              <IconVariablePlus size={13} />
+            </ActionIcon>
+          </Tooltip>
+        )}
         {hasToken && (
           <Tooltip label="Field accepts {{variables}}" withArrow>
             <IconBraces size={13} color="var(--mantine-color-tap-6)" />
@@ -455,6 +483,17 @@ export function VariableInput({
           </div>
         </Portal>
       )}
+
+      <ConvertToVariableModal
+        request={converting}
+        onResolve={(result) => {
+          setConverting(null)
+          // The field takes the bare `{{name}}` — never the `{{provider:key}}` the declaration
+          // holds. That indirection is the point: the request reads the same in every
+          // environment, and repointing it at another vault is one line in one file.
+          if (result) onChange(result.token)
+        }}
+      />
     </div>
   )
 }

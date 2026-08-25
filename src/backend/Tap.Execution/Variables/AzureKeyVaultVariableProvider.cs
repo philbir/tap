@@ -21,6 +21,10 @@ namespace Tap.Execution.Variables;
 ///     workspace can scope to a folder of secrets without spelling out the prefix in every
 ///     <c>{{…}}</c> token. The variable's reported name (as seen by tokens) is the unprefixed
 ///     form; the actual KV key is <c>prefix + name</c>.</item>
+///   <item><c>filter</c> — optional. A regular expression narrowing the vault to the secrets
+///     a workspace actually uses: names it doesn't match are absent from listings, resolve as
+///     misses, and refuse writes. Matched against the unprefixed name and unanchored — see
+///     <see cref="VariableNameFilter"/>.</item>
 /// </list>
 ///
 /// <para>Every value from KV is treated as <see cref="VariableValue.IsSecret"/> = true. KV
@@ -31,6 +35,7 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
     private readonly VariableProviderConfig _config;
     private readonly SecretClient _client;
     private readonly string _prefix;
+    private readonly VariableNameFilter _filter;
     private readonly Lock _gate = new();
     private IReadOnlyList<VariableValue>? _listCache;
 
@@ -54,6 +59,9 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
         var uri = new Uri($"https://{vaultName}.vault.azure.net/");
         _client = new SecretClient(uri, new DefaultAzureCredential(options));
         _prefix = _config.Settings.TryGetValue("prefix", out var p) ? (p ?? string.Empty) : string.Empty;
+        _filter = VariableNameFilter.Create(
+            _config.Settings.TryGetValue("filter", out var f) ? f : null,
+            config.Name);
     }
 
     public string Name => _config.Name;
@@ -62,6 +70,11 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
 
     public async ValueTask<VariableValue?> GetAsync(string name, CancellationToken ct)
     {
+        // Out of scope is a miss, not a failure: a filtered vault is often the env's default
+        // provider, and every bare {{token}} gets probed here first. Answering locally also
+        // spares the round trip.
+        if (!_filter.IsMatch(name)) return null;
+
         var keyVaultName = _prefix + name;
         try
         {
@@ -100,6 +113,7 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
             var kvName = prop.Name;
             if (_prefix.Length > 0 && !kvName.StartsWith(_prefix, StringComparison.Ordinal)) continue;
             var publicName = _prefix.Length > 0 ? kvName[_prefix.Length..] : kvName;
+            if (!_filter.IsMatch(publicName)) continue;
             list.Add(new VariableValue(publicName, string.Empty, IsSecret: true, Name));
         }
 
@@ -118,6 +132,7 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
         // are always stored as KV "secrets" regardless. Clear the list cache so the next
         // ListAsync reflects the new entry.
         _ = isSecret;
+        EnsureInScope(name);
         var keyVaultName = _prefix + name;
         await _client.SetSecretAsync(keyVaultName, value, ct).ConfigureAwait(false);
         lock (_gate) { _listCache = null; }
@@ -130,6 +145,7 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
     /// don't purge.</summary>
     public async ValueTask<bool> DeleteAsync(string name, CancellationToken ct)
     {
+        EnsureInScope(name);
         var keyVaultName = _prefix + name;
         try
         {
@@ -141,6 +157,17 @@ public sealed class AzureKeyVaultVariableProvider : IVariableProvider, IRefresha
         }
         lock (_gate) { _listCache = null; }
         return true;
+    }
+
+    /// <summary>Refuses a write the filter would then hide. Storing a secret this provider can
+    /// never read back is worse than being told no.</summary>
+    private void EnsureInScope(string name)
+    {
+        if (_filter.IsMatch(name)) return;
+        throw new WorkspaceParseException(new WorkspaceError(
+            WorkspaceErrorCode.E_PROVIDER_NOT_WRITABLE,
+            $"'{name}' is outside the name filter on Key Vault provider '{Name}' "
+            + $"(filter: {_filter.Pattern}) — writing it would store a secret the provider then hides."));
     }
 }
 
@@ -177,6 +204,19 @@ public sealed class AzureKeyVaultVariableProviderFactory : IVariableProviderFact
                 Key = "prefix",
                 Label = "Secret name prefix",
                 Description = "Prepended to every Key Vault lookup; tokens keep using the unprefixed name.",
+            },
+            new ProviderSettingField
+            {
+                Key = "filter",
+                Label = "Name filter (regex)",
+                Description = "Limits the provider to secrets whose name matches. Leave empty for the whole vault.",
+                Placeholder = "^billing-",
+                Note = new ProviderFieldNote
+                {
+                    Text = "A .NET regular expression, matched against the name after the prefix is stripped and "
+                        + "unanchored — 'billing' matches anywhere in the name, '^billing-' only at the start. "
+                        + "Filtered-out names are hidden from listings, resolve as misses, and refuse writes.",
+                },
             },
         ],
     };

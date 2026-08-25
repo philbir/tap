@@ -5,7 +5,7 @@ import { useClipboard } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
   IconAlertCircle, IconArrowDown, IconArrowRight, IconArrowUp, IconBolt, IconCheck, IconCircleCheck, IconCircleCheckFilled, IconCircleMinus, IconCircleXFilled, IconCopy, IconDots, IconDownload, IconExternalLink,
-  IconHistory, IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSend, IconTrash, IconX,
+  IconHistory, IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSearch, IconSend, IconTrash, IconX,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
@@ -13,8 +13,25 @@ import type { AssertResult, AssertSummary, AuthExecuteResponse, AuthStatus, Auth
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
+import type { CodeSearchSpec } from './codeSearch'
+import { ResultSearchBar } from './ResultSearchBar'
+import { compileSearch, EMPTY_RESULT_SEARCH, Highlighted, matchesAny, type ResultMatcher, type ResultSearchState } from './resultSearch'
 import { useTabView } from './useTabView'
 import { COLLECTION_FILE } from '../shell/tapFiles'
+
+/**
+ * What "search" means on each sub-tab. `find` walks matches inside one document and gets
+ * step arrows; `filter` narrows a list of rows and gets a survivor count. Tabs missing from
+ * the map (asserts, flow, secrets) are short, structured views with nothing to sift.
+ */
+const SEARCH_MODE: Record<string, 'find' | 'filter'> = {
+  body: 'find',
+  request: 'find',
+  events: 'filter',
+  frames: 'filter',
+  headers: 'filter',
+  cookies: 'filter',
+}
 
 interface Props {
   /** Tab the panel belongs to. Keys the sticky sub-tab selection, so flipping to Headers
@@ -112,6 +129,113 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
 
   const cookies = useMemo(() => parseSetCookies(execution?.responseHeaders), [execution?.responseHeaders])
 
+  // ---- Find in result ------------------------------------------------------------------
+  // One query for the whole panel. It is parked on the tab (not on this mount) so it
+  // survives a tab switch the same way the sub-tab selection does, and it is deliberately
+  // *not* cleared on a new Send — "watch this field across runs" is the common case.
+  const [search, setSearch] = useTabView<ResultSearchState>(tabPath, 'resultSearch', EMPTY_RESULT_SEARCH)
+  const [activeMatch, setActiveMatch] = useState(0)
+  const [findCount, setFindCount] = useState(0)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  const searchMode = tab ? SEARCH_MODE[tab] ?? null : null
+  const { matcher: compiled, error: searchError } = useMemo(() => compileSearch(search), [search])
+  // Closing the bar keeps the query (so re-opening restores it) but stops it acting on
+  // anything — otherwise a hidden filter would silently be hiding rows.
+  const matcher = search.open && searchMode ? compiled : null
+
+  const filteredEvents = useMemo(() => {
+    const all = sseEvents ?? []
+    return matcher ? all.filter((e) => matchesAny(matcher, e.event, e.id, e.data)) : all
+  }, [sseEvents, matcher])
+
+  const filteredFrames = useMemo(() => {
+    const all = wsFrames ?? []
+    return matcher
+      ? all.filter((f) => matchesAny(matcher, f.type, f.direction, f.text, f.closeDescription, f.closeStatus?.toString()))
+      : all
+  }, [wsFrames, matcher])
+
+  const headerEntries = useMemo(
+    () => Object.entries(execution?.responseHeaders ?? {}),
+    [execution?.responseHeaders])
+  const filteredHeaders = useMemo(
+    () => matcher ? headerEntries.filter(([k, v]) => matchesAny(matcher, k, v)) : headerEntries,
+    [headerEntries, matcher])
+
+  const filteredCookies = useMemo(
+    () => matcher ? cookies.filter((c) => matchesAny(matcher, c.name, c.value, c.domain, c.path, c.sameSite)) : cookies,
+    [cookies, matcher])
+
+  // A new query, a new response or a different tab all invalidate "which match am I on".
+  useEffect(() => { setActiveMatch(0) }, [search.query, search.regex, search.caseSensitive, tab, execution])
+
+  // Derived rather than stored, because the match count arrives from the editor a beat after
+  // the query changes — clamping the state instead would fight the reset above.
+  const activeIndex = findCount > 0 ? Math.min(activeMatch, findCount - 1) : -1
+
+  const stepMatch = useCallback((delta: 1 | -1) => {
+    setActiveMatch((cur) => {
+      if (findCount === 0) return 0
+      return (Math.min(cur, findCount - 1) + delta + findCount) % findCount
+    })
+  }, [findCount])
+
+  // One-shot: true only for the render that opens the bar, so a bar restored by switching
+  // back to this tab doesn't yank focus out of whatever the user was typing in.
+  const wantSearchFocus = useRef(false)
+  useEffect(() => { wantSearchFocus.current = false })
+
+  const openSearch = useCallback(() => {
+    // Already open: re-select, so a second Mod+F replaces the query rather than appending.
+    if (search.open) { searchInputRef.current?.select(); return }
+    wantSearchFocus.current = true
+    setSearch({ ...search, open: true })
+  }, [search, setSearch])
+
+  // Mod+F has to be claimed on `window`, not on the panel's React tree: clicking a response
+  // row doesn't move focus, so the keystroke's target is usually `<body>` and a scoped
+  // handler would never see it. Only one editor is mounted at a time, so exactly one panel
+  // is ever listening. Capture phase both beats the browser's own find bar and keeps the
+  // event away from CodeMirror's search keymap — one find bar for the panel, not two.
+  const panelRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!searchMode) return
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.key.toLowerCase() !== 'f') return
+      const root = panelRef.current
+      if (!root) return
+      const target = e.target as HTMLElement | null
+      // Someone typing in the URL bar or a header field keeps their own Mod+F.
+      if (!(target && root.contains(target)) && isEditable(target)) return
+      e.preventDefault()
+      e.stopPropagation()
+      openSearch()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [searchMode, openSearch])
+
+  // `find` documents get the active-match emphasis; the payloads expanded inside a filtered
+  // list get plain highlighting, since stepping through them has no meaning there.
+  const findSpec = useMemo<CodeSearchSpec | null>(
+    () => matcher && searchMode === 'find' ? { source: matcher.source, flags: matcher.flags, active: activeIndex } : null,
+    [matcher, searchMode, activeIndex])
+  const listSpec = useMemo<CodeSearchSpec | null>(
+    () => matcher && searchMode === 'filter' ? { source: matcher.source, flags: matcher.flags, active: -1 } : null,
+    [matcher, searchMode])
+
+  /** "12 of 40" for whichever list tab is showing. */
+  const filterCounts = useMemo(() => {
+    switch (tab) {
+      case 'events': return { count: filteredEvents.length, total: (sseEvents ?? []).length }
+      case 'frames': return { count: filteredFrames.length, total: (wsFrames ?? []).length }
+      case 'headers': return { count: filteredHeaders.length, total: headerEntries.length }
+      case 'cookies': return { count: filteredCookies.length, total: cookies.length }
+      default: return { count: 0, total: 0 }
+    }
+  }, [tab, filteredEvents, filteredFrames, filteredHeaders, filteredCookies, sseEvents, wsFrames, headerEntries, cookies])
+
   // Which tabs actually exist for the current response. `body` is HTTP-only; `events` /
   // `frames` / `cookies` are conditional. The rest are always present.
   const assertResults = execution?.assertions ?? []
@@ -169,7 +293,14 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
   const secretCount = (execution?.variablesUsed ?? rendered?.variablesUsed ?? []).filter(v => v.isSecret).length
 
   return (
-    <Tabs value={tab} onChange={setTab} keepMounted={false} variant="default" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
+    <Tabs
+      ref={panelRef}
+      value={tab}
+      onChange={setTab}
+      keepMounted={false}
+      variant="default"
+      style={{ display: 'flex', flexDirection: 'column', height: '100%' }}
+    >
       <Group
         justify="space-between"
         wrap="nowrap"
@@ -229,6 +360,20 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
               </ActionIcon>
             </Tooltip>
           )}
+          {execution && searchMode && (
+            <Tooltip label={search.open ? 'Hide search' : 'Search this response'} withArrow>
+              <ActionIcon
+                variant={search.open ? 'light' : 'subtle'}
+                color={search.open ? 'tap' : 'gray'}
+                size="sm"
+                onClick={() => search.open ? setSearch({ ...search, open: false }) : openSearch()}
+                aria-label="Search this response"
+                aria-pressed={search.open}
+              >
+                <IconSearch size={14} />
+              </ActionIcon>
+            </Tooltip>
+          )}
           {execution && !busy && <ResultActionsMenu execution={execution} requestName={requestName} />}
           {onClose && (
             <Tooltip label="Close response" withArrow>
@@ -240,29 +385,63 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
         </Group>
       </Group>
 
+      {search.open && searchMode && (
+        <ResultSearchBar
+          ref={searchInputRef}
+          value={search}
+          onChange={setSearch}
+          onClose={() => setSearch({ ...search, open: false })}
+          mode={searchMode}
+          count={searchMode === 'find' ? findCount : filterCounts.count}
+          total={searchMode === 'filter' ? filterCounts.total : undefined}
+          active={activeIndex < 0 ? 0 : activeIndex}
+          onStep={stepMatch}
+          error={searchError}
+          autoFocus={wantSearchFocus.current}
+        />
+      )}
+
       <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {!isWs && (
           <Tabs.Panel value="body" h="100%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <BodyView execution={execution} stopped={stopped} requestName={requestName} />
+            <BodyView
+              execution={execution}
+              stopped={stopped}
+              requestName={requestName}
+              search={findSpec}
+              onSearchCount={setFindCount}
+            />
           </Tabs.Panel>
         )}
         {hasSse && (
           <Tabs.Panel value="events" h="100%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <EventsView events={sseEvents!} busy={busy} />
+            <EventsView
+              events={filteredEvents}
+              total={sseEvents!.length}
+              busy={busy}
+              matcher={matcher}
+              search={listSpec}
+            />
           </Tabs.Panel>
         )}
         {isWs && (
           <Tabs.Panel value="frames" h="100%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-            <FramesView frames={wsFrames ?? []} busy={busy} />
+            <FramesView
+              frames={filteredFrames}
+              total={(wsFrames ?? []).length}
+              busy={busy}
+              matcher={matcher}
+              search={listSpec}
+            />
           </Tabs.Panel>
         )}
         {cookies.length > 0 && (
           <Tabs.Panel value="cookies" h="100%">
-            <CookiesView cookies={cookies} />
+            <CookiesView cookies={filteredCookies} total={cookies.length} matcher={matcher} />
           </Tabs.Panel>
         )}
         <Tabs.Panel value="headers" h="100%">
-          <HeaderTable headers={execution?.responseHeaders ?? {}} />
+          <HeaderTable entries={filteredHeaders} total={headerEntries.length} matcher={matcher} />
         </Tabs.Panel>
         {assertResults.length > 0 && (
           <Tabs.Panel value="asserts" h="100%">
@@ -270,7 +449,7 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
           </Tabs.Panel>
         )}
         <Tabs.Panel value="request" h="100%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
-          <RequestView rendered={rendered} execution={execution} />
+          <RequestView rendered={rendered} execution={execution} search={findSpec} onSearchCount={setFindCount} />
         </Tabs.Panel>
         <Tabs.Panel value="flow" h="100%" style={{ display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <FlowView
@@ -560,10 +739,12 @@ function extForContentType(ct: string | null): string {
 
 // ---- Body view (CodeMirror) ----------------------------------------------------------
 
-function BodyView({ execution, stopped, requestName }: {
+function BodyView({ execution, stopped, requestName, search, onSearchCount }: {
   execution: ExecutionResult | null
   stopped?: boolean
   requestName?: string
+  search: CodeSearchSpec | null
+  onSearchCount: (count: number) => void
 }) {
   // A longer prefix pulled from the server's retained copy, once the user asks for it.
   // Keyed to the execution it came from so a new Send never shows the previous body.
@@ -572,6 +753,15 @@ function BodyView({ execution, stopped, requestName }: {
   const [expandError, setExpandError] = useState<string | null>(null)
 
   useEffect(() => { setExpanded(null); setExpandError(null) }, [execution])
+
+  // Most of the states below never reach a CodeBlock (cancelled, error, image, binary), so
+  // nothing would report a count and the bar would keep showing the previous body's total.
+  const searchable = !!execution?.responseBody
+    && !execution.error
+    && !execution.contentType?.toLowerCase().includes('text/event-stream')
+    && !execution.responseBody.startsWith('[binary ')
+    && !(execution.contentType?.toLowerCase().startsWith('image/') && execution.responseBody.startsWith('data:'))
+  useEffect(() => { if (!searchable) onSearchCount(0) }, [searchable, onSearchCount])
 
   const shown = expanded?.source === execution ? expanded : null
 
@@ -676,6 +866,8 @@ function BodyView({ execution, stopped, requestName }: {
           value={shown?.text ?? execution.responseBody}
           contentType={execution.contentType}
           readOnly
+          search={search}
+          onSearchCount={onSearchCount}
         />
       </ScrollArea>
     </Stack>
@@ -771,7 +963,14 @@ function TruncationNotice({ execution, requestName, shownBytes, expandable = tru
  * Auto-scrolls to the newest event while the stream is busy; once the stream finishes
  * we stop auto-scrolling so the user can keep their place.
  */
-function EventsView({ events, busy }: { events: SseEvent[]; busy: boolean }) {
+function EventsView({ events, total, busy, matcher, search }: {
+  /** Already filtered by the panel's query — `total` is the count before filtering. */
+  events: SseEvent[]
+  total: number
+  busy: boolean
+  matcher: ResultMatcher | null
+  search: CodeSearchSpec | null
+}) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [openSeq, setOpenSeq] = useState<number | null>(null)
 
@@ -786,7 +985,9 @@ function EventsView({ events, busy }: { events: SseEvent[]; busy: boolean }) {
       <Center h="100%">
         <Stack align="center" gap="xs" maw={280}>
           <IconBolt size={20} color="var(--mantine-color-dimmed)" />
-          <Text size="sm" c="dimmed">Waiting for the first event…</Text>
+          <Text size="sm" c="dimmed">
+            {total > 0 ? `No events match — ${total} hidden.` : 'Waiting for the first event…'}
+          </Text>
         </Stack>
       </Center>
     )
@@ -814,7 +1015,7 @@ function EventsView({ events, busy }: { events: SseEvent[]; busy: boolean }) {
                   <Text size="xs" c="dimmed" ff="var(--mono)">id={ev.id}</Text>
                 )}
                 <Text size="xs" ff="var(--mono)" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {preview}
+                  <Highlighted text={preview} matcher={matcher} />
                 </Text>
               </Group>
               {open && (
@@ -823,6 +1024,7 @@ function EventsView({ events, busy }: { events: SseEvent[]; busy: boolean }) {
                     value={ev.data}
                     language={guessEventLanguage(ev.data)}
                     readOnly
+                    search={search}
                   />
                 </Box>
               )}
@@ -844,7 +1046,14 @@ function EventsView({ events, busy }: { events: SseEvent[]; busy: boolean }) {
  * Auto-scrolls to the newest frame while the executor is still pumping; once it stops,
  * scrolling is left to the user.
  */
-function FramesView({ frames, busy }: { frames: WsFrame[]; busy: boolean }) {
+function FramesView({ frames, total, busy, matcher, search }: {
+  /** Already filtered by the panel's query — `total` is the count before filtering. */
+  frames: WsFrame[]
+  total: number
+  busy: boolean
+  matcher: ResultMatcher | null
+  search: CodeSearchSpec | null
+}) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [openSeq, setOpenSeq] = useState<number | null>(null)
 
@@ -859,7 +1068,9 @@ function FramesView({ frames, busy }: { frames: WsFrame[]; busy: boolean }) {
       <Center h="100%">
         <Stack align="center" gap="xs" maw={320} ta="center">
           <IconPlugConnected size={20} color="var(--mantine-color-dimmed)" />
-          <Text size="sm" c="dimmed">Waiting for the WebSocket handshake…</Text>
+          <Text size="sm" c="dimmed">
+            {total > 0 ? `No frames match — ${total} hidden.` : 'Waiting for the WebSocket handshake…'}
+          </Text>
         </Stack>
       </Center>
     )
@@ -886,7 +1097,7 @@ function FramesView({ frames, busy }: { frames: WsFrame[]; busy: boolean }) {
                 <Text size="xs" c="dimmed" ff="var(--mono)" style={{ minWidth: 56 }}>{(f.timestampMs / 1000).toFixed(2)}s</Text>
                 <FrameDirectionBadge frame={f} />
                 <Text size="xs" ff="var(--mono)" style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {preview}
+                  <Highlighted text={preview} matcher={matcher} />
                 </Text>
                 {f.size > 0 && (
                   <Text size="xs" c="dimmed" ff="var(--mono)">{formatBytes(f.size)}</Text>
@@ -898,6 +1109,7 @@ function FramesView({ frames, busy }: { frames: WsFrame[]; busy: boolean }) {
                     value={f.text ?? `(binary, ${f.size} bytes — base64)\n${f.base64 ?? ''}`}
                     language={guessFrameLanguage(f.text ?? '')}
                     readOnly
+                    search={search}
                   />
                 </Box>
               )}
@@ -1043,10 +1255,18 @@ function AssertResultsView({ results, summary }: { results: AssertResult[]; summ
 
 // ---- Headers table -------------------------------------------------------------------
 
-function HeaderTable({ headers }: { headers: Record<string, string> }) {
-  const entries = Object.entries(headers)
+function HeaderTable({ entries, total, matcher }: {
+  /** Already filtered by the panel's query — `total` is the count before filtering. */
+  entries: [string, string][]
+  total: number
+  matcher: ResultMatcher | null
+}) {
   if (entries.length === 0) {
-    return <Center h="100%"><Text size="sm" c="dimmed">No headers.</Text></Center>
+    return (
+      <Center h="100%">
+        <Text size="sm" c="dimmed">{total > 0 ? `No headers match — ${total} hidden.` : 'No headers.'}</Text>
+      </Center>
+    )
   }
   return (
     <ScrollArea h="100%">
@@ -1054,8 +1274,12 @@ function HeaderTable({ headers }: { headers: Record<string, string> }) {
         <Table.Tbody>
           {entries.map(([k, v]) => (
             <Table.Tr key={k}>
-              <Table.Td style={{ width: '32%' }} ff="var(--mono)" fw={500} c="dimmed">{k}</Table.Td>
-              <Table.Td ff="var(--mono)" style={{ wordBreak: 'break-word' }}>{v}</Table.Td>
+              <Table.Td style={{ width: '32%' }} ff="var(--mono)" fw={500} c="dimmed">
+                <Highlighted text={k} matcher={matcher} />
+              </Table.Td>
+              <Table.Td ff="var(--mono)" style={{ wordBreak: 'break-word' }}>
+                <Highlighted text={v} matcher={matcher} />
+              </Table.Td>
             </Table.Tr>
           ))}
         </Table.Tbody>
@@ -1066,12 +1290,20 @@ function HeaderTable({ headers }: { headers: Record<string, string> }) {
 
 // ---- Request view (what was sent) ----------------------------------------------------
 
-function RequestView({ rendered, execution }: { rendered: RenderedRequest | null; execution: ExecutionResult | null }) {
+function RequestView({ rendered, execution, search, onSearchCount }: {
+  rendered: RenderedRequest | null
+  execution: ExecutionResult | null
+  search: CodeSearchSpec | null
+  onSearchCount: (count: number) => void
+}) {
   // Prefer execution data (most recent Send); fall back to rendered (Preview).
   const method = execution?.method ?? rendered?.method
   const url = execution?.url ?? rendered?.url
   const reqHeaders = execution?.requestHeaders ?? rendered?.headers
   const reqBody = execution?.requestBody ?? rendered?.body
+
+  const empty = !method || !url
+  useEffect(() => { if (empty) onSearchCount(0) }, [empty, onSearchCount])
 
   if (!method || !url) {
     return (
@@ -1085,7 +1317,7 @@ function RequestView({ rendered, execution }: { rendered: RenderedRequest | null
 
   return (
     <ScrollArea h="100%" type="auto" scrollbarSize={8}>
-      <CodeBlock value={wire} language="http" readOnly />
+      <CodeBlock value={wire} language="http" readOnly search={search} onSearchCount={onSearchCount} />
     </ScrollArea>
   )
 }
@@ -1128,13 +1360,22 @@ interface ParsedCookie {
   partitioned: boolean
 }
 
-function CookiesView({ cookies }: { cookies: ParsedCookie[] }) {
+function CookiesView({ cookies, total, matcher }: {
+  /** Already filtered by the panel's query — `total` is the count before filtering. */
+  cookies: ParsedCookie[]
+  total: number
+  matcher: ResultMatcher | null
+}) {
   if (cookies.length === 0) {
-    return <Center h="100%"><Text size="sm" c="dimmed">No Set-Cookie headers.</Text></Center>
+    return (
+      <Center h="100%">
+        <Text size="sm" c="dimmed">{total > 0 ? `No cookies match — ${total} hidden.` : 'No Set-Cookie headers.'}</Text>
+      </Center>
+    )
   }
   const check = (on: boolean) => on ? <Text size="xs" c="green" fw={600}>✓</Text> : <Text size="xs" c="dimmed">—</Text>
   const cell = (v: string | undefined) => v
-    ? <Text size="xs" ff="var(--mono)">{v}</Text>
+    ? <Text size="xs" ff="var(--mono)"><Highlighted text={v} matcher={matcher} /></Text>
     : <Text size="xs" c="dimmed">—</Text>
   return (
     <ScrollArea h="100%" type="auto" scrollbars="xy">
@@ -1157,8 +1398,10 @@ function CookiesView({ cookies }: { cookies: ParsedCookie[] }) {
         <Table.Tbody>
           {cookies.map((c, i) => (
             <Table.Tr key={i}>
-              <Table.Td ff="var(--mono)" fw={500}>{c.name}</Table.Td>
-              <Table.Td ff="var(--mono)" style={{ wordBreak: 'break-all', maxWidth: 280 }} c="dimmed">{c.value}</Table.Td>
+              <Table.Td ff="var(--mono)" fw={500}><Highlighted text={c.name} matcher={matcher} /></Table.Td>
+              <Table.Td ff="var(--mono)" style={{ wordBreak: 'break-all', maxWidth: 280 }} c="dimmed">
+                <Highlighted text={c.value} matcher={matcher} />
+              </Table.Td>
               <Table.Td ta="right" c="dimmed" ff="var(--mono)">{c.size}</Table.Td>
               <Table.Td>{cell(c.path)}</Table.Td>
               <Table.Td>{cell(c.domain)}</Table.Td>
@@ -1947,6 +2190,13 @@ function SecretsView({ rendered, execution }: { rendered: RenderedRequest | null
 }
 
 // ---- Helpers -------------------------------------------------------------------------
+
+/** Would this element swallow a keystroke as text input? */
+function isEditable(el: HTMLElement | null): boolean {
+  if (!el) return false
+  const tag = el.tagName
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable
+}
 
 function statusColor(status: number): string {
   if (status === 0 || status >= 500) return 'red'

@@ -19,7 +19,7 @@ import { useMonacoTheme } from './monacoSetup'
 import { TabCount } from './EditorShell'
 import {
   BrowseProviderControl, ProviderSettingsFields, ProviderTypeIcon, ProviderTypeSelect,
-  TestProviderControl, descriptorFor, useProviderTypes,
+  TestProviderControl, descriptorFor, providerFingerprint, useProviderTypes,
 } from './providerMeta'
 
 /**
@@ -187,6 +187,7 @@ export function SettingsEditor() {
             <Box p="md">
               <ProvidersTab
                 providers={providers}
+                saved={data.variableProviders}
                 types={providerTypes}
                 defaultProvider={defaultProvider}
                 onDefaultProviderChange={setDefaultProvider}
@@ -260,9 +261,11 @@ function uniqueProviderName(type: string, existing: DraftProvider[]): string {
 }
 
 function ProvidersTab({
-  providers, types, defaultProvider, onDefaultProviderChange, onChange,
+  providers, saved, types, defaultProvider, onDefaultProviderChange, onChange,
 }: {
   providers: DraftProvider[]
+  /** Providers as `system.json` holds them — what Browse and Manage would actually read. */
+  saved: readonly SystemProvider[]
   types: ProviderTypeDescriptor[]
   defaultProvider: string | null
   onDefaultProviderChange: (next: string | null) => void
@@ -292,6 +295,10 @@ function ProvidersTab({
     if (next.has(id)) next.delete(id); else next.add(id)
     return next
   })
+
+  // Browse and Manage read a provider from `system.json`, so a card the draft has changed —
+  // a new one, a rename, different settings — has nothing there to look at until saved.
+  const savedFingerprints = useMemo(() => new Set(saved.map(providerFingerprint)), [saved])
 
   const update = (id: string, patch: Partial<DraftProvider>) =>
     onChange(providers.map((p) => (p.id === id ? { ...p, ...patch } : p)))
@@ -334,6 +341,7 @@ function ProvidersTab({
           types={types}
           isDefault={defaultProvider !== null && p.name.trim() === defaultProvider}
           expanded={expandedIds.has(p.id)}
+          unsaved={!savedFingerprints.has(providerFingerprint(p))}
           onToggle={() => toggle(p.id)}
           onChange={(patch) => update(p.id, patch)}
           onRemove={() => remove(p.id)}
@@ -354,12 +362,14 @@ function ProvidersTab({
 }
 
 function ProviderCard({
-  provider, types, isDefault, expanded, onToggle, onChange, onRemove,
+  provider, types, isDefault, expanded, unsaved, onToggle, onChange, onRemove,
 }: {
   provider: DraftProvider
   types: ProviderTypeDescriptor[]
   isDefault: boolean
   expanded: boolean
+  /** This card differs from what `system.json` holds — Browse would read the wrong thing. */
+  unsaved: boolean
   onToggle: () => void
   onChange: (patch: Partial<DraftProvider>) => void
   onRemove: () => void
@@ -420,6 +430,7 @@ function ProviderCard({
             <BrowseProviderControl
               providerName={provider.name.trim()}
               writable={descriptor?.mode === 'readwrite'}
+              unsaved={unsaved}
             />
           )}
           <Tooltip label="Remove provider" withArrow>

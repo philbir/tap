@@ -1109,6 +1109,46 @@ public sealed record SetVariableDto(
     /// <see cref="VariableProvider"/> is null. Null falls back to the default env.</summary>
     string? EnvPath = null);
 
+/// <summary>One cascade tier the "convert to variable" panel can declare into, resolved
+/// against the calling editor's context.</summary>
+/// <param name="Scope">Tier name: <c>workspace</c> | <c>collection</c> | <c>env</c> | <c>request</c>.</param>
+/// <param name="Path">Workspace-relative file the declaration would land in; null when unavailable.</param>
+/// <param name="Label">The tier's display name (the env's or collection's own name).</param>
+/// <param name="Unavailable">Why this tier isn't offered here, or null when it is.</param>
+public sealed record VariableTargetDto(
+    string Scope,
+    string? Path,
+    string? Label,
+    string? Unavailable);
+
+/// <summary>
+/// Turns a literal typed into some field into a declared variable: the value moves to a
+/// <c>vars:</c> entry at <paramref name="Scope"/> (and, when secret, into a writable provider
+/// with the declaration holding the reference), and the caller puts <c>{{name}}</c> in its place.
+/// </summary>
+/// <param name="RequestPath">Editor context — the same triple <c>/api/variables/views</c> takes,
+/// so the tier resolves to the file whose value <c>{{name}}</c> will actually pick up.</param>
+public sealed record DeclareVariableDto(
+    string Name,
+    string Value,
+    string Scope,
+    bool IsSecret,
+    string? VariableProvider = null,
+    string? RequestPath = null,
+    string? CollectionPath = null,
+    string? EnvPath = null);
+
+/// <param name="Token">What the caller should put in the field — always the bare <c>{{name}}</c>.</param>
+/// <param name="Path">The file that was written.</param>
+/// <param name="DeclaredValue">What the <c>vars:</c> entry now holds: the literal, or the
+/// <c>{{provider:name}}</c> reference standing in for a secret that went to a provider.</param>
+/// <param name="ProviderName">The provider the secret landed in, or null for a plain literal.</param>
+public sealed record DeclareVariableResultDto(
+    string Token,
+    string Path,
+    string DeclaredValue,
+    string? ProviderName);
+
 public sealed record ProviderSummaryDto(
     string Name,
     string Type,
@@ -1121,7 +1161,19 @@ public sealed record ProviderSummaryDto(
     string Origin,
     IReadOnlyDictionary<string, string?> Settings,
     int? VariableCount,
-    string? Error);
+    string? Error,
+    /// <summary>Workspace-relative path of the file this provider stores its variables in
+    /// (e.g. <c>.vars/vault.yml</c>), or null for a provider that isn't backed by one — a
+    /// vault, the host environment. Null is also the signal that there is no source to edit.</summary>
+    string? SourcePath = null);
+
+/// <param name="Path">Workspace-relative path, for display and for the editor's header.</param>
+/// <param name="FullPath">Absolute path — what someone backing the file up actually needs.</param>
+/// <param name="Content">The file's text, or the skeleton an empty store would be written as
+/// when it doesn't exist yet.</param>
+public sealed record ProviderSourceDto(string Path, string FullPath, string Content);
+
+public sealed record ProviderSourceWriteDto(string Content, string? Env = null);
 
 /// <summary>Static metadata for one provider type, served from the factory's
 /// <c>ProviderTypeDescriptor</c>. Drives the Studio's provider picker and its generated
@@ -1603,6 +1655,8 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(IReadOnlyList<ProviderVariableDto>))]
 [JsonSerializable(typeof(ProviderVariableValueDto))]
 [JsonSerializable(typeof(ProviderVariableWriteDto))]
+[JsonSerializable(typeof(ProviderSourceDto))]
+[JsonSerializable(typeof(ProviderSourceWriteDto))]
 [JsonSerializable(typeof(EncryptionKeyStatusDto))]
 [JsonSerializable(typeof(AzureSubscriptionDto))]
 [JsonSerializable(typeof(AzureSubscriptionDto[]))]

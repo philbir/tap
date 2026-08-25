@@ -110,20 +110,24 @@ internal static class SpecYaml
             ? null
             : new HashSet<string>(secrets, StringComparer.Ordinal);
         foreach (var (k, v) in values)
-        {
-            if (secretSet is not null && secretSet.Contains(k))
-            {
-                var obj = new YamlMappingNode();
-                obj.Add("default", new YamlScalarNode(v) { Style = QuoteStyleFor(v) });
-                obj.Add("secret", new YamlScalarNode("true"));
-                inner.Add(k, obj);
-            }
-            else
-            {
-                inner.Add(k, new YamlScalarNode(v) { Style = QuoteStyleFor(v) });
-            }
-        }
+            inner.Add(k, VarNode(v, secretSet is not null && secretSet.Contains(k)));
         map.Add(key, inner);
+    }
+
+    /// <summary>
+    /// One <c>vars:</c> entry's value node: a bare scalar, or the
+    /// <c>{ default: …, secret: true }</c> mapping a secret-marked variable takes. Shared with
+    /// <see cref="VarDeclarationWriter"/>, which declares a single entry into a file it is not
+    /// otherwise rewriting — both must emit the same shape or a later full save would show up
+    /// as a spurious diff.
+    /// </summary>
+    public static YamlNode VarNode(string value, bool secret)
+    {
+        if (!secret) return new YamlScalarNode(value) { Style = QuoteStyleFor(value) };
+        var obj = new YamlMappingNode();
+        obj.Add("default", new YamlScalarNode(value) { Style = QuoteStyleFor(value) });
+        obj.Add("secret", new YamlScalarNode("true"));
+        return obj;
     }
 
     /// <summary>
@@ -238,6 +242,18 @@ internal static class SpecYaml
 
         return sb.ToString();
     }
+
+    /// <summary>
+    /// Re-fences <paramref name="mapping"/> over a body that is passed through <b>byte for
+    /// byte</b> — no blank line inserted, none removed.
+    ///
+    /// <para><see cref="ToFrontmatter"/> lays a file out canonically, which is right when the
+    /// whole file is being emitted from a spec. It is wrong for a one-key patch: a file whose
+    /// body already abuts the closing fence would gain a blank line, and that line is a diff
+    /// hunk in a file the user never opened.</para>
+    /// </summary>
+    public static string ToFrontmatterOver(YamlMappingNode mapping, string body)
+        => "---\n" + SerializeMapping(mapping).TrimEnd() + "\n---\n" + body;
 
     private static YamlDotNet.Core.ScalarStyle QuoteStyleFor(string value)
     {

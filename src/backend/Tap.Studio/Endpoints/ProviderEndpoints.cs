@@ -26,6 +26,9 @@ namespace Tap.Studio.Endpoints;
 ///     ReadWrite providers. A PUT with a null value keeps whatever is stored and changes only
 ///     the secret flag, so flipping a plain value to encrypted never round-trips its clear
 ///     text through the browser.</item>
+///   <item><c>GET /{name}/source</c> / <c>PUT</c> — the store file behind a file-backed
+///     provider, for the Manage tab's Source view. Writes are validated by the provider
+///     itself, so a file it could not read back never lands on disk.</item>
 ///   <item><c>GET /api/encryption-key</c> / <c>POST /api/encryption-key/generate</c> — whether
 ///     this machine can encrypt at all, and a way to make it so. Status and generation only;
 ///     no endpoint returns or accepts a passphrase.</item>
@@ -71,7 +74,10 @@ public static class ProviderEndpoints
                     Origin: provider.Config.Origin == ProviderOrigin.System ? "system" : "workspace",
                     Settings: ProviderSettingsMask.Apply(descriptor, provider.Config.Settings),
                     VariableCount: count,
-                    Error: error));
+                    Error: error,
+                    SourcePath: provider is IFileBackedVariableProvider backed
+                        ? DisplayPath(svc.RootDirectory, backed.StorePath)
+                        : null));
             }
             return Results.Ok(summaries);
         });
@@ -275,6 +281,54 @@ public static class ProviderEndpoints
             }
         });
 
+        // --- Store source ---------------------------------------------------------------
+        //
+        // The same file the variable table writes, handed over whole. Only file-backed
+        // providers have one: a vault's contents are not a file this process may rewrite, and
+        // pretending otherwise would give the editor a document with nowhere to save to.
+
+        app.MapGet("/api/variable-providers/{name}/source", (
+            string name, string? env, WorkspaceService svc) =>
+        {
+            var (provider, failure) = ResolveFileBacked(svc, name, env);
+            if (failure is not null) return failure;
+
+            try
+            {
+                return Results.Ok(new ProviderSourceDto(
+                    Path: DisplayPath(svc.RootDirectory, provider!.StorePath),
+                    FullPath: provider.StorePath,
+                    Content: provider.ReadSource()));
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new TestProviderResultDto(false, ex.Message, 0, null));
+            }
+        });
+
+        app.MapPut("/api/variable-providers/{name}/source", (
+            string name, ProviderSourceWriteDto body, WorkspaceService svc) =>
+        {
+            var (provider, failure) = ResolveFileBacked(svc, name, body.Env);
+            if (failure is not null) return failure;
+
+            try
+            {
+                provider!.WriteSource(body.Content ?? string.Empty);
+                return Results.NoContent();
+            }
+            catch (WorkspaceParseException ex)
+            {
+                // Same shape every Source tab already renders: code, message, and the line to
+                // put the marker on.
+                return Results.BadRequest(new WorkspaceErrorDto(ex.Error.Code, ex.Error.Message, ex.Error.RelativePath, ex.Error.Line));
+            }
+            catch (Exception ex)
+            {
+                return Results.BadRequest(new TestProviderResultDto(false, ex.Message, 0, null));
+            }
+        });
+
         // --- Encryption key -------------------------------------------------------------
         //
         // Status and generation only. There is deliberately no endpoint that returns the
@@ -342,6 +396,36 @@ public static class ProviderEndpoints
                 $"Variable provider '{provider.Name}' is read-only.", null, null)));
         }
         return (provider, null);
+    }
+
+    /// <summary>Resolves a provider that keeps its state in one file, or the response
+    /// explaining why this one doesn't. Read-only-ness isn't checked: file-backed is the
+    /// stronger condition, and every provider that satisfies it today is writable.</summary>
+    private static (IFileBackedVariableProvider? Provider, IResult? Failure) ResolveFileBacked(
+        WorkspaceService svc, string name, string? env)
+    {
+        var provider = svc.CreateRegistry(env).Get(name);
+        if (provider is null)
+        {
+            return (null, Results.NotFound(new TestProviderResultDto(
+                false, $"Provider '{name}' is not registered.", 0, null)));
+        }
+        if (provider is not IFileBackedVariableProvider backed)
+        {
+            return (null, Results.BadRequest(new TestProviderResultDto(
+                false, $"Provider '{name}' ({provider.Config.Type}) doesn't keep its variables in a file, so there is no source to edit.", 0, null)));
+        }
+        return (backed, null);
+    }
+
+    /// <summary>Workspace-relative, forward-slashed — what the UI shows. Falls back to the
+    /// absolute path for a store outside the workspace, because half a path is worse than a
+    /// long one when the point is to say where the file is.</summary>
+    private static string DisplayPath(string root, string fullPath)
+    {
+        var relative = Path.GetRelativePath(root, fullPath);
+        if (relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative)) return fullPath;
+        return relative.Replace(Path.DirectorySeparatorChar, '/');
     }
 
     private static ProviderTypeDescriptorDto ToDto(ProviderTypeDescriptor d) => new(

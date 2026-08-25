@@ -1,6 +1,6 @@
 import { Alert, Button, Code, Group, Stack, Text } from '@mantine/core'
 import { IconAlertCircle, IconDeviceFloppy, IconRotateClockwise, IconTrash } from '@tabler/icons-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
 import type { WorkspaceErrorDto } from '../api/types'
 import { confirmDelete, type DeleteTarget, KIND_LABELS } from '../workspace/deleteWorkspaceItem'
@@ -21,6 +21,14 @@ interface Props {
    *  Left unset where the file is not the user's to remove from here: `workspace.tap` IS
    *  the workspace, so deleting it from a tab inside that workspace pulls the floor out. */
   deletable?: DeleteTarget
+  /** Where the content is written. Defaults to the workspace source endpoint — right for
+   *  every file the parser owns. A store that is not a workspace file (a variable provider's
+   *  `.vars/*.yml`) passes its own writer, which validates against that format instead.
+   *  Must reject invalid content by throwing, same as the default. */
+  save?: (content: string) => Promise<unknown>
+  /** Replaces the sentence under the toolbar. Pass one when "canonical YAML for this file"
+   *  is not what this source is. */
+  note?: ReactNode
 }
 
 /**
@@ -40,7 +48,7 @@ interface Props {
  * with a line number we pin a Monaco marker on that line so the squiggle + gutter
  * indicator point straight at the problem.
  */
-export function SourceTab({ path, source, label, language = 'yaml', deletable }: Props) {
+export function SourceTab({ path, source, label, language = 'yaml', deletable, save: saveOverride, note }: Props) {
   const [draft, setDraft] = useState(source)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<WorkspaceErrorDto | null>(null)
@@ -60,7 +68,7 @@ export function SourceTab({ path, source, label, language = 'yaml', deletable }:
   async function save() {
     setSaving(true); setError(null); setGenericError(null)
     try {
-      await api.saveSource(path, draft)
+      await (saveOverride ? saveOverride(draft) : api.saveSource(path, draft))
       // generation bump on the file-watcher SSE will reset `source` -> `draft` via the effect.
     } catch (e) {
       if (e instanceof ApiError && e.payload && typeof e.payload === 'object' && 'code' in e.payload) {
@@ -112,12 +120,12 @@ export function SourceTab({ path, source, label, language = 'yaml', deletable }:
         </Group>
       </Group>
       <Text size="xs" c="dimmed">
-        {language === 'http'
+        {note ?? (language === 'http'
           // A .http file has no canonical form — saying otherwise would promise a reformat
           // that will never happen, and the promise NOT to reformat is the whole contract
           // for a file shared with other tools.
           ? 'This file is the source of truth and is never reformatted by Tap. Edits are parsed server-side before being written; invalid content stays in the editor and the file on disk is untouched.'
-          : 'Canonical YAML for this file. Edits are validated server-side (parsing + schema) before being written. Invalid content stays in the editor and the file on disk is untouched.'}
+          : 'Canonical YAML for this file. Edits are validated server-side (parsing + schema) before being written. Invalid content stays in the editor and the file on disk is untouched.')}
       </Text>
 
       {error && (

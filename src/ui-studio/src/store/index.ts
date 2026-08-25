@@ -9,6 +9,15 @@ import type {
 import { envAppliesTo } from '../api/types'
 import { toCanonicalPath } from '../shell/tapFiles'
 
+/** One entry the convert-to-variable panel wrote into a file's `vars:`. See
+ *  `TapStore.declaredVars`. */
+export interface DeclaredVar {
+  /** What the `vars:` entry holds — the literal, or the `{{provider:key}}` reference that
+   *  stands in for a secret stored elsewhere. */
+  value: string
+  secret: boolean
+}
+
 /** Per-tab state that outlives the editor's mount. See `TapStore.tabState`. */
 export interface TabState {
   /**
@@ -103,6 +112,23 @@ export interface TapStore {
    */
   tabState: Record<string, TabState>
 
+  /**
+   * Variables declared into a file by something other than that file's editor — the
+   * convert-to-variable panel, which writes a `vars:` entry into whichever scope the user
+   * picked. Keyed by tab path, then by variable name.
+   *
+   * <p>The write lands on disk immediately, but that is not enough on its own. An editor for
+   * the same file re-seeds on the `generation` bump and then prefers its stored draft, which
+   * predates the declaration — so its next save would write the file back without the entry.
+   * Recording the declaration here instead of patching the draft directly makes the fix
+   * order-independent: `restoreDraft` folds these in on every seed, so it does not matter
+   * whether the draft was published before or after the declaration, or existed at all.</p>
+   *
+   * <p>Cleared when the tab stops being dirty — by then the entry is in the file the editor
+   * just saved, or in the baseline it just reverted to.</p>
+   */
+  declaredVars: Record<string, Record<string, DeclaredVar>>
+
   // -- Actions ---------------------------------------------------------------
   reload: () => Promise<void>
   setActiveEnv: (path: string | null) => void
@@ -122,6 +148,10 @@ export interface TapStore {
   setDraft: (path: string, value: unknown) => void
   /** Drop a tab's unsaved editor state — it was saved, or discarded. */
   clearDraft: (path: string) => void
+  /** Record a variable declared into `path` from outside that file's editor. */
+  declareVar: (path: string, name: string, value: DeclaredVar) => void
+  /** Forget `path`'s pending declarations — its editor has saved or discarded. */
+  clearDeclaredVars: (path: string) => void
   /** Remember one slot of a tab's view state (an open sub-tab, a body view, …). */
   setTabView: (path: string, slot: string, value: unknown) => void
   activateWorkspace: (path: string) => Promise<void>
@@ -167,6 +197,7 @@ export const useTapStore = create<TapStore>()(
       activeEnvByRoot: {},
       envByCollection: {},
       tabState: {},
+      declaredVars: {},
 
       reload: async () => {
         try {
@@ -315,6 +346,20 @@ export const useTapStore = create<TapStore>()(
         return { tabState: { ...state.tabState, [path]: { ...current, draft: undefined } } }
       }),
 
+      declareVar: (path, name, value) => set((state) => ({
+        declaredVars: {
+          ...state.declaredVars,
+          [path]: { ...state.declaredVars[path], [name]: value },
+        },
+      })),
+
+      clearDeclaredVars: (path) => set((state) => {
+        if (state.declaredVars[path] === undefined) return {}
+        const next = { ...state.declaredVars }
+        delete next[path]
+        return { declaredVars: next }
+      }),
+
       setTabView: (path, slot, value) => set((state) => {
         const current = state.tabState[path]
         if (current?.view?.[slot] === value) return {}
@@ -330,7 +375,9 @@ export const useTapStore = create<TapStore>()(
         await api.activateWorkspace(path)
         // The open tabs reference paths in the OLD workspace; clearing avoids 404 loops on
         // refetch. activeEnvByRoot is preserved so jumping back keeps your selection.
-        set({ tabs: [], activeTab: null, tabState: {} })
+        // Pending declarations go with the drafts they were waiting for — they name paths in
+        // the workspace being left, and every editor that could have consumed them is gone.
+        set({ tabs: [], activeTab: null, tabState: {}, declaredVars: {} })
         await get().reload()
       },
 

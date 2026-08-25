@@ -706,6 +706,40 @@ export interface SetVariablePayload {
   envPath?: string | null
 }
 
+/** One cascade tier the convert-to-variable panel can declare into, resolved against the
+ *  calling editor's context. `path` is null exactly when `unavailable` explains why. */
+export interface VariableTarget {
+  scope: VariableScope
+  path: string | null
+  /** The tier's own display name — the env's or collection's `name:`, not the filename. */
+  label: string | null
+  unavailable: string | null
+}
+
+/** Turns a literal typed into a field into a declared variable at `scope`. `variableProvider`
+ *  is where the value physically lands when `isSecret` — the declaration then holds a
+ *  `{{provider:key}}` reference rather than the secret itself. */
+export interface DeclareVariablePayload {
+  name: string
+  value: string
+  scope: VariableScope
+  isSecret: boolean
+  variableProvider?: string | null
+  requestPath?: string | null
+  collectionPath?: string | null
+  envPath?: string | null
+}
+
+export interface DeclareVariableResult {
+  /** What to put in the field — always the bare `{{name}}`. */
+  token: string
+  /** The file that was written. */
+  path: string
+  /** What the `vars:` entry now holds: the literal, or the reference standing in for a secret. */
+  declaredValue: string
+  providerName: string | null
+}
+
 export interface ProviderSummary {
   name: string
   type: string
@@ -718,6 +752,20 @@ export interface ProviderSummary {
   settings: Record<string, string | null>
   variableCount: number | null
   error: string | null
+  /** Workspace-relative path of the file this provider stores its variables in
+   *  (e.g. `.vars/vault.yml`); null for providers with no file — a vault, the environment.
+   *  Null is also what says there is no source to edit. */
+  sourcePath: string | null
+}
+
+/** The raw store file behind a file-backed provider — the Manage tab's Source view. */
+export interface ProviderSource {
+  /** Workspace-relative, for the editor header. */
+  path: string
+  /** Absolute — what someone backing the file up needs. */
+  fullPath: string
+  /** File text, or the skeleton an empty store would be written as when it isn't there yet. */
+  content: string
 }
 
 /** Static metadata for one provider type — drives the picker + generated settings form. */

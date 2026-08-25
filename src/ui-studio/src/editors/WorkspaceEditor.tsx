@@ -19,7 +19,7 @@ import { restoreDraft, usePublishDraft } from './useDraft'
 import { useTabView } from './useTabView'
 import {
   BrowseProviderControl, ProviderSettingsFields, ProviderTypeIcon, ProviderTypeSelect,
-  TestProviderControl, descriptorFor, useProviderTypes,
+  TestProviderControl, descriptorFor, providerFingerprint, useProviderTypes,
 } from './providerMeta'
 
 /** Workspace manifest editor — `workspace.tap`. Typed state; server emits canonical YAML. */
@@ -122,6 +122,10 @@ export function WorkspaceEditor() {
   const workspaceProviders = providers.filter(p => p.origin !== 'system')
   const isWritable = (p: ProviderConfig) =>
     (descriptorFor(providerTypes, p.type)?.mode ?? modeForProviderType(p.type)) === 'readwrite'
+  // Browse and Manage read a provider from disk, so a row the draft has changed — a new one,
+  // a rename, a different vault — has nothing (or the wrong thing) to look at until saved.
+  const savedFingerprints = new Set((savedSpec?.variableProviders ?? []).map(providerFingerprint))
+  const isProviderSaved = (p: ProviderConfig) => savedFingerprints.has(providerFingerprint(p))
   const writableProviderOptions = [
     { value: '', label: '(auto — first writable)' },
     ...providers.filter(isWritable).map(p => ({ value: p.name, label: p.name })),
@@ -213,6 +217,7 @@ export function WorkspaceEditor() {
                   types={providerTypes}
                   readOnly={p.origin === 'system'}
                   expanded={expandedRows.has(i)}
+                  unsaved={!isProviderSaved(p)}
                   onToggle={() => toggleProviderRow(i)}
                   onChange={(next) => updateProvider(i, next)}
                   onRemove={() => removeProvider(i)}
@@ -412,12 +417,14 @@ function isHttpUrl(url: string): boolean {
  *  `expanded` is owned by the parent — keeping it local would tie it to the row's mount,
  *  and any re-key (a rename) would silently collapse the row mid-edit. */
 function ProviderRow({
-  provider, types, readOnly, expanded, onToggle, onChange, onRemove,
+  provider, types, readOnly, expanded, unsaved, onToggle, onChange, onRemove,
 }: {
   provider: ProviderConfig
   types: ProviderTypeDescriptor[]
   readOnly: boolean
   expanded: boolean
+  /** This row differs from what `workspace.tap` holds — Browse would read the wrong thing. */
+  unsaved: boolean
   onToggle: () => void
   onChange: (next: ProviderConfig) => void
   onRemove: () => void
@@ -473,6 +480,7 @@ function ProviderRow({
             <BrowseProviderControl
               providerName={provider.name}
               writable={descriptor?.mode === 'readwrite'}
+              unsaved={unsaved}
             />
           )}
           {!readOnly && (
@@ -525,9 +533,15 @@ function uniqueName(type: string, existing: ProviderConfig[]): string {
 }
 
 function specFromDetail(d: WorkspaceDetail): WorkspaceSpec {
+  // The manifest's vars are pass-through here — this editor shows providers, not a vars table —
+  // so both halves of the flat wire shape have to survive the round trip. Collecting `vars`
+  // without `secrets` is what a save looked like before: every `secret: true` in workspace.tap
+  // was silently dropped, and the value stopped being masked while still being a secret.
   const vars: Record<string, string> = {}
+  const secrets: string[] = []
   for (const [k, v] of Object.entries(d.vars ?? {})) {
     if (v?.default) vars[k] = v.default
+    if (v?.secret) secrets.push(k)
   }
   return {
     id: d.id,
@@ -536,6 +550,7 @@ function specFromDetail(d: WorkspaceDetail): WorkspaceSpec {
     variableProviders: d.variableProviders && d.variableProviders.length > 0 ? d.variableProviders : undefined,
     defaultVariableProvider: d.defaultVariableProvider ?? null,
     vars: Object.keys(vars).length > 0 ? vars : undefined,
+    secrets: secrets.length > 0 ? secrets : undefined,
     tags: d.tags && d.tags.length > 0 ? d.tags : undefined,
     body: d.body && d.body.trim().length > 0 ? d.body : undefined,
     response: d.response ?? undefined,

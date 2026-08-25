@@ -130,6 +130,84 @@ public sealed class FileVariableProviderTests : IDisposable
         Assert.Equal("same-value", (await Provider("one-key", "beta").GetAsync("k", TestContext.Current.CancellationToken))!.Value);
     }
 
+    [Fact]
+    public void An_unwritten_store_still_knows_where_it_lives_and_opens_on_a_skeleton()
+    {
+        var provider = Provider("pass-1");
+
+        Assert.Equal(StorePath(), provider.StorePath);
+        Assert.False(File.Exists(provider.StorePath));
+
+        // "Nothing stored yet" is a valid state, so the source view opens on the shape a
+        // store has rather than on an error or a blank page.
+        var source = provider.ReadSource();
+        Assert.Contains("variables:", source, StringComparison.Ordinal);
+        Assert.Contains(MachineEncryptionKeySource.EnvVar, source, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Source_edits_land_as_variables_the_table_reads_back()
+    {
+        var provider = Provider("pass-1");
+        provider.WriteSource("variables:\n  base.url: https://example.test\n  retries: '3'\n");
+
+        var list = await provider.ListAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, list.Count);
+        Assert.Equal("https://example.test", (await provider.GetAsync("base.url", TestContext.Current.CancellationToken))!.Value);
+
+        // And what comes back out is what went in — the source view is the file, not a
+        // re-render of it.
+        Assert.Contains("retries: '3'", provider.ReadSource(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task A_secret_written_through_source_survives_a_source_round_trip()
+    {
+        var provider = Provider("pass-1");
+        await provider.SetAsync("api.key", "sk-live-4242", isSecret: true, TestContext.Current.CancellationToken);
+
+        // Hand-editing around an encrypted entry (renaming a plain neighbour, say) must not
+        // cost the secret: the envelope is carried across verbatim.
+        provider.WriteSource(provider.ReadSource() + "  base.url: https://example.test\n");
+
+        Assert.Equal("sk-live-4242", (await provider.GetAsync("api.key", TestContext.Current.CancellationToken))!.Value);
+        Assert.Equal("https://example.test", (await provider.GetAsync("base.url", TestContext.Current.CancellationToken))!.Value);
+    }
+
+    [Theory]
+    // A secret nobody could decrypt — clear text under a flag claiming otherwise.
+    [InlineData("variables:\n  api.key:\n    value: sk-live-typed-by-hand\n    secret: true\n", "envelope")]
+    // Typo'd key, silently dropped by a tolerant load.
+    [InlineData("variables:\n  api.key:\n    value: x\n    secrets: true\n", "unknown key")]
+    [InlineData("variables:\n  api.key:\n    secret: true\n", "no `value:`")]
+    [InlineData("variables:\n  - one\n  - two\n", "mapping")]
+    [InlineData("variables:\n  api.key: [broken\n", "not valid YAML")]
+    public async Task Source_writes_that_could_not_be_read_back_are_refused_and_change_nothing(
+        string text, string expected)
+    {
+        var provider = Provider("pass-1");
+        await provider.SetAsync("kept", "value", isSecret: false, TestContext.Current.CancellationToken);
+        var before = await File.ReadAllTextAsync(StorePath(), TestContext.Current.CancellationToken);
+
+        var ex = Assert.Throws<WorkspaceParseException>(() => provider.WriteSource(text));
+        Assert.Contains(expected, ex.Error.Message, StringComparison.OrdinalIgnoreCase);
+
+        // The refusal is the point: the file has to be exactly as it was.
+        Assert.Equal(before, await File.ReadAllTextAsync(StorePath(), TestContext.Current.CancellationToken));
+        Assert.Equal("value", (await provider.GetAsync("kept", TestContext.Current.CancellationToken))!.Value);
+    }
+
+    [Fact]
+    public async Task An_emptied_store_is_valid_source_not_a_malformed_one()
+    {
+        var provider = Provider("pass-1");
+        await provider.SetAsync("gone", "value", isSecret: false, TestContext.Current.CancellationToken);
+
+        provider.WriteSource("variables:\n");
+
+        Assert.Empty(await provider.ListAsync(TestContext.Current.CancellationToken));
+    }
+
     private sealed class MutableKeySource(string? passphrase) : IEncryptionKeySource
     {
         public string? Passphrase { get; set; } = passphrase;

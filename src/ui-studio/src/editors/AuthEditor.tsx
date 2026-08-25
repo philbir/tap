@@ -342,7 +342,7 @@ function VariableField({ label, value, onChange, hint, secret, action }: {
         {secret && <Tooltip label="Secret-bearing — use a {{var}} reference (e.g. {{env:NAME}}); the variable's `secret: true` flag keeps the value masked"><IconKey size={12} color="var(--mantine-color-yellow-7)" /></Tooltip>}
         {action && <Box ml="auto">{action}</Box>}
       </Group>
-      <VariableInput value={value} onChange={onChange} context={context} onOpenVariables={onOpenVariables} />
+      <VariableInput value={value} onChange={onChange} context={context} onOpenVariables={onOpenVariables} nameHint={label} />
       {hint && <Text size="xs" c="dimmed" mt={4}>{hint}</Text>}
     </Box>
   )

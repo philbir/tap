@@ -26,7 +26,7 @@ renaming files and rewriting refs together.
 |---|---|---|
 | `defaultEnv` | path | Env used when a run doesn't pass `--env`. |
 | `vars` | map<string, var-spec> | Lowest cascade tier. |
-| `variableProviders` | array | Declares named providers: `{ name, type, settings? }`. Types: `env` (host env vars, gated by `TAP_VARS_ALLOWED`/`TAP_SECRETS_ALLOWED`), `file` (workspace-local store, secrets encrypted), `azkv` (Azure Key Vault; settings `vaultName`, `tenantId`), `1p` (1Password CLI). A host-level `system` provider also exists (`~/.tap/system.json`). |
+| `variableProviders` | array | Declares named providers: `{ name, type, settings? }`. Types: `env` (host env vars, gated by `TAP_VARS_ALLOWED`/`TAP_SECRETS_ALLOWED`), `file` (workspace-local store, secrets encrypted), `azkv` (Azure Key Vault; settings `vaultName`, `tenantId`, `prefix`, `filter` — a regex limiting which secret names the provider exposes), `1p` (1Password CLI). A host-level `system` provider also exists (`~/.tap/system.json`). |
 | `defaultVariableProvider` | string | Provider bare `{{name}}` tokens hit first after the cascade. |
 | `response` | map | Body caps: `maxBytes` (default `2mb`) is how much of a response is delivered inline and seen by body assertions; `maxRetainedBytes` (default `64mb`) is how much the Studio holds back for "Show all" / a full download. Sizes are bytes or `kb`/`mb`/`gb` (1024-based). |
 | `history` | bool \| map | Record exchanges to `.tap-history/`. Off by default. See **History** below. Workspace tier is the weakest; a collection or request overrides it per key. Only this scope may set `orphanRetentionDays`. |

@@ -6,9 +6,11 @@ import { markdown } from '@codemirror/lang-markdown'
 import { xml } from '@codemirror/lang-xml'
 import { yaml } from '@codemirror/lang-yaml'
 import { StreamLanguage, type StreamParser, type StringStream } from '@codemirror/language'
+import type { EditorView } from '@codemirror/view'
 import { vscodeLight } from '@uiw/codemirror-theme-vscode'
 import CodeMirror, { type Extension } from '@uiw/react-codemirror'
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { codeSearch, codeSearchMatches, scrollToCodeMatch, setCodeSearch, type CodeSearchSpec } from './codeSearch'
 
 /**
  * Read-only / editable code viewer powered by CodeMirror 6. The language pack is picked
@@ -45,10 +47,17 @@ export interface CodeBlockProps {
   height?: number | string
   /** Maximum height before scrolling — only applies in autosize mode (no explicit height). */
   maxHeight?: number | string
+  /** Highlight every match of this query, emphasise `active`, and scroll it into view.
+   *  `null` clears the highlighting. See `./codeSearch`. */
+  search?: CodeSearchSpec | null
+  /** How many matches the query found in the *rendered* document — which is not the same
+   *  number as in `value` once JSON has been pretty-printed. Fires on every query and
+   *  document change. */
+  onSearchCount?: (count: number) => void
 }
 
 export function CodeBlock({
-  value, language, contentType, readOnly = true, onChange, height, maxHeight,
+  value, language, contentType, readOnly = true, onChange, height, maxHeight, search, onSearchCount,
 }: CodeBlockProps) {
   const picked = language ?? detectLanguage(contentType)
 
@@ -66,12 +75,34 @@ export function CodeBlock({
     }
   }, [picked])
 
+  // Identity has to stay stable: `@uiw/react-codemirror` reconfigures the whole editor
+  // whenever the `extensions` array changes, and the search query changes on every keystroke.
+  // The query travels as a state effect instead (below), so this array never has to move.
+  const extensions = useMemo<Extension[]>(() => [...lang, codeSearch], [lang])
+
   // For JSON, try to pretty-print the value so the user doesn't have to. We leave the
   // original text alone if it's not valid JSON.
   const display = useMemo(() => {
     if (picked !== 'json') return value
     return tryPrettyJson(value)
   }, [value, picked])
+
+  const viewRef = useRef<EditorView | null>(null)
+  const [ready, setReady] = useState(false)
+  // Kept in a ref so a caller passing an inline arrow doesn't re-run the search effect.
+  const countRef = useRef(onSearchCount)
+  countRef.current = onSearchCount
+
+  // `display` is a dependency because the document has to be current before offsets mean
+  // anything — and the child's value-sync effect runs before this parent one, so by the time
+  // we get here the editor already holds the new text.
+  useEffect(() => {
+    const view = viewRef.current
+    if (!view) return
+    view.dispatch({ effects: setCodeSearch.of(search?.source ? search : null) })
+    countRef.current?.(codeSearchMatches(view).length)
+    if (search && search.active >= 0) scrollToCodeMatch(view, search.active)
+  }, [search?.source, search?.flags, search?.active, display, ready])
 
   return (
     <CodeMirror
@@ -80,7 +111,8 @@ export function CodeBlock({
       readOnly={readOnly}
       editable={!readOnly}
       theme={vscodeLight}
-      extensions={lang}
+      extensions={extensions}
+      onCreateEditor={(view) => { viewRef.current = view; setReady(true) }}
       height={typeof height === 'number' ? `${height}px` : height}
       maxHeight={typeof maxHeight === 'number' ? `${maxHeight}px` : maxHeight}
       basicSetup={{

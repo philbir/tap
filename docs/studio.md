@@ -301,6 +301,15 @@ and binary previews), **Headers**, **Request** (exactly what went on the wire), 
 auth + variable steps taken to get there), and **Secrets** (which secret references were
 resolved — names and providers, never values).
 
+**Searching a response.** `Ctrl/Cmd+F` (or the magnifier in the response header) opens a find
+bar that applies to whichever tab you are on, with toggles for case sensitivity and regular
+expressions. On **Body** and **Request** it walks matches inside the document — `Enter` /
+`Shift+Enter` step forward and back, and the counter reads `3/74`. On **Events**, **Frames**,
+**Headers**, and **Cookies** it filters the list instead, keeping the rows that match and
+reporting `12 of 40`; sequence numbers are preserved so you keep your place in a stream. The
+query follows you across tabs and survives a re-send, so "watch this field on every run" needs
+typing once.
+
 Requests that don't define a `User-Agent` — on the request, the collection's
 `defaultHeaders`, or the auth profile — go out as `tap-studio/<version>`. Set the header
 anywhere in that chain to override it; the **Request** tab always shows the one that was sent.
@@ -706,16 +715,37 @@ The cascade, lowest precedence first:
 4. the request's own `vars`
 5. per-run overrides
 
+Any field that takes a token offers **Convert to variable** while it holds a plain literal. It
+asks two separate questions. *Where is it declared* picks the cascade tier above, and names the
+file the entry lands in before you commit. *Is it secret* decides whether the value may sit in
+that file at all: a secret goes to a writable provider instead, and the declaration keeps a
+`{{provider:key}}` reference in its place — so the `secret: true` flag and the file agree about
+what is where. Either way the field itself ends up spelling the bare `{{name}}`, which is the
+point of declaring rather than referencing the provider directly: the request reads the same in
+every environment, and repointing it at another vault is one line in one file.
+
+Only the entry is written. The rest of the target file — including its comments — is left
+exactly as it was.
+
 Providers are declared in `workspace.tap` under `variableProviders` (a workspace provider shadows a
 same-named system one):
 
 | Type | Source |
 |---|---|
 | `env` | Process environment, gated by two allowlists — `TAP_VARS_ALLOWED` (names whose values may be *shown*) and `TAP_SECRETS_ALLOWED` (names that stay masked but resolve at execute time). Both take comma-separated globs; unset means deny-everything. |
-| `file` | `.tap/.vars/<provider>.yml` in the workspace. Values marked `secret: true` are encrypted at rest with AES-256-GCM under a key derived from this machine's encryption key (`TAP_ENCRYPTION_KEY`, else `~/.tap/encryption.key`). |
-| `azkv` | Azure Key Vault, via `DefaultAzureCredential`. |
+| `file` | `.vars/<provider>.yml` in the workspace — the provider's name picks the file. Values marked `secret: true` are encrypted at rest with AES-256-GCM under a key derived from this machine's encryption key (`TAP_ENCRYPTION_KEY`, else `~/.tap/encryption.key`). |
+| `azkv` | Azure Key Vault, via `DefaultAzureCredential`. `prefix` scopes lookups to a folder of secrets; `filter` — a regex over the name — narrows a shared vault to the secrets this workspace uses, and does it for lookups and writes too, not just the listing. |
 | `1password` | 1Password, via the local [`op` CLI](https://www.1password.dev/cli), which must be installed. **Read-only** — secrets are created and rotated in 1Password itself, where the audit trail and sharing rules live. `mode` picks one of three shapes: **`environment`** — a [1Password Environment](https://www.1password.dev/environments)'s variables become the provider's (needs the beta CLI, 2.38.2-beta.01+); **`item`** — one item's *fields* become the variables, named after the field labels; **`vault`** — every item in a vault becomes a variable named after its title, valued by its `field` (default: the item's password/credential). Reads use whatever session `op` already has (desktop app integration, `op signin`) — set `serviceAccountToken` only for headless hosts. The settings form switches modes, browses your vaults, and auto-detects the `op` binary. |
 | `system` | Variables stored in Studio's own `system.json`, edited from Settings. Machine-local, outside the repo. |
+
+**Browse** looks inside a provider; **Manage** opens it as a tab and edits it. A provider whose
+whole state is one file — `file` today — names that file in the Manage header and adds a
+**Source** tab beside the variable table, for the edits a row-at-a-time table is the wrong shape
+for: renaming several keys, pasting a store from another machine, or just reading what is
+actually committed. The provider validates the text before it is written, so a store it could
+not read back never reaches disk — including a `secret: true` value typed in by hand, which
+would be clear text under a flag claiming otherwise. Secrets are encrypted by setting them in
+the variable table.
 
 Every execution records which variables and secrets were touched — provider, name, and whether
 it was secret — so the **Secrets** tab can show what a request depends on without ever

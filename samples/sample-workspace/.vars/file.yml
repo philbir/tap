@@ -3,9 +3,10 @@
 # Do NOT hand-edit secret values; they are keyed to this machine's TAP_ENCRYPTION_KEY
 # (or encryption.key). Committing this file without that key commits nothing usable.
 variables:
+  contentType:
+    value: 'enc:v1:rpOO2aaDAwvdPHpB:9zfNTDM=:MBCS3zb9RadxhSr3/TQCxg=='
+    secret: true
   foo.bar:
     value: 'enc:v1:dPcuk4IV3gIox3Sl:7enW:y6mOvjCkXhsK1CUxHLAEIA=='
     secret: true
-  foo.scoped:
-    value: 'enc:v1:oxZHyCbxO2vvPITm:X0kVpQ==:bRz7xgTZWRie1gWcoZGO5Q=='
-    secret: true
+  foo.scoped: 1234

@@ -259,6 +259,7 @@ function ValueCell({
       onOpenVariables={onOpenVariables}
       size="xs"
       staticSuggestions={staticSuggestions}
+      nameHint={row.key}
     />
   )
 }

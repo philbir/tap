@@ -58,6 +58,7 @@ import type {
   AzureSubscription,
   OnePasswordVault,
   OnePasswordDetect,
+  ProviderSource,
   ProviderSummary,
   ProviderTypeDescriptor,
   ProviderVariable,
@@ -67,11 +68,14 @@ import type {
   TestProviderResult,
   SaveSystemSettings,
   SetVariablePayload,
+  DeclareVariablePayload,
+  DeclareVariableResult,
   SseEvent,
   SystemSettings,
   TreeNode,
   WsFrame,
   VariableContext,
+  VariableTarget,
   VariableView,
   WorkspaceDetail,
   WorkspaceErrorDto,
@@ -509,6 +513,17 @@ export const api = {
   setVariable: (payload: SetVariablePayload) =>
     post<void>('/api/variables/set', payload),
 
+  /** Which file each cascade tier's `vars:` block lives in for this editor context. Drives
+   *  the convert-to-variable panel's scope picker, which names the target file up front. */
+  variableDeclareTargets: (ctx: VariableContext) =>
+    post<VariableTarget[]>('/api/variables/declare-targets', ctx),
+
+  /** Convert a literal into a declared variable: the value moves to a `vars:` entry at the
+   *  chosen scope — via a writable provider first when secret, so the file only ever holds
+   *  the reference — and the caller puts the returned token in the field. */
+  declareVariable: (payload: DeclareVariablePayload) =>
+    post<DeclareVariableResult>('/api/variables/declare', payload),
+
   // --- Providers ---------------------------------------------------------------------
 
   /** Lists the active variable providers (system + workspace). Sensitive setting values
@@ -553,6 +568,18 @@ export const api = {
     return del(
       `/api/variable-providers/${encodeURIComponent(name)}/variables/${encodeURIComponent(key)}${q}`)
   },
+
+  /** The store file behind a file-backed provider (only `file` today). 400s for a provider
+   *  whose variables don't live in a file this process may rewrite. */
+  providerSource: (name: string, env?: string | null) => {
+    const q = env ? `?env=${encodeURIComponent(env)}` : ''
+    return get<ProviderSource>(`/api/variable-providers/${encodeURIComponent(name)}/source${q}`)
+  },
+
+  /** Replace a file-backed provider's store wholesale. The provider validates the text
+   *  first, so invalid content comes back as a `WorkspaceErrorDto` and the file is untouched. */
+  saveProviderSource: (name: string, content: string, env?: string | null) =>
+    put(`/api/variable-providers/${encodeURIComponent(name)}/source`, { content, env: env ?? null }),
 
   // --- Encryption key ------------------------------------------------------------------
 

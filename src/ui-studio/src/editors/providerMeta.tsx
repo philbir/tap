@@ -6,7 +6,7 @@ import {
   IconAlertCircle, IconBrandAzure, IconEye, IconFileText, IconListSearch, IconPencil, IconPlug,
   IconPlugConnected, IconRefresh, IconSearch, IconSettings, IconShieldLock, IconTerminal2, IconX,
 } from '@tabler/icons-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import type { ProviderSettingField, ProviderTypeDescriptor, ProviderVariable, TestProviderResult } from '../api/types'
 import { providerTabPath, useTapStore } from '../store'
@@ -163,7 +163,19 @@ export function ProviderSettingsFields({
   return (
     <Stack gap="xs">
       {descriptor && fields.length === 0 && extraKeys.length === 0 && (
-        descriptor.type === 'env' ? (
+        descriptor.type === 'file' ? (
+          // "No settings" is true but unhelpful for this one: the file it writes to is
+          // derived from the provider's name, so without saying so there is nothing on
+          // screen that answers "where do my variables end up?".
+          <Alert color="gray" variant="light" icon={<IconFileText size={14} />} p="xs">
+            <Text size="xs">
+              No settings — variables are stored in{' '}
+              <Code fz="xs">.vars/{(providerName ?? '').trim() || '<name>'}.yml</Code> under the
+              workspace, and <Code fz="xs">secret</Code> values are encrypted there with this
+              machine's key.
+            </Text>
+          </Alert>
+        ) : descriptor.type === 'env' ? (
           <Alert color="gray" variant="light" icon={<IconTerminal2 size={14} />} p="xs">
             <Text size="xs">
               No settings — exposure is controlled on the host via the{' '}
@@ -516,6 +528,26 @@ function SettingInput({
   )
 }
 
+// ---- Saved-state fingerprint --------------------------------------------------------------
+
+/**
+ * Content identity of one provider config, used to tell a row that matches disk from one
+ * that only exists in the editor's draft. Settings are sorted and blank entries dropped, so
+ * clicking into a field and clearing it again doesn't read as an edit — the parser wouldn't
+ * see a difference either.
+ */
+export function providerFingerprint(p: {
+  name: string
+  type: string
+  settings: Record<string, string | null>
+}): string {
+  const settings = Object.keys(p.settings)
+    .sort()
+    .filter((k) => (p.settings[k] ?? '') !== '')
+    .map((k) => `${k}\u001f${p.settings[k]}`)
+  return [p.name.trim(), p.type, ...settings].join('\u001e')
+}
+
 // ---- Test button ------------------------------------------------------------------------
 
 /**
@@ -584,14 +616,38 @@ export function TestProviderControl({
  * <p>A quick look while configuring something else — which is why it stays a drawer. Actually
  * changing what's in there is editing, and editing happens in a tab like every other editor:
  * pass <c>writable</c> to surface the button that opens it.</p>
+ *
+ * <p>Both buttons read the provider <b>as it is stored</b> — the server builds it from the
+ * saved config, not from whatever the form currently holds. So while the editor has unsaved
+ * changes to this row they're replaced by a note saying so: a Browse that silently answers
+ * from the previous vault name, or 404s for a provider that only exists in the draft, is
+ * worse than no button at all.</p>
  */
-export function BrowseProviderControl({ providerName, env, writable }: {
+export function BrowseProviderControl({ providerName, env, writable, unsaved }: {
   providerName: string
   env?: string | null
   writable?: boolean
+  /** This provider's config differs from what's on disk — including not being there yet. */
+  unsaved?: boolean
 }) {
   const [opened, { open, close }] = useDisclosure(false)
   const openTab = useTapStore((s) => s.openTab)
+
+  if (unsaved) {
+    return (
+      <Tooltip
+        label="Browse reads the provider as it is stored on disk. Save to look inside this one."
+        withArrow
+        multiline
+        maw={280}
+      >
+        <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap', cursor: 'default' }}>
+          save to browse
+        </Text>
+      </Tooltip>
+    )
+  }
+
   return (
     <>
       {writable && (
@@ -625,6 +681,7 @@ function BrowseDrawerBody({ providerName, env }: { providerName: string; env?: s
   const [loading, setLoading] = useState(false)
   const [revealed, setRevealed] = useState<Record<string, string>>({})
   const [revealBusy, setRevealBusy] = useState<string | null>(null)
+  const [query, setQuery] = useState('')
 
   async function load(refresh: boolean) {
     setLoading(true); setError(null)
@@ -638,6 +695,19 @@ function BrowseDrawerBody({ providerName, env }: { providerName: string; env?: s
 
   useEffect(() => { void load(false) }, [providerName]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Name first, and plain values too — a vault listing is names only, but a file or env
+  // provider is often searched for the value ("who has localhost:5173 in it?"). Revealed
+  // secrets stay out of it: typing a fragment of a secret to find its row would be a
+  // strange way to use this, and matching on it would make the drawer an oracle.
+  const visible = useMemo(() => {
+    if (!rows) return null
+    const q = query.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter((r) =>
+      r.name.toLowerCase().includes(q)
+      || (!r.isSecret && (r.value ?? '').toLowerCase().includes(q)))
+  }, [rows, query])
+
   async function reveal(name: string) {
     setRevealBusy(name)
     try {
@@ -650,9 +720,10 @@ function BrowseDrawerBody({ providerName, env }: { providerName: string; env?: s
 
   return (
     <Stack gap="sm">
-      <Group justify="space-between">
+      <Group justify="space-between" wrap="nowrap" align="flex-start">
         <Text size="xs" c="dimmed">
-          {rows ? `${rows.length} variable(s).` : ''} Secret values stay masked until you reveal them per row.
+          {rows ? countLabel(rows.length, visible?.length ?? 0, query) : ''} Secret values stay masked
+          until you reveal them per row.
         </Text>
         <Button
           size="xs" variant="default"
@@ -664,13 +735,30 @@ function BrowseDrawerBody({ providerName, env }: { providerName: string; env?: s
         </Button>
       </Group>
 
+      <TextInput
+        size="xs"
+        placeholder="Search names and plain values…"
+        leftSection={<IconSearch size={13} />}
+        rightSection={query ? (
+          <ActionIcon size="sm" variant="subtle" color="gray" onClick={() => setQuery('')} aria-label="Clear search">
+            <IconX size={13} />
+          </ActionIcon>
+        ) : null}
+        value={query}
+        onChange={(e) => setQuery(e.currentTarget.value)}
+        disabled={!rows || rows.length === 0}
+        styles={{ input: { fontFamily: 'var(--mono)' } }}
+      />
+
       {error && <Alert color="red" variant="light" icon={<IconAlertCircle size={14} />} p="xs"><Text size="xs">{error}</Text></Alert>}
 
       {rows === null && !error ? (
         <Group justify="center" py="lg"><Loader size="sm" /></Group>
       ) : rows && rows.length === 0 ? (
         <Text size="sm" c="dimmed" ta="center" py="md">This provider has no variables right now.</Text>
-      ) : rows && (
+      ) : visible && visible.length === 0 ? (
+        <Text size="sm" c="dimmed" ta="center" py="md">Nothing matches “{query.trim()}”.</Text>
+      ) : visible && (
         <Table verticalSpacing={4} horizontalSpacing="sm" withRowBorders={false}>
           <Table.Thead>
             <Table.Tr>
@@ -680,7 +768,7 @@ function BrowseDrawerBody({ providerName, env }: { providerName: string; env?: s
             </Table.Tr>
           </Table.Thead>
           <Table.Tbody>
-            {rows.map((r) => {
+            {visible.map((r) => {
               const shown = revealed[r.name]
               return (
                 <Table.Tr key={r.name}>
@@ -721,4 +809,11 @@ function BrowseDrawerBody({ providerName, env }: { providerName: string; env?: s
       )}
     </Stack>
   )
+}
+
+/** "12 variable(s)." — or "3 of 12" once a search narrows the list, so a short list reads as
+ *  filtered rather than as everything the provider holds. */
+function countLabel(total: number, shown: number, query: string): string {
+  if (query.trim() === '') return `${total} variable(s).`
+  return `${shown} of ${total} variable(s).`
 }

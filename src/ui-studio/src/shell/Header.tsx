@@ -5,6 +5,7 @@ import { IconBook, IconBrandGit, IconBrandGithub, IconCheck, IconChevronDown, Ic
 import { useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
 import { MANIFEST_TAB_PATH, useActiveCollection, useEnvSelection, useTapStore } from '../store'
+import { isDesktop } from '../desktop/desktopUpdater'
 import { DirectoryPicker } from './DirectoryPicker'
 import { fileNameFor } from './tapFiles'
 
@@ -272,7 +273,7 @@ export function Header({ rightAction }: Props) {
           />
         </Group>
 
-        {isPinned && <DesktopAppLink />}
+        {!isDesktop() && <DesktopAppLink />}
 
         <Divider orientation="vertical" />
 
@@ -408,18 +409,17 @@ function BrandMenu({ version }: { version: string | null }) {
 const STUDIO_INSTALL_URL = 'https://philbir.github.io/tap/#studio-install'
 
 /**
- * Desktop-app pointer, shown only when an Aspire AppHost is hosting this Studio.
+ * Desktop-app pointer, shown in every browser-hosted Studio — Aspire, Docker, or a
+ * hand-started server alike. All of them live in a tab that dies with the process hosting
+ * it, and the desktop app opens the same workspace without that process having to be up.
  *
- * That is the one context where the recommendation is unambiguous: a Studio started by an
- * AppHost lives in a browser tab that dies with `aspire run`, and its workspace is a folder in
- * the repo the developer already has checked out. The desktop app opens the same workspace
- * without the AppHost having to be up. Outside aspire mode the user already chose how they
- * launched Studio, and advertising at them would just be noise.
+ * The one context where it is hidden is the desktop app itself: recommending the download
+ * the user is already running would be noise.
  */
 function DesktopAppLink() {
   return (
     <Tooltip
-      label="Tap Studio also ships as a desktop app — same workspace, no AppHost required."
+      label="Tap Studio also ships as a desktop app — same workspace, no server to keep running."
       withArrow
       multiline
       w={260}

@@ -106,6 +106,46 @@ public sealed record RunTestRequestDto(
     /// without breaking what a later step depends on.</summary>
     string? Filter = null);
 
-public sealed record TlsCertificateDto(string Subject, string Issuer, string Thumbprint, DateTime NotBefore, DateTime NotAfter, string SerialNumber);
+/// <summary>One verdict the chain builder (or the SSL policy) reached, kept split so a UI can
+/// name the fault — <c>NotTimeValid</c> — separately from the sentence that explains it.</summary>
+public sealed record TlsStatusDto(string Code, string Description);
 
-public sealed record TlsDiagnosisDto(string Url, bool Valid, string? Error, IReadOnlyList<TlsCertificateDto> Certificates, IReadOnlyList<string> Errors);
+/// <summary>A single named check with a traffic-light verdict. Computed server-side so both the
+/// Studio and any other front end agree on what "trusted" means; <c>State</c> is one of
+/// <c>ok</c> / <c>fail</c> / <c>warn</c> / <c>unknown</c>.</summary>
+public sealed record TlsCheckDto(string Id, string Label, string State, string? Detail);
+
+/// <summary>One certificate in the chain the server presented. <see cref="Errors"/> is that
+/// element's own chain status rather than the whole chain's — which is what lets a report point
+/// at the certificate that is actually wrong instead of colouring every card red.</summary>
+public sealed record TlsCertificateDto(
+    string Subject,
+    string Issuer,
+    string Thumbprint,
+    DateTime NotBefore,
+    DateTime NotAfter,
+    string SerialNumber,
+    /// <summary>Leaf-first index within the presented chain (0 = the server's own certificate).</summary>
+    int Index = 0,
+    string? CommonName = null,
+    IReadOnlyList<string>? DnsNames = null,
+    string? SignatureAlgorithm = null,
+    string? KeyAlgorithm = null,
+    int? KeySizeBits = null,
+    bool SelfSigned = false,
+    IReadOnlyList<TlsStatusDto>? Errors = null);
+
+public sealed record TlsDiagnosisDto(
+    string Url,
+    bool Valid,
+    string? Error,
+    IReadOnlyList<TlsCertificateDto> Certificates,
+    IReadOnlyList<TlsStatusDto> Errors,
+    string? Host = null,
+    int? Port = null,
+    /// <summary>Negotiated protocol, already spelled the way people say it ("TLS 1.3").</summary>
+    string? Protocol = null,
+    string? CipherSuite = null,
+    /// <summary>The named checks — hostname, expiry, trust, revocation — in display order.</summary>
+    IReadOnlyList<TlsCheckDto>? Checks = null,
+    long? HandshakeMs = null);

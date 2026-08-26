@@ -6,6 +6,7 @@
 // Usage:
 //   node src/desktop/scripts/compile-server.mjs              # host triple
 //   node src/desktop/scripts/compile-server.mjs aarch64-apple-darwin
+//   TAP_VERSION=0.7.3 node src/desktop/scripts/compile-server.mjs   # stamped build
 //
 // Requires: .NET 10 SDK (matches global.json), Node 20+. No bash required —
 // the GitHub Actions Windows runner can invoke this without WSL.
@@ -55,6 +56,29 @@ const detectHostTriple = () => {
   throw new Error(`Unsupported host: ${process.platform}/${process.arch}`);
 };
 
+/**
+ * Version stamped into the sidecar assembly, or null to leave it at the
+ * Directory.Build.props fallback (`0.1.0-local`).
+ *
+ * The sidecar *is* the server the desktop app talks to, so its
+ * AssemblyInformationalVersion is what `/api/workspace` reports and what the brand
+ * menu's version line shows. Without this the shipped app always claimed
+ * `0.1.0-local`, because sync-version.mjs only touches the Tauri-side files and
+ * runs in the bundle job, long after this one has published the binary.
+ *
+ * Non-SemVer values are ignored rather than passed through: the desktop workflow
+ * hands us `github.ref_name`, which is a branch name on workflow_dispatch and
+ * would fail the build as an assembly version.
+ */
+const SEMVER = /^[0-9]+\.[0-9]+\.[0-9]+([-+].+)?$/;
+const resolveVersion = () => {
+  const requested = process.env.TAP_VERSION?.trim();
+  if (!requested) return null;
+  if (SEMVER.test(requested)) return requested;
+  console.log(`[tap-studio] ignoring non-SemVer TAP_VERSION=${requested}; using the local fallback`);
+  return null;
+};
+
 const triple = process.argv[2] ?? detectHostTriple();
 const entry = TRIPLE_MAP[triple];
 if (!entry) {
@@ -63,6 +87,7 @@ if (!entry) {
   process.exit(2);
 }
 
+const version = resolveVersion();
 const publishDir = resolve(repoRoot, `artifacts/studio/${entry.rid}`);
 const sidecarName = `tap-studio-${triple}${entry.ext}`;
 const sidecarPath = resolve(sidecarDir, sidecarName);
@@ -72,6 +97,7 @@ console.log(`[tap-studio] publishing sidecar`);
 console.log(`             triple : ${triple}`);
 console.log(`             rid    : ${entry.rid}`);
 console.log(`             output : ${sidecarPath}`);
+console.log(`             version: ${version ?? "0.1.0-local (unstamped)"}`);
 
 // 1. dotnet publish
 mkdirSync(publishDir, { recursive: true });
@@ -86,6 +112,7 @@ const dotnet = spawnSync(
     entry.rid,
     "--output",
     publishDir,
+    ...(version ? [`-p:Version=${version}`] : []),
   ],
   { stdio: "inherit" },
 );

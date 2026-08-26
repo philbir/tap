@@ -1,0 +1,10 @@
+---
+kind: collection
+id: 01a03f5c-3083-77ea-9c68-978f86813490
+name: Bad TLS
+baseUrl: https://expired.badssl.com
+---
+
+Endpoints that fail TLS validation on purpose, for exercising the response pane's error
+card and the TLS diagnosis dialog. Every host here is one of badssl.com's public test
+endpoints — nothing in this collection ever returns a body.

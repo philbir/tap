@@ -1,0 +1,8 @@
+---
+kind: request
+name: Untrusted root
+---
+
+```http
+GET https://untrusted-root.badssl.com/
+```

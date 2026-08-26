@@ -5,14 +5,16 @@ import {
   IconAlertCircle, IconAlertTriangle, IconExternalLink, IconPlayerPlayFilled, IconPlayerStopFilled,
   IconTrash,
 } from '@tabler/icons-react'
+import { notifications } from '@mantine/notifications'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
-import type { HttpRequestSummary, TreeNode, VariableContext, WorkspaceErrorDto } from '../api/types'
+import type { HttpRequestSummary, TlsDiagnosis, TreeNode, VariableContext, WorkspaceErrorDto } from '../api/types'
 import { useEffectiveEnv, useTapStore } from '../store'
 import { confirmDelete } from '../workspace/deleteWorkspaceItem'
 import { CollectionLinkChip } from './CollectionLinkChip'
 import { EditorShell } from './EditorShell'
 import { ResponsePanel } from './ResponsePanel'
+import { TlsDiagnosisModal } from './TlsDiagnosisModal'
 import { SourceCodeEditor } from './SourceCodeEditor'
 import { restoreDraft, usePublishDraft } from './useDraft'
 import { useExecution } from './useExecution'
@@ -62,6 +64,8 @@ export function HttpFileEditor({ path }: Props) {
   const [warnings, setWarnings] = useState<WorkspaceErrorDto[]>([])
   const [reveal, setReveal] = useState<{ line: number; nonce: number } | null>(null)
   const revealNonce = useRef(0)
+  const [diagnosis, setDiagnosis] = useState<TlsDiagnosis | null>(null)
+  const [diagnosing, setDiagnosing] = useState(false)
 
   // Keyed by tab path: the response (and a stream still arriving) survives a trip to another
   // tab. `sentPath` names which of the file's requests produced what is on screen.
@@ -177,6 +181,22 @@ export function HttpFileEditor({ path }: Props) {
     })
   }
 
+  /** Diagnose whichever request produced the failure on screen — not the file, which has no
+   *  single URL of its own. Falls back to the file path so the call still renders something
+   *  when nothing has been sent yet. */
+  async function diagnoseTls() {
+    setDiagnosing(true)
+    try { setDiagnosis(await api.diagnoseTls(sentPath ?? path, env, undefined, dirty ? draft : undefined)) }
+    catch (e) {
+      notifications.show({
+        title: 'TLS diagnosis failed',
+        message: e instanceof Error ? e.message : String(e),
+        color: 'red',
+      })
+    }
+    finally { setDiagnosing(false) }
+  }
+
   function revealRequest(request: HttpRequestSummary) {
     revealNonce.current += 1
     setReveal({ line: request.line, nonce: revealNonce.current })
@@ -185,6 +205,7 @@ export function HttpFileEditor({ path }: Props) {
   const sentRequest = requests.find((r) => r.path === sentPath) ?? null
 
   return (
+    <>
     <EditorShell
       title={fileName}
       kindLabel="HTTP file"
@@ -213,6 +234,8 @@ export function HttpFileEditor({ path }: Props) {
             onStop={sending ? stop : undefined}
             requestPath={sentPath ?? path}
             requestName={sentRequest?.name ?? fileName}
+            onDiagnoseTls={() => void diagnoseTls()}
+            diagnosingTls={diagnosing}
             onClose={clear}
           />
         ) : undefined
@@ -367,5 +390,7 @@ export function HttpFileEditor({ path }: Props) {
         )}
       </Stack>
     </EditorShell>
+    <TlsDiagnosisModal diagnosis={diagnosis} onClose={() => setDiagnosis(null)} />
+    </>
   )
 }

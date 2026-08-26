@@ -346,8 +346,10 @@ export const api = {
   execute: (path: string, env: string | null, overrides?: Record<string, string>) =>
     post<ExecutionResult>('/api/execute', { path, env, overrides }),
 
-  diagnoseTls: (path: string, env: string | null, spec?: RequestSpec) =>
-    post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, spec }),
+  /** Open a TLS connection to whatever this request resolves to and report on it, without
+   *  sending the request. `source` carries an unsaved `.http` file the same way Send does. */
+  diagnoseTls: (path: string, env: string | null, spec?: RequestSpec, source?: string) =>
+    post<TlsDiagnosis>('/api/execute/tls-diagnose', { path, env, spec, source }),
 
   /** Fetch more of a response the panel showed truncated. `max` is a byte ceiling — the
    *  server clamps it to what it actually retained (and to its own text ceiling). The

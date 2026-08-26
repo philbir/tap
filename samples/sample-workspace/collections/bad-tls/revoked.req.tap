@@ -1,0 +1,11 @@
+---
+kind: request
+id: 01a03f67-6a4b-74a9-bd63-ad7071d34eff
+name: Revoked
+transport:
+  ignoreTlsErrors: true
+---
+
+```http
+GET https://revoked.badssl.com/
+```

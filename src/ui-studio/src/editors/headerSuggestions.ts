@@ -80,6 +80,8 @@ export const COMMON_HEADER_NAMES: readonly string[] = [
   'X-HTTP-Method-Override',
   // GraphQL / app conventions
   'GraphQL-Operation-Name',
+  // SOAP
+  'SOAPAction',
   // Websocket
   'Sec-WebSocket-Protocol',
   'Sec-WebSocket-Version',
@@ -109,6 +111,8 @@ const HEADER_VALUE_MAP: Record<string, string[]> = {
     'application/octet-stream',
     'application/graphql',
     'application/json; charset=utf-8',
+    'text/xml; charset=utf-8',
+    'application/soap+xml; charset=utf-8',
   ],
   'accept-encoding': [
     'gzip',

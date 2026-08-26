@@ -4,7 +4,7 @@
  * picks the right editor surface (raw textarea, form table, multipart table, binary
  * dropzone) and, when changing modes, proposes a Content-Type header to match.
  */
-export type BodyMode = 'none' | 'form-urlencoded' | 'multipart' | 'raw' | 'binary' | 'graphql'
+export type BodyMode = 'none' | 'form-urlencoded' | 'multipart' | 'raw' | 'binary' | 'graphql' | 'soap'
 
 /** Sub-type inside the {@link BodyMode} `raw` family. Drives both Content-Type and the
  *  editor language hint (JSON pretty-print / XML highlighting / plain text). */
@@ -17,6 +17,7 @@ export const BODY_MODE_LABELS: Record<BodyMode, string> = {
   'raw': 'Raw',
   'binary': 'Binary',
   'graphql': 'GraphQL',
+  'soap': 'SOAP',
 }
 
 export const BODY_MODE_HINT: Record<BodyMode, string> = {
@@ -26,6 +27,7 @@ export const BODY_MODE_HINT: Record<BodyMode, string> = {
   'raw': 'Raw body. Pick JSON / Text / XML for the right Content-Type and editor.',
   'binary': 'Send a file as the request body. Pick a content type for the upload.',
   'graphql': 'GraphQL query/mutation. Sent as JSON.',
+  'soap': 'SOAP 1.1 envelope built from an operation name and its XML payload.',
 }
 
 /** Stable boundary string used by the multipart serializer. Fixed so saving + reloading
@@ -49,6 +51,7 @@ export function contentTypeForBodyMode(mode: BodyMode, raw: RawSubType = 'json')
         : 'text/plain'
     case 'binary': return 'application/octet-stream'
     case 'graphql': return 'application/json'
+    case 'soap': return 'text/xml; charset=utf-8'
   }
 }
 
@@ -61,7 +64,7 @@ export function detectBodyMode(contentType: string | null | undefined, body: str
   if (ct.includes('multipart/form-data')) return 'multipart'
   if (ct.includes('x-www-form-urlencoded')) return 'form-urlencoded'
   if (ct.includes('json')) return looksLikeGraphql(body) ? 'graphql' : 'raw'
-  if (ct.includes('xml')) return 'raw'
+  if (ct.includes('xml')) return looksLikeSoap(body) ? 'soap' : 'raw'
   if (ct.startsWith('text/')) return 'raw'
   // Anything else with a media type (image/*, audio/*, video/*, application/pdf,
   // application/octet-stream, application/zip, …) is a binary upload. The Raw editor
@@ -236,4 +239,216 @@ export function serializeGraphQLBody(parts: GraphQLBody): string {
   }
   if (parts.operationName) out.operationName = parts.operationName
   return JSON.stringify(out, null, 2)
+}
+
+// -------------------------------- SOAP ------------------------------------------------
+
+/** Envelope namespace for SOAP 1.1 — the version Tap authors. */
+export const SOAP_11_NS = 'http://schemas.xmlsoap.org/soap/envelope/'
+/** Envelope namespace for SOAP 1.2. Tap never writes this itself, but it recognises and
+ *  preserves it so pasting a 1.2 envelope doesn't silently rewrite it as 1.1. */
+export const SOAP_12_NS = 'http://www.w3.org/2003/05/soap-envelope'
+
+/**
+ * A SOAP request split into the two parts the Body tab edits — the operation element
+ * inside `<soap:Body>` and its inner XML — plus the envelope scaffolding around them.
+ * The scaffolding fields are captured verbatim rather than regenerated so a hand-written
+ * or pasted envelope survives a round-trip through the editor unchanged.
+ */
+export interface SoapBody {
+  /** Name of the operation element inside `<soap:Body>`, e.g. `GetWeather`. Carries its
+   *  prefix when the envelope uses one (`m:GetWeather`). */
+  operation: string
+  /** Default namespace on the operation element (`xmlns="…"`) — the WSDL's target
+   *  namespace, which nearly every service requires. Empty when absent. */
+  namespace: string
+  /** Inner XML of the operation element: the operation's arguments, dedented. */
+  payload: string
+  /** Attributes on the operation element other than the default `xmlns`, kept verbatim. */
+  attributes: string
+  /** The whole `<soap:Header>…</soap:Header>` block, verbatim; empty when there is none.
+   *  Tap never authors one, but a WS-Security header must not vanish on save. */
+  header: string
+  /** Envelope namespace found in the body — {@link SOAP_11_NS} unless it says otherwise. */
+  envelopeNs: string
+  /** Prefix bound to the envelope namespace (`soap`, `soapenv`, `s`). Empty means the
+   *  envelope declares SOAP as its default namespace instead of using a prefix. */
+  prefix: string
+}
+
+export function emptySoapBody(): SoapBody {
+  return { operation: '', namespace: '', payload: '', attributes: '', header: '', envelopeNs: SOAP_11_NS, prefix: 'soap' }
+}
+
+const SOAP_ENVELOPE_OPEN = /<(?:([\w.-]+):)?Envelope\b([^>]*)>/i
+const SOAP_HEADER_BLOCK = /<(?:[\w.-]+:)?Header\b[^>]*\/>|<(?:[\w.-]+:)?Header\b[^>]*>[\s\S]*?<\/(?:[\w.-]+:)?Header\s*>/i
+// Greedy on purpose: the envelope has exactly one Body, so the *last* closing tag is the
+// right one even when the payload nests an element that happens to be called `Body`.
+const SOAP_BODY_BLOCK = /<(?:[\w.-]+:)?Body\b[^>]*>([\s\S]*)<\/(?:[\w.-]+:)?Body\s*>/i
+const SOAP_OP_SELF_CLOSING = /^<([\w.:-]+)((?:\s[^>]*?)?)\/>$/
+const SOAP_OP_PAIRED = /^<([\w.:-]+)((?:\s[^>]*?)?)>([\s\S]*)<\/\1\s*>$/
+const XMLNS_DEFAULT = /(^|\s)xmlns\s*=\s*"([^"]*)"/i
+
+/** True when the body is a SOAP envelope. Both an `Envelope` element *and* one of the two
+ *  SOAP namespaces are required — plain XML with an `<Envelope>` root is not SOAP. */
+export function looksLikeSoap(body: string): boolean {
+  if (!body) return false
+  if (!SOAP_ENVELOPE_OPEN.test(body)) return false
+  return body.includes(SOAP_11_NS) || body.includes(SOAP_12_NS)
+}
+
+/** Parse a SOAP envelope into its editable parts. Deliberately regex-based rather than
+ *  `DOMParser`: bodies here carry unexpanded `{{var}}` tokens and are often mid-edit, and
+ *  a strict parse would throw away the user's text on the first unbalanced tag. Anything
+ *  that isn't an envelope becomes the payload, so switching in from Raw/XML keeps the XML. */
+export function parseSoapBody(body: string): SoapBody {
+  const out = emptySoapBody()
+  if (!body.trim()) return out
+
+  const envelope = SOAP_ENVELOPE_OPEN.exec(body)
+  if (!envelope) return { ...out, payload: dedentXml(body) }
+
+  out.prefix = envelope[1] ?? ''
+  const envelopeAttrs = envelope[2] ?? ''
+  const nsPattern = out.prefix
+    ? new RegExp(`xmlns:${escapeRegExp(out.prefix)}\\s*=\\s*"([^"]*)"`, 'i')
+    : /(?:^|\s)xmlns\s*=\s*"([^"]*)"/i
+  out.envelopeNs = nsPattern.exec(envelopeAttrs)?.[1] ?? SOAP_11_NS
+  out.header = dedentTailXml(SOAP_HEADER_BLOCK.exec(body)?.[0] ?? '')
+
+  // Keep the raw slice around: `dedentXml` needs the first line's original indentation to
+  // work out the common depth, and trimming would have thrown it away.
+  const innerRaw = SOAP_BODY_BLOCK.exec(body)?.[1] ?? ''
+  const inner = innerRaw.trim()
+  if (!inner) return out
+
+  const selfClosing = SOAP_OP_SELF_CLOSING.exec(inner)
+  const paired = selfClosing ? null : SOAP_OP_PAIRED.exec(inner)
+  const operation = selfClosing ?? paired
+  // No single wrapping element (empty Body, or several top-level elements) — there is no
+  // operation to name, so the whole thing stays in the payload editor.
+  if (!operation) return { ...out, payload: dedentXml(innerRaw) }
+
+  out.operation = operation[1]
+  const attrs = operation[2] ?? ''
+  const defaultNs = XMLNS_DEFAULT.exec(attrs)
+  out.namespace = defaultNs?.[2] ?? ''
+  out.attributes = (defaultNs ? attrs.replace(defaultNs[0], ' ') : attrs).trim()
+  out.payload = paired ? dedentXml(paired[3]) : ''
+  return out
+}
+
+/** Render the parts back into a full envelope. Always emits an envelope — even an empty
+ *  one — so the Body tab's mode selector stays on SOAP after a round-trip through
+ *  {@link detectBodyMode}. */
+export function serializeSoapBody(parts: SoapBody): string {
+  const { prefix } = parts
+  const qualify = (name: string) => (prefix ? `${prefix}:${name}` : name)
+  const ns = parts.envelopeNs || SOAP_11_NS
+  const xmlnsAttr = prefix ? `xmlns:${prefix}="${ns}"` : `xmlns="${ns}"`
+
+  const lines = [`<${qualify('Envelope')} ${xmlnsAttr}>`]
+  if (parts.header.trim()) lines.push(indentXml(parts.header.trim(), 2))
+  lines.push(`  <${qualify('Body')}>`)
+
+  const operation = parts.operation.trim()
+  const payload = parts.payload.trim()
+  if (operation) {
+    const attrs = [parts.namespace.trim() ? `xmlns="${parts.namespace.trim()}"` : '', parts.attributes.trim()]
+      .filter(Boolean)
+      .join(' ')
+    const openTag = attrs ? `<${operation} ${attrs}` : `<${operation}`
+    if (payload) {
+      lines.push(indentXml(`${openTag}>`, 4), indentXml(payload, 6), indentXml(`</${operation}>`, 4))
+    } else {
+      lines.push(indentXml(`${openTag} />`, 4))
+    }
+  } else if (payload) {
+    lines.push(indentXml(payload, 4))
+  }
+
+  lines.push(`  </${qualify('Body')}>`, `</${qualify('Envelope')}>`)
+  return lines.join('\n')
+}
+
+/** Strip the common leading indentation (and surrounding blank lines) off an XML fragment
+ *  so it reads flush-left in its own editor, whatever depth it sat at in the envelope. */
+function dedentXml(xml: string): string {
+  const lines = xml.replace(/\s+$/, '').split(/\r?\n/)
+  while (lines.length > 0 && lines[0].trim() === '') lines.shift()
+  const widths = lines.filter((l) => l.trim() !== '').map((l) => (/^[ \t]*/.exec(l)?.[0] ?? '').length)
+  const common = widths.length > 0 ? Math.min(...widths) : 0
+  return lines.map((l) => l.slice(common)).join('\n')
+}
+
+/** Dedent a block whose first line already sits at column 0 because the match that
+ *  produced it started at the `<`. The remaining lines are still at their envelope depth,
+ *  so they are shifted by *their* common indentation instead. */
+function dedentTailXml(xml: string): string {
+  const lines = xml.split(/\r?\n/)
+  if (lines.length < 2) return xml
+  const widths = lines.slice(1).filter((l) => l.trim() !== '').map((l) => (/^[ \t]*/.exec(l)?.[0] ?? '').length)
+  const common = widths.length > 0 ? Math.min(...widths) : 0
+  return [lines[0], ...lines.slice(1).map((l) => l.slice(common))].join('\n')
+}
+
+function indentXml(xml: string, spaces: number): string {
+  const pad = ' '.repeat(spaces)
+  return xml.split('\n').map((l) => (l.trim() === '' ? '' : pad + l)).join('\n')
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// -------------------------------- Content-Type origin --------------------------------
+
+/**
+ * Where the request's `Content-Type` header came from.
+ *
+ * `auto` — the Body tab produced it: it is exactly what {@link contentTypeForBodyMode}
+ * emits for the current mode, so switching modes will rewrite it and the Headers tab
+ * marks it as managed rather than hand-written.
+ *
+ * `override` — a Content-Type is present but differs from the mode default, i.e. the user
+ * typed it (`application/vnd.api+json`, a charset parameter, a vendor media type). Tap
+ * leaves it alone until the body mode is switched.
+ */
+export type ContentTypeOrigin = 'auto' | 'override'
+
+/** Modes whose Content-Type is fully determined by the mode (and, for `raw`, its sub-type).
+ *  `binary` is deliberately absent: its content type is the uploaded file's MIME, edited in
+ *  the Body tab's own field, so *any* value there is still "what the body says". */
+const FIXED_CONTENT_TYPE_MODES: ReadonlySet<BodyMode> = new Set<BodyMode>([
+  'form-urlencoded', 'multipart', 'raw', 'graphql', 'soap',
+])
+
+/** Case- and whitespace-insensitive comparison key for a media type. `application/json;
+ *  charset=utf-8` and `application/json;charset=UTF-8` are the same header. */
+function contentTypeKey(contentType: string): string {
+  return contentType
+    .split(';')
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 0)
+    .join(';')
+}
+
+/** True when two Content-Type strings mean the same thing on the wire. */
+export function sameContentType(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return !a && !b
+  return contentTypeKey(a) === contentTypeKey(b)
+}
+
+/**
+ * Classify the request's current Content-Type against what {@link contentTypeForBodyMode}
+ * would set for `mode`/`raw`. Modes outside {@link FIXED_CONTENT_TYPE_MODES} never report
+ * `override` — nothing is being overridden when the mode has no opinion of its own.
+ */
+export function contentTypeOrigin(
+  contentType: string | null | undefined,
+  mode: BodyMode,
+  raw: RawSubType,
+): ContentTypeOrigin {
+  if (!FIXED_CONTENT_TYPE_MODES.has(mode)) return 'auto'
+  return sameContentType(contentType, contentTypeForBodyMode(mode, raw)) ? 'auto' : 'override'
 }

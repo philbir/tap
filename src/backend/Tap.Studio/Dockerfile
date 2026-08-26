@@ -32,9 +32,14 @@ COPY src/backend/Tap.Execution/ ./src/Tap.Execution/
 COPY src/backend/Tap.Studio.Mcp/ ./src/Tap.Studio.Mcp/
 COPY src/backend/Tap.Studio/ ./src/Tap.Studio/
 COPY --from=ui /ui/dist ./src/Tap.Studio/wwwroot/
+# Release tag, stamped into the assembly so /api/workspace (and the brand menu's
+# version line, and the User-Agent) report it. Empty for an unstamped local build,
+# which falls back to Directory.Build.props' 0.1.0-local.
+ARG VERSION=
 RUN dotnet publish src/Tap.Studio/Tap.Studio.csproj \
         -c Release -o /app \
-        -p:SkipStudioUiBuild=true
+        -p:SkipStudioUiBuild=true \
+        ${VERSION:+-p:Version=$VERSION}
 
 # 3) Runtime — the same ASP.NET Core base the inspector image uses.
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

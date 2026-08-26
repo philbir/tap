@@ -284,7 +284,7 @@ The request editor is one URL bar plus seven tabs:
 |---|---|
 | **Params** | Query string, edited as key/value rows. Kept in sync with the URL bar. |
 | **Headers** | Request headers, with name completion for the common ones. |
-| **Body** | `None` / `Form` / `Multipart` / `Raw` / `Binary` / `GraphQL`. Raw bodies get JSON / Text / XML syntax modes and a Format button; multipart supports multiple files. |
+| **Body** | `None` / `Form` / `Multipart` / `Raw` / `Binary` / `GraphQL` / `SOAP`. Raw bodies get JSON / Text / XML syntax modes and a Format button; multipart supports multiple files. `Content-Type` is pinned to the top of the **Headers** tab, badged with whether the body mode set it or you did. |
 | **Auth** | Which auth profile applies — inherited from the collection, overridden here, or `none`. |
 | **Variables** | Request-scoped variables with descriptions, defaults, and `required` flags. |
 | **Meta** | Name, tags, protocol (`http` / `websocket`). |
@@ -320,6 +320,24 @@ frame and inbound frames append as they arrive.
 
 **GraphQL.** The GraphQL body mode fetches the endpoint's schema, so queries, mutations, and
 variables get completion and validation against the live server.
+
+**SOAP.** The SOAP body mode edits the two parts that vary — the operation element and its
+inner XML — and generates the envelope around them. Anything it doesn't surface is carried
+through verbatim: a `<soap:Header>` block (WS-Security, say), extra attributes on the operation
+element, or a SOAP 1.2 namespace, so opening a hand-written envelope and saving it back doesn't
+rewrite the parts that aren't on screen. `SOAPAction` stays on the **Headers** tab, where you
+can see what is actually sent — it's an HTTP header, its value is a URI rather than the bare
+operation name, and services disagree on whether it's required at all.
+
+**When the send never lands.** A request that dies in transport — no certificate, no route, no
+listener — gets a card that reads the failure rather than a stack trace: what kind of fault it
+was, what usually fixes it, and the raw exception chain underneath for pasting into an issue.
+For a certificate failure it also offers **Diagnose TLS**, which opens the connection purely to
+look at it. Because that handshake deliberately accepts whatever is presented, the report can
+say *which* certificate is wrong where a failed send only says that one was: hostname, expiry,
+chain of trust, and revocation each get their own verdict, and each certificate in the chain
+is listed with its SANs, key, and its own errors. The transport setting that waives validation
+for a request is one click away from the same card.
 
 ---
 

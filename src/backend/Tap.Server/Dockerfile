@@ -29,9 +29,13 @@ COPY src/backend/Tap.Core/ ./src/Tap.Core/
 COPY src/backend/Tap.Inspector.Mcp/ ./src/Tap.Inspector.Mcp/
 COPY src/backend/Tap.Server/ ./src/Tap.Server/
 COPY --from=ui /ui/dist ./src/Tap.Server/wwwroot/
+# Release tag, stamped into the assembly. Empty for an unstamped local build,
+# which falls back to Directory.Build.props' 0.1.0-local.
+ARG VERSION=
 RUN dotnet publish src/Tap.Server/Tap.Server.csproj \
         -c Release -o /app \
-        -p:SkipTapUiBuild=true
+        -p:SkipTapUiBuild=true \
+        ${VERSION:+-p:Version=$VERSION}
 
 # 3) Runtime — aspnet:10.0 chiseled is the smallest official image with ASP.NET Core.
 FROM mcr.microsoft.com/dotnet/aspnet:10.0

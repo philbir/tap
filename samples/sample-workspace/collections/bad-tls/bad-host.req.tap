@@ -1,0 +1,11 @@
+---
+kind: request
+id: 01a03f63-c98a-793a-8e92-3a386365a445
+name: Bad Host
+transport:
+  ignoreTlsErrors: true
+---
+
+```http
+GET https://wrong.host.badssl.com/
+```

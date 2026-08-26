@@ -1,10 +1,10 @@
 import {
-  ActionIcon, Alert, Badge, Box, Button, Center, Code, Group, Loader, Menu, Paper, ScrollArea, Stack, Table, Tabs, Text, Tooltip,
+  ActionIcon, Alert, Badge, Box, Button, Center, Code, Group, Loader, Menu, Paper, ScrollArea, SegmentedControl, Stack, Table, Tabs, Text, Tooltip,
 } from '@mantine/core'
 import { useClipboard } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
-  IconAlertCircle, IconArrowDown, IconArrowRight, IconArrowUp, IconBolt, IconCheck, IconCircleCheck, IconCircleCheckFilled, IconCircleMinus, IconCircleXFilled, IconCopy, IconDots, IconDownload, IconExternalLink,
+  IconAlertCircle, IconArrowDown, IconArrowRight, IconArrowUp, IconBolt, IconCheck, IconCircleCheck, IconCircleCheckFilled, IconCircleMinus, IconCircleXFilled, IconCode, IconCopy, IconDots, IconDownload, IconExternalLink, IconEye,
   IconHistory, IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSearch, IconSend, IconTrash, IconX,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -13,9 +13,11 @@ import type { AssertResult, AssertSummary, AuthExecuteResponse, AuthStatus, Auth
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useTapStore } from '../store'
 import { CodeBlock } from './CodeBlock'
+import { TabCount } from './EditorShell'
 import type { CodeSearchSpec } from './codeSearch'
 import { ResultSearchBar } from './ResultSearchBar'
 import { compileSearch, EMPTY_RESULT_SEARCH, Highlighted, matchesAny, type ResultMatcher, type ResultSearchState } from './resultSearch'
+import { RequestErrorCard } from './RequestErrorCard'
 import { useTabView } from './useTabView'
 import { COLLECTION_FILE } from '../shell/tapFiles'
 
@@ -63,6 +65,14 @@ interface Props {
   /** Whether that recorded entry was redacted. Only meaningful alongside `replayedAt`; it is
    *  what tells the reader whether `***` means "masked" or "that is what was sent". */
   replayRedacted?: boolean
+  /** Open a TLS diagnosis for this request. Offered from the error card when a send died on
+   *  certificate validation — the one moment the chain the server sent is worth reading. */
+  onDiagnoseTls?: () => void
+  /** True while that diagnosis is in flight. */
+  diagnosingTls?: boolean
+  /** Jump the editor to its Transport settings — where certificate validation and the
+   *  timeout live. Absent for editors that have no such tab (a `.http` file). */
+  onOpenTransport?: () => void
 }
 
 /**
@@ -79,7 +89,7 @@ interface Props {
  * 4xx yellow / 5xx red). The "Request" sub-tab shows what was sent on the wire (replaces
  * the old separate Preview pane).
  */
-export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopped, onStop, requestPath, requestName, requestAuth, onClose, replayedAt, replayRedacted }: Props) {
+export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopped, onStop, requestPath, requestName, requestAuth, onClose, replayedAt, replayRedacted, onDiagnoseTls, diagnosingTls, onOpenTransport }: Props) {
   const sseEvents = execution?.sseEvents
   const hasSse = !!sseEvents && sseEvents.length > 0
   const wsFrames = execution?.wsFrames
@@ -111,6 +121,20 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
     if (prev !== null && count > 0 && prev === 0) setTab('frames')
   }, [wsFrames, setTab])
 
+  // A send that never reached the server has exactly one thing to show, and it lives on the
+  // Body tab. Land there — otherwise a failure that arrives while you are reading Headers or
+  // Cookies renders as an empty list, which looks like "no response" rather than "it failed".
+  const failNudgedRef = useRef<ExecutionResult | null | undefined>(undefined)
+  useEffect(() => {
+    if (!execution) { failNudgedRef.current = null; return }
+    if (failNudgedRef.current === execution) return
+    const remounted = failNudgedRef.current === undefined
+    failNudgedRef.current = execution
+    if (remounted) return
+    // A WebSocket panel has no Body tab; its failures belong with the frame timeline.
+    if (execution.error) setTab(isWs ? 'frames' : 'body')
+  }, [execution, isWs, setTab])
+
   // When the server reports the request needed auth but didn't have a usable token —
   // flip to the Flow tab so the "Run auth" affordance is front-and-center. Tracked per
   // execution so manually navigating away doesn't snap the user back on every re-render.
@@ -123,11 +147,22 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
     const remounted = authNudgedRef.current === undefined
     authNudgedRef.current = execution
     if (remounted) return
+    // A send that died in transport is not an auth problem, whatever the token cache said.
+    if (execution.error) return
     const src = execution.authStatus?.source
     if (src === 'missing' || src === 'expired') setTab('flow')
   }, [execution, setTab])
 
   const cookies = useMemo(() => parseSetCookies(execution?.responseHeaders), [execution?.responseHeaders])
+
+  // ---- Body view: raw bytes vs rendered page ---------------------------------------------
+  // HTML is the one common content type where the bytes and the thing they describe are
+  // different artifacts: a 200 that renders "your session expired" is one glance as a page
+  // and a scroll-hunt as markup. The choice is parked on the tab so it survives a tab switch,
+  // and it defaults to raw — this is a request client, and the body is the primary evidence.
+  const [bodyMode, setBodyMode] = useTabView<BodyMode>(tabPath, 'bodyMode', 'raw')
+  const canPreviewHtml = !!execution && isPreviewableHtml(execution)
+  const previewing = tab === 'body' && canPreviewHtml && bodyMode === 'preview'
 
   // ---- Find in result ------------------------------------------------------------------
   // One query for the whole panel. It is parked on the tab (not on this mount) so it
@@ -138,7 +173,9 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
   const [findCount, setFindCount] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  const searchMode = tab ? SEARCH_MODE[tab] ?? null : null
+  // A rendered preview is an iframe, not a document we can index — there is nothing for
+  // find-in-result to step through, so the affordance goes away with it.
+  const searchMode = previewing ? null : tab ? SEARCH_MODE[tab] ?? null : null
   const { matcher: compiled, error: searchError } = useMemo(() => compileSearch(search), [search])
   // Closing the bar keeps the query (so re-opening restores it) but stops it acting on
   // anything — otherwise a hidden filter would silently be hiding rows.
@@ -316,20 +353,20 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
           {!isWs && <Tabs.Tab value="body" py={6}>Body</Tabs.Tab>}
           {hasSse && (
             <Tabs.Tab value="events" py={6} leftSection={<IconBolt size={12} />}>
-              Events <Text component="span" c="dimmed" ml={6}>{sseEvents!.length}</Text>
+              Events <TabCount count={sseEvents!.length} active={tab === 'events'} />
             </Tabs.Tab>
           )}
           {isWs && (
             <Tabs.Tab value="frames" py={6} leftSection={<IconBolt size={12} />}>
-              Frames <Text component="span" c="dimmed" ml={6}>{wsFrames?.length ?? 0}</Text>
+              Frames <TabCount count={wsFrames?.length ?? 0} active={tab === 'frames'} />
             </Tabs.Tab>
           )}
           <Tabs.Tab value="headers" py={6}>
-            Headers <Text component="span" c="dimmed" ml={6}>{headerCount}</Text>
+            Headers <TabCount count={headerCount} active={tab === 'headers'} />
           </Tabs.Tab>
           {cookies.length > 0 && (
             <Tabs.Tab value="cookies" py={6}>
-              Cookies <Text component="span" c="dimmed" ml={6}>{cookies.length}</Text>
+              Cookies <TabCount count={cookies.length} active={tab === 'cookies'} />
             </Tabs.Tab>
           )}
           {assertResults.length > 0 && (
@@ -347,10 +384,35 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
           <Tabs.Tab value="request" py={6}>Request</Tabs.Tab>
           <Tabs.Tab value="flow" py={6}>Flow</Tabs.Tab>
           <Tabs.Tab value="secrets" py={6}>
-            Secrets {secretCount > 0 && <Text component="span" c="dimmed" ml={6}>{secretCount}</Text>}
+            Secrets <TabCount count={secretCount} active={tab === 'secrets'} />
           </Tabs.Tab>
         </Tabs.List>
         <Group gap="xs" wrap="nowrap" style={{ flexShrink: 0 }}>
+          {tab === 'body' && canPreviewHtml && (
+            <SegmentedControl
+              size="xs"
+              value={bodyMode}
+              onChange={(v) => setBodyMode(v as BodyMode)}
+              data={[
+                {
+                  value: 'raw',
+                  label: (
+                    <Tooltip label="Response body" withArrow>
+                      <IconCode size={14} style={{ display: 'block' }} />
+                    </Tooltip>
+                  ),
+                },
+                {
+                  value: 'preview',
+                  label: (
+                    <Tooltip label="Render as a page (sandboxed: no scripts, no remote assets)" withArrow>
+                      <IconEye size={14} style={{ display: 'block' }} />
+                    </Tooltip>
+                  ),
+                },
+              ]}
+            />
+          )}
           {replayedAt && <ReplayChip at={replayedAt} redacted={replayRedacted} />}
           {execution && <StatusStrip execution={execution} busy={busy} stopped={stopped} />}
           {busy && onStop && (
@@ -408,8 +470,12 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
               execution={execution}
               stopped={stopped}
               requestName={requestName}
+              preview={previewing}
               search={findSpec}
               onSearchCount={setFindCount}
+              onDiagnoseTls={onDiagnoseTls}
+              diagnosingTls={diagnosingTls}
+              onOpenTransport={onOpenTransport}
             />
           </Tabs.Panel>
         )}
@@ -432,6 +498,10 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
               busy={busy}
               matcher={matcher}
               search={listSpec}
+              error={execution?.error ?? null}
+              onDiagnoseTls={onDiagnoseTls}
+              diagnosingTls={diagnosingTls}
+              onOpenTransport={onOpenTransport}
             />
           </Tabs.Panel>
         )}
@@ -739,12 +809,18 @@ function extForContentType(ct: string | null): string {
 
 // ---- Body view (CodeMirror) ----------------------------------------------------------
 
-function BodyView({ execution, stopped, requestName, search, onSearchCount }: {
+function BodyView({ execution, stopped, requestName, preview, search, onSearchCount, onDiagnoseTls, diagnosingTls, onOpenTransport }: {
   execution: ExecutionResult | null
   stopped?: boolean
   requestName?: string
+  /** Render the body as a page instead of as markup. Only ever true for HTML — the header's
+   *  toggle is the only thing that sets it, and it only appears for previewable responses. */
+  preview?: boolean
   search: CodeSearchSpec | null
   onSearchCount: (count: number) => void
+  onDiagnoseTls?: () => void
+  diagnosingTls?: boolean
+  onOpenTransport?: () => void
 }) {
   // A longer prefix pulled from the server's retained copy, once the user asks for it.
   // Keyed to the execution it came from so a new Send never shows the previous body.
@@ -761,6 +837,7 @@ function BodyView({ execution, stopped, requestName, search, onSearchCount }: {
     && !execution.contentType?.toLowerCase().includes('text/event-stream')
     && !execution.responseBody.startsWith('[binary ')
     && !(execution.contentType?.toLowerCase().startsWith('image/') && execution.responseBody.startsWith('data:'))
+    && !preview
   useEffect(() => { if (!searchable) onSearchCount(0) }, [searchable, onSearchCount])
 
   const shown = expanded?.source === execution ? expanded : null
@@ -793,12 +870,12 @@ function BodyView({ execution, stopped, requestName, search, onSearchCount }: {
   }
   if (execution.error) {
     return (
-      <Stack p="md" gap="xs">
-        <Group gap={6}>
-          <IconAlertCircle size={14} color="var(--mantine-color-red-6)" />
-          <Text size="sm" c="red">{execution.error}</Text>
-        </Group>
-      </Stack>
+      <RequestErrorCard
+        message={execution.error}
+        onDiagnoseTls={onDiagnoseTls}
+        diagnosing={diagnosingTls}
+        onOpenTransport={onOpenTransport}
+      />
     )
   }
   // SSE responses have no traditional body — point the user at the Events tab.
@@ -851,6 +928,24 @@ function BodyView({ execution, stopped, requestName, search, onSearchCount }: {
     )
   }
 
+  const body = shown?.text ?? execution.responseBody
+
+  if (preview) {
+    return (
+      <Stack h="100%" gap={0} style={{ minHeight: 0 }}>
+        <TruncationNotice
+          execution={execution}
+          requestName={requestName}
+          shownBytes={shown?.bytes}
+          busy={expanding}
+          error={expandError}
+          onShowAll={(bodyId, max) => void expandTo(bodyId, max, execution)}
+        />
+        <HtmlPreview html={body} />
+      </Stack>
+    )
+  }
+
   return (
     <Stack h="100%" gap={0} style={{ minHeight: 0 }}>
       <TruncationNotice
@@ -863,7 +958,7 @@ function BodyView({ execution, stopped, requestName, search, onSearchCount }: {
       />
       <ScrollArea h="100%" type="auto" scrollbarSize={8} style={{ flex: 1, minHeight: 0 }}>
         <CodeBlock
-          value={shown?.text ?? execution.responseBody}
+          value={body}
           contentType={execution.contentType}
           readOnly
           search={search}
@@ -871,6 +966,73 @@ function BodyView({ execution, stopped, requestName, search, onSearchCount }: {
         />
       </ScrollArea>
     </Stack>
+  )
+}
+
+// ---- HTML preview --------------------------------------------------------------------
+
+type BodyMode = 'raw' | 'preview'
+
+/** Whether the Body tab should offer the raw/rendered toggle at all. Errors, binary
+ *  placeholders and empty bodies have nothing to render, whatever the header claimed. */
+function isPreviewableHtml(execution: ExecutionResult): boolean {
+  if (execution.error || !execution.responseBody) return false
+  if (execution.responseBody.startsWith('[binary ')) return false
+  const main = execution.contentType?.split(';')[0].trim().toLowerCase()
+  return main === 'text/html' || main === 'application/xhtml+xml'
+}
+
+/**
+ * Renders a response body as the page it describes.
+ *
+ * <p>The body is untrusted — it came from whatever host the request named — so a debugging
+ * tool that ran its scripts inside the Studio's origin would be handing that host the
+ * workspace. Two things keep that from happening, and both are worth knowing about because
+ * together they decide what the preview can show.</p>
+ *
+ * <p>The frame is fully sandboxed: no `allow-scripts`, no `allow-same-origin`. And a
+ * `srcdoc` document inherits its parent's CSP, so the Studio's own policy
+ * (`src/ui-studio/index.html`) governs the page inside — which means remote stylesheets,
+ * images and fonts do not load either, only inline styles and `data:` assets. What you get
+ * is the document the server sent, not the page it would become in a browser. That is the
+ * right trade for an error page, a login redirect, or HTML that arrived where JSON was
+ * expected, which is what HTML in an API client almost always is — but it does mean a
+ * styled page can render bare, so the strip below says so rather than leaving it a mystery.</p>
+ */
+function HtmlPreview({ html }: { html: string }) {
+  return (
+    <>
+      <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <iframe
+          title="Rendered response"
+          srcDoc={html}
+          sandbox=""
+          referrerPolicy="no-referrer"
+          style={{
+            display: 'block',
+            width: '100%',
+            height: '100%',
+            border: 'none',
+            // The page brings its own colours. Without pinning the scheme, a dark Studio has
+            // an unstyled document painting light text onto the frame's white canvas.
+            colorScheme: 'light',
+            background: '#fff',
+          }}
+        />
+      </Box>
+      <Group
+        gap={6}
+        px="xs"
+        py={4}
+        wrap="nowrap"
+        style={{ flexShrink: 0, borderTop: '1px solid var(--mantine-color-default-border)' }}
+      >
+        <IconLock size={12} style={{ flexShrink: 0, color: 'var(--mantine-color-dimmed)' }} />
+        <Text size="xs" c="dimmed">
+          Scripts and remote assets are blocked — inline styles still apply.
+        </Text>
+      </Group>
+    </>
   )
 }
 
@@ -1046,13 +1208,19 @@ function EventsView({ events, total, busy, matcher, search }: {
  * Auto-scrolls to the newest frame while the executor is still pumping; once it stops,
  * scrolling is left to the user.
  */
-function FramesView({ frames, total, busy, matcher, search }: {
+function FramesView({ frames, total, busy, matcher, search, error, onDiagnoseTls, diagnosingTls, onOpenTransport }: {
   /** Already filtered by the panel's query — `total` is the count before filtering. */
   frames: WsFrame[]
   total: number
   busy: boolean
   matcher: ResultMatcher | null
   search: CodeSearchSpec | null
+  /** Set when the connection never opened. Takes the pane, since "waiting for the
+   *  handshake…" is the one thing that is definitely not happening. */
+  error?: string | null
+  onDiagnoseTls?: () => void
+  diagnosingTls?: boolean
+  onOpenTransport?: () => void
 }) {
   const viewportRef = useRef<HTMLDivElement>(null)
   const [openSeq, setOpenSeq] = useState<number | null>(null)
@@ -1063,6 +1231,16 @@ function FramesView({ frames, total, busy, matcher, search }: {
     if (el) el.scrollTop = el.scrollHeight
   }, [frames.length, busy])
 
+  if (frames.length === 0 && total === 0 && error) {
+    return (
+      <RequestErrorCard
+        message={error}
+        onDiagnoseTls={onDiagnoseTls}
+        diagnosing={diagnosingTls}
+        onOpenTransport={onOpenTransport}
+      />
+    )
+  }
   if (frames.length === 0) {
     return (
       <Center h="100%">

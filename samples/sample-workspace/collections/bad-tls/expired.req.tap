@@ -1,0 +1,9 @@
+---
+kind: request
+id: 01a03f5c-4507-7d2a-857c-f7d4bd6ae7be
+name: Expired certificate
+---
+
+```http
+GET /
+```

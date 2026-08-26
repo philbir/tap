@@ -1,9 +1,9 @@
 import {
-  Alert, Badge, ActionIcon, Box, Button, Code, Group, Loader, Modal, NumberInput, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip,
+  Alert, Badge, ActionIcon, Box, Button, Code, Group, Loader, NumberInput, SegmentedControl, Select, Stack, Tabs, TagsInput, Text, TextInput, Tooltip,
 } from '@mantine/core'
 import { Dropzone } from '@mantine/dropzone'
 import {
-  IconAlertTriangle, IconBolt, IconBraces, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileCode, IconFileText, IconFlag, IconHistory, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
+  IconAlertTriangle, IconBolt, IconBraces, IconCode, IconCircleCheck, IconExternalLink, IconFile, IconFileCode, IconFileText, IconFlag, IconHistory, IconList, IconLock, IconParentheses, IconPlayerPlayFilled, IconRotateClockwise, IconShieldCheck, IconSparkles, IconUpload, IconVariable, IconX,
 } from '@tabler/icons-react'
 import { useDisclosure } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
@@ -13,22 +13,23 @@ import type {
   AssertResult, AssertSummary, ExecutionResult, HistoryEntry, HttpHeaderSpec, RequestDetail,
   RequestSpec, TlsDiagnosis, VariableContext,
 } from '../api/types'
-import { useEffectiveEnv, useTapStore } from '../store'
+import { useEffectiveEnv, useEnvsFor, useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
 import {
-  BODY_MODE_LABELS, contentTypeForBodyMode, detectBodyMode, detectRawSubType, looksLikeGraphql,
-  parseFormBody, parseGraphQLBody, parseMultipartBody, serializeFormBody, serializeGraphQLBody,
-  serializeMultipartBody, tryPrettyJson,
+  BODY_MODE_LABELS, contentTypeForBodyMode, contentTypeOrigin, detectBodyMode, detectRawSubType, looksLikeGraphql,
+  looksLikeSoap, parseFormBody, parseGraphQLBody, parseMultipartBody, parseSoapBody,
+  serializeFormBody, serializeGraphQLBody, serializeMultipartBody, serializeSoapBody, tryPrettyJson,
   RAW_SUB_LABELS, type BodyMode, type RawSubType,
 } from './body-mode'
 import { AdaptiveTabsList } from './AdaptiveTabsList'
-import { CollectionLinkChip } from './CollectionLinkChip'
+import { CollectionLinkChip, effectiveBaseUrl } from './CollectionLinkChip'
 import { authSelectGroups, relativizeFrom } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
 import { HistoryPanel } from './HistoryPanel'
 import { HistorySettings } from './HistorySettings'
 import { GraphQLEditor } from './GraphQLEditor'
+import { SoapEditor } from './SoapEditor'
 import { AssertsPanel } from './AssertsPanel'
 import { KvTable, type KvRow } from './KvTable'
 import { MultipartTable } from './MultipartTable'
@@ -36,6 +37,7 @@ import { RawBodyEditor } from './RawBodyEditor'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { ResponsePanel } from './ResponsePanel'
 import { SourceTab } from './SourceTab'
+import { TlsDiagnosisModal } from './TlsDiagnosisModal'
 import { restoreDraft, usePublishDraft } from './useDraft'
 import { useTabView } from './useTabView'
 import { moveExecution, useExecution } from './useExecution'
@@ -48,8 +50,11 @@ import { fileNameFor, isHttpBackedRequest, splitHttpFragment, stripTapSuffix } f
 interface Props { path: string }
 
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const
-const BODY_MODES: BodyMode[] = ['none', 'form-urlencoded', 'multipart', 'raw', 'binary', 'graphql']
+const BODY_MODES: BodyMode[] = ['none', 'form-urlencoded', 'multipart', 'raw', 'binary', 'graphql', 'soap']
 const RAW_SUB_TYPES: RawSubType[] = ['json', 'text', 'xml']
+/** Header-name suggestions for the request's own headers. `Content-Type` is omitted: it has
+ *  a pinned row of its own, so offering it here would only invite a duplicate. */
+const REQUEST_HEADER_NAMES = COMMON_HEADER_NAMES.filter((n) => n !== 'Content-Type')
 
 export function RequestEditor({ path }: Props) {
   const generation = useTapStore((s) => s.generation)
@@ -222,6 +227,18 @@ export function RequestEditor({ path }: Props) {
   const env = useEffectiveEnv(slug)
   const setCollectionEnv = useTapStore((s) => s.setCollectionEnv)
 
+  // The chip only earns its place when a base URL is actually going to be prepended. Two
+  // things take that away, and both leave it stating a prefix the send won't use: a URL that
+  // carries its own scheme (`WorkspaceRenderer` skips the join entirely for those), and a
+  // collection with no baseUrl configured and no environment supplying one. In either case
+  // hide it and give the width to the URL — the header's picker still switches the
+  // environment, which continues to feed variables and auth.
+  const envs = useEnvsFor(slug)
+  const showCollectionChip = useMemo(() => {
+    if (!linkedCollection || hasScheme(spec?.url ?? '')) return false
+    return effectiveBaseUrl(linkedCollection, envs.find((e) => e.path === env) ?? null).trim() !== ''
+  }, [linkedCollection, spec?.url, envs, env])
+
   const variableContext = useMemo<VariableContext>(() => ({
     requestPath: path,
     envPath: env ?? undefined,
@@ -355,13 +372,27 @@ export function RequestEditor({ path }: Props) {
   const contentTypeHeader = headers.find((h) => h.name.toLowerCase() === 'content-type')?.value ?? null
   const headersOnly = headers.filter((h) => h.name.toLowerCase() !== 'content-type')
 
+  // Content-Type is owned by the Body tab, but it is still a header the user may need to
+  // bend (vendor media types, an explicit charset). The Headers tab therefore shows it as a
+  // pinned row: name locked, value editable, badged with where the current value came from.
+  const bodyMode = detectBodyMode(contentTypeHeader, spec.requestBody ?? '')
+  const bodyRawSub = detectRawSubType(contentTypeHeader)
+  const autoContentType = contentTypeForBodyMode(bodyMode, bodyRawSub)
+  const ctOrigin = contentTypeOrigin(contentTypeHeader, bodyMode, bodyRawSub)
+  const bodySourceLabel = bodyMode === 'raw'
+    ? `Raw · ${RAW_SUB_LABELS[bodyRawSub]}`
+    : BODY_MODE_LABELS[bodyMode]
+
   function setHeaders(next: HttpHeaderSpec[]) {
     update('headers', next.length > 0 ? next : undefined)
   }
-  function setRequestBody(body: string | undefined, contentType: string | null) {
-    update('requestBody', body && body.length > 0 ? body : undefined)
+  function setContentType(contentType: string | null) {
     const without = headers.filter((h) => h.name.toLowerCase() !== 'content-type')
     setHeaders(contentType ? [{ name: 'Content-Type', value: contentType }, ...without] : without)
+  }
+  function setRequestBody(body: string | undefined, contentType: string | null) {
+    update('requestBody', body && body.length > 0 ? body : undefined)
+    setContentType(contentType)
   }
   function updateTransport(patch: Partial<NonNullable<RequestSpec['transport']>>) {
     setSpec((cur) => {
@@ -371,9 +402,18 @@ export function RequestEditor({ path }: Props) {
     })
   }
   async function diagnoseTls() {
-    setDiagnosing(true); setActionError(null)
+    setDiagnosing(true)
     try { setDiagnosis(await api.diagnoseTls(path, env, spec ?? undefined)) }
-    catch (e) { setActionError(e instanceof Error ? e.message : String(e)) }
+    catch (e) {
+      // Not `setActionError`: the panel only renders that when there is no execution, so a
+      // failed diagnosis after a failed send would land nowhere while quietly replacing the
+      // send's own error.
+      notifications.show({
+        title: 'TLS diagnosis failed',
+        message: e instanceof Error ? e.message : String(e),
+        color: 'red',
+      })
+    }
     finally { setDiagnosing(false) }
   }
 
@@ -448,6 +488,9 @@ export function RequestEditor({ path }: Props) {
             requestAuth={spec.auth ?? null}
             replayedAt={replay?.at ?? null}
             replayRedacted={replay ? replay.redacted : undefined}
+            onDiagnoseTls={() => void diagnoseTls()}
+            diagnosingTls={diagnosing}
+            onOpenTransport={() => setTab('transport')}
             onClose={replayed ? closeHistoryEntry : clearExecution}
           />
         ) : undefined
@@ -482,7 +525,7 @@ export function RequestEditor({ path }: Props) {
           leftSection={spec.protocol === 'websocket' ? <IconBolt size={12} /> : undefined}
           leftSectionWidth={spec.protocol === 'websocket' ? 22 : 0}
         />
-        {linkedCollection && (
+        {linkedCollection && showCollectionChip && (
           <CollectionLinkChip
             summary={linkedCollection}
             env={env}
@@ -556,7 +599,7 @@ export function RequestEditor({ path }: Props) {
           mb="md"
           tabs={[
             { value: 'params', label: 'Params', icon: <IconParentheses size={14} />, adornment: <TabCount count={queryRows.length} /> },
-            { value: 'headers', label: 'Headers', icon: <IconList size={14} />, adornment: <TabCount count={headersOnly.length} /> },
+            { value: 'headers', label: 'Headers', icon: <IconList size={14} />, adornment: <TabCount count={headers.length} /> },
             { value: 'body', label: 'Body', icon: <IconBraces size={14} /> },
             { value: 'auth', label: 'Auth', icon: <IconLock size={14} />, adornment: <TabDot active={!!spec.auth && spec.auth !== 'none'} color="orange" /> },
             {
@@ -598,16 +641,56 @@ export function RequestEditor({ path }: Props) {
             <KvTable
               rows={headersOnly.map((h) => ({ key: h.name, value: h.value }))}
               onChange={(rows) => {
-                const fresh: HttpHeaderSpec[] = rows.filter((r) => r.key).map((r) => ({ name: r.key, value: r.value }))
-                if (contentTypeHeader) fresh.unshift({ name: 'Content-Type', value: contentTypeHeader })
+                // A row typed as `Content-Type` belongs to the pinned row above, not the
+                // list — adopt its value there rather than emitting a duplicate header.
+                const typedCt = rows.find((r) => r.key.toLowerCase() === 'content-type' && r.value)
+                const fresh: HttpHeaderSpec[] = rows
+                  .filter((r) => r.key && r.key.toLowerCase() !== 'content-type')
+                  .map((r) => ({ name: r.key, value: r.value }))
+                const ct = typedCt?.value ?? contentTypeHeader
+                if (ct) fresh.unshift({ name: 'Content-Type', value: ct })
                 setHeaders(fresh)
               }}
               keyPlaceholder="Header-Name"
               valuePlaceholder="value"
               variableContext={variableContext}
               onOpenVariables={varsCtl.open}
-              keySuggestions={COMMON_HEADER_NAMES}
+              keySuggestions={REQUEST_HEADER_NAMES}
               getValueSuggestions={valuesForHeader}
+              pinnedRow={{
+                key: 'Content-Type',
+                value: contentTypeHeader ?? '',
+                onChange: (v) => setContentType(v.trim() ? v : null),
+                valuePlaceholder: autoContentType ?? 'not sent — pick a body mode',
+                valueSuggestions: valuesForHeader('Content-Type'),
+                keyAdornment: contentTypeHeader === null ? undefined : (
+                  <Tooltip
+                    withArrow
+                    multiline
+                    w={260}
+                    label={ctOrigin === 'auto'
+                      ? `Set from the Body tab (${bodySourceLabel}). Edit the value to override it.`
+                      : `Overrides the Body tab's ${autoContentType}. Switching body mode resets it.`}
+                  >
+                    <Badge size="xs" variant="light" color={ctOrigin === 'auto' ? 'gray' : 'yellow'}>
+                      {ctOrigin === 'auto' ? 'auto' : 'custom'}
+                    </Badge>
+                  </Tooltip>
+                ),
+                action: ctOrigin === 'override' && autoContentType ? (
+                  <Tooltip label={`Reset to ${autoContentType}`} withArrow>
+                    <ActionIcon
+                      variant="subtle"
+                      color="gray"
+                      size="sm"
+                      onClick={() => setContentType(autoContentType)}
+                      aria-label="Reset Content-Type"
+                    >
+                      <IconRotateClockwise size={14} />
+                    </ActionIcon>
+                  </Tooltip>
+                ) : undefined,
+              }}
             />
           </Box>
         </Tabs.Panel>
@@ -858,6 +941,13 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
       onChange(seeded, contentTypeForBodyMode('graphql'))
       return
     }
+    if (next === 'soap') {
+      // Same reason as graphql above: detectBodyMode only says 'soap' for a real envelope,
+      // so seed one. parseSoapBody carries an existing raw XML body in as the payload.
+      const seeded = looksLikeSoap(body) ? body : serializeSoapBody(parseSoapBody(body))
+      onChange(seeded, contentTypeForBodyMode('soap'))
+      return
+    }
     onChange(body || undefined, contentTypeForBodyMode(next))
   }
 
@@ -900,7 +990,7 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
       {mode === 'form-urlencoded' && (
         <KvTable
           rows={parseFormBody(body)}
-          onChange={(rows) => onChange(serializeFormBody(rows) || undefined, contentTypeForBodyMode('form-urlencoded'))}
+          onChange={(rows) => onChange(serializeFormBody(rows) || undefined, contentType ?? contentTypeForBodyMode('form-urlencoded'))}
           keyPlaceholder="name"
           valuePlaceholder="value or {{var}}"
           variableContext={variableContext}
@@ -911,6 +1001,9 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
       {mode === 'multipart' && (
         <MultipartTable
           parts={parseMultipartBody(body)}
+          // Unlike the other modes, multipart re-asserts the canonical Content-Type on every
+          // edit rather than preserving a user override: the header's `boundary` parameter
+          // has to match the delimiter serializeMultipartBody just wrote into the body.
           onChange={(parts) => onChange(serializeMultipartBody(parts) || undefined, contentTypeForBodyMode('multipart'))}
           variableContext={variableContext}
           onOpenVariables={onOpenVariables}
@@ -923,7 +1016,16 @@ function BodyEditor({ body, contentType, onChange, variableContext, onOpenVariab
           env={env}
           body={body}
           dirty={dirty}
-          onChange={(b) => onChange(b, contentTypeForBodyMode('graphql'))}
+          onChange={(b) => onChange(b, contentType ?? contentTypeForBodyMode('graphql'))}
+        />
+      )}
+
+      {mode === 'soap' && (
+        <SoapEditor
+          body={body}
+          onChange={(b) => onChange(b, contentType ?? contentTypeForBodyMode('soap'))}
+          variableContext={variableContext}
+          onOpenVariables={onOpenVariables}
         />
       )}
 
@@ -1080,6 +1182,12 @@ function assertSnapshot(execution: ExecutionResult): AssertResponseSnapshot {
   }
 }
 
+/** Mirrors `WorkspaceRenderer.HasAnyScheme`: these four prefixes are exactly what makes the
+ *  renderer send the URL as written instead of joining it onto the collection's baseUrl. */
+function hasScheme(url: string): boolean {
+  return /^(https?|wss?):\/\//i.test(url.trimStart())
+}
+
 function formatBytes(n: number): string {
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
@@ -1111,25 +1219,6 @@ function specFromDetail(d: RequestDetail, path: string): RequestSpec {
     transport: d.transport ?? undefined,
     assertions: d.assertions && d.assertions.length > 0 ? d.assertions : undefined,
   }
-}
-
-function TlsDiagnosisModal({ diagnosis, onClose }: { diagnosis: TlsDiagnosis | null; onClose: () => void }) {
-  return (
-    <Modal opened={diagnosis !== null} onClose={onClose} title="TLS diagnosis" size="lg">
-      {diagnosis && <Stack gap="md">
-        <Text size="sm" c={diagnosis.valid ? 'green' : 'red'}>{diagnosis.valid ? 'Certificate validation passed.' : diagnosis.error ?? 'Certificate validation failed.'}</Text>
-        {diagnosis.errors.map((error) => <Text key={error} size="sm" c="red">{error}</Text>)}
-        {diagnosis.certificates.map((certificate) => (
-          <Box key={certificate.thumbprint} p="sm" style={{ border: '1px solid var(--mantine-color-default-border)', borderRadius: 'var(--mantine-radius-sm)' }}>
-            <Text size="sm" fw={600}>{certificate.subject}</Text>
-            <Text size="xs" c="dimmed">Issuer: {certificate.issuer}</Text>
-            <Text size="xs" c="dimmed">Valid: {new Date(certificate.notBefore).toLocaleString()} - {new Date(certificate.notAfter).toLocaleString()}</Text>
-            <Text size="xs" ff="var(--mono)" mt={4}>Thumbprint: {certificate.thumbprint}</Text>
-          </Box>
-        ))}
-      </Stack>}
-    </Modal>
-  )
 }
 
 function basename(p: string): string { return p.split('/').pop() ?? p }

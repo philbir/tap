@@ -49,6 +49,25 @@ export interface KvTableProps {
   /** When provided, returns a list of suggested values for the row's current key. The
    *  value field's VariableInput shows these as static suggestions in its dropdown. */
   getValueSuggestions?: (key: string) => string[]
+  /** Optional fixed first row, rendered inside the table so its columns line up with the
+   *  editable rows below. Used for a key the caller owns and the user may not rename or
+   *  delete — today, the body-derived `Content-Type` header. */
+  pinnedRow?: KvPinnedRow
+}
+
+/** A non-removable row whose key is fixed and whose value the user can still edit. */
+export interface KvPinnedRow {
+  /** Displayed read-only in the key column. */
+  key: string
+  value: string
+  onChange: (value: string) => void
+  /** Rendered after the key — typically a small badge explaining where the value came from. */
+  keyAdornment?: ReactNode
+  valuePlaceholder?: string
+  /** Static suggestions for the value column's dropdown. */
+  valueSuggestions?: string[]
+  /** Rendered in the action column in place of the remove button (e.g. a reset control). */
+  action?: ReactNode
 }
 
 /** A value that is already a lone `{{…}}` token references something rather than holding it,
@@ -71,6 +90,7 @@ export function KvTable({
   onOpenVariables,
   keySuggestions,
   getValueSuggestions,
+  pinnedRow,
 }: KvTableProps) {
   // Marking a variable secret has to move its value somewhere that isn't the workspace file;
   // see PromoteSecretModal. Rows with nothing to move (empty, or already a reference) skip
@@ -119,17 +139,49 @@ export function KvTable({
     commit([...internal, { id: nextId(), key: '', value: '' }])
   }
 
-  const showTable = internal.length > 0
+  const showTable = internal.length > 0 || !!pinnedRow
 
   return (
     <Box>
-      {!showTable && emptyHint && (
+      {internal.length === 0 && emptyHint && (
         <Box ta="center" py="md" c="dimmed" fz="sm">{emptyHint}</Box>
       )}
 
       {showTable && (
         <Table verticalSpacing={4} horizontalSpacing="xs" withRowBorders={false}>
           <Table.Tbody>
+            {pinnedRow && (
+              <Table.Tr>
+                <Table.Td style={{ width: '40%' }}>
+                  <Group gap={6} wrap="nowrap">
+                    <TextInput
+                      size="xs"
+                      value={pinnedRow.key}
+                      readOnly
+                      styles={{ input: { fontFamily: 'var(--mono)', cursor: 'default' } }}
+                      style={{ flex: 1, minWidth: 0 }}
+                      tabIndex={-1}
+                      {...passwordManagerOptOut}
+                    />
+                    {pinnedRow.keyAdornment}
+                  </Group>
+                </Table.Td>
+                <Table.Td>
+                  <VariableInput
+                    value={pinnedRow.value}
+                    onChange={pinnedRow.onChange}
+                    placeholder={pinnedRow.valuePlaceholder ?? valuePlaceholder}
+                    context={variableContext ?? null}
+                    onOpenVariables={onOpenVariables}
+                    size="xs"
+                    staticSuggestions={pinnedRow.valueSuggestions}
+                    nameHint={pinnedRow.key}
+                  />
+                </Table.Td>
+                {allowSecretToggle && <Table.Td style={{ width: 32 }} />}
+                <Table.Td style={{ width: 32 }}>{pinnedRow.action}</Table.Td>
+              </Table.Tr>
+            )}
             {internal.map((r) => (
               <Table.Tr key={r.id}>
                 <Table.Td style={{ width: '40%' }}>

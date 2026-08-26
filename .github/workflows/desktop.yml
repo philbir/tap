@@ -70,10 +70,14 @@ jobs:
           yarn install --immutable
           yarn build
 
+      # TAP_VERSION stamps the sidecar assembly, which is what `/api/workspace`
+      # reports and what the brand menu shows. On workflow_dispatch ref_name is a
+      # branch and the script ignores it, leaving the 0.1.0-local fallback.
       - name: Compile sidecar
         shell: bash
         env:
           TARGET: ${{ matrix.target }}
+          TAP_VERSION: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
         run: node src/desktop/scripts/compile-server.mjs "$TARGET"
 
       # Hands src-tauri/binaries/{tap-studio-<triple>,wwwroot/**} to the bundle

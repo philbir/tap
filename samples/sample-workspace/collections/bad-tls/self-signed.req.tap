@@ -1,0 +1,8 @@
+---
+kind: request
+name: Self-signed certificate
+---
+
+```http
+GET https://self-signed.badssl.com/
+```

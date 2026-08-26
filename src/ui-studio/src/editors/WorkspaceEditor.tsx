@@ -126,9 +126,17 @@ export function WorkspaceEditor() {
   // a rename, a different vault — has nothing (or the wrong thing) to look at until saved.
   const savedFingerprints = new Set((savedSpec?.variableProviders ?? []).map(providerFingerprint))
   const isProviderSaved = (p: ProviderConfig) => savedFingerprints.has(providerFingerprint(p))
+  // Blank and duplicate names are dropped rather than offered: Mantine throws on a second
+  // option carrying a value it has already seen, and '' is taken by the "(auto)" row — so a
+  // half-finished rename (the name field momentarily empty) would take the whole editor down
+  // with an error the panel can't render its way out of.
   const writableProviderOptions = [
     { value: '', label: '(auto — first writable)' },
-    ...providers.filter(isWritable).map(p => ({ value: p.name, label: p.name })),
+    ...providers
+      .filter(isWritable)
+      .map(p => p.name)
+      .filter((name, i, all) => name.trim() !== '' && all.indexOf(name) === i)
+      .map(name => ({ value: name, label: name })),
   ]
 
   return (

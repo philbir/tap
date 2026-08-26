@@ -2,9 +2,24 @@ import { Group, Menu, Stack, Text, Tooltip, UnstyledButton } from '@mantine/core
 import { IconCheck, IconChevronDown, IconFolders } from '@tabler/icons-react'
 import { useMemo } from 'react'
 import { envBindingFor } from '../api/types'
-import type { CollectionSummary, VariableContext } from '../api/types'
+import type { CollectionSummary, EnvSummary, VariableContext } from '../api/types'
 import { useEnvsFor } from '../store'
 import { useVariableView, variableMap } from '../workspace/useVariables'
+
+/**
+ * The baseUrl template a request under `summary` resolves against, or `''` when the
+ * collection has none configured and no environment supplies one.
+ *
+ * <p>An environment can override the collection's baseUrl outright — on the *assignment* to
+ * this collection, since the same env points elsewhere in another one. Summaries carry the
+ * assignments, so this moves with the picker without a second round trip.</p>
+ *
+ * <p>Exported because the chip is not the only thing that turns on the answer: a caller with
+ * nothing to show for a base URL hides the chip rather than rendering "(no baseUrl)".</p>
+ */
+export function effectiveBaseUrl(summary: CollectionSummary, env: EnvSummary | null): string {
+  return ((env && envBindingFor(env, summary.slug)?.baseUrl) || summary.baseUrl) ?? ''
+}
 
 /**
  * The collection a request inherits from, rendered as a compact two-part chip: the resolved
@@ -34,10 +49,7 @@ export function CollectionLinkChip({ summary, env, onEnvChange, variableContext,
   const envs = useEnvsFor(summary.slug)
   const selected = envs.find((e) => e.path === env) ?? null
 
-  // An environment can override the collection's baseUrl outright — on the *assignment* to
-  // this collection, since the same env points elsewhere in another one. Summaries carry the
-  // assignments, so the chip moves with the picker without a second round trip.
-  const baseTemplate = (selected && envBindingFor(selected, summary.slug)?.baseUrl) || summary.baseUrl
+  const baseTemplate = effectiveBaseUrl(summary, selected)
   const display = useMemo(() => resolveTokens(baseTemplate, vars), [baseTemplate, vars])
   const hasUnresolved = /\{\{[^}]+\}\}/.test(display)
   // The chip is width-capped so a long base URL can't crowd out the path input, so the

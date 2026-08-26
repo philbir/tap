@@ -149,6 +149,22 @@ export interface HistoryOptions {
   orphanRetentionDays?: number | null
 }
 
+/** One verdict the chain builder reached — the flag name (`NotTimeValid`) kept apart from the
+ *  sentence that explains it, so the report can show both without string-splitting. */
+export interface TlsStatus {
+  code: string
+  description: string
+}
+
+/** Traffic-light verdict for one named check. The server decides these so "trusted" means the
+ *  same thing here as it does to the sender. */
+export interface TlsCheck {
+  id: string
+  label: string
+  state: 'ok' | 'fail' | 'warn' | 'unknown'
+  detail: string | null
+}
+
 export interface TlsCertificate {
   subject: string
   issuer: string
@@ -156,6 +172,18 @@ export interface TlsCertificate {
   notBefore: string
   notAfter: string
   serialNumber: string
+  /** Leaf-first position in the presented chain — 0 is the server's own certificate. */
+  index: number
+  commonName: string | null
+  /** Subject alternative names. Where the hostnames actually live. */
+  dnsNames: string[] | null
+  signatureAlgorithm: string | null
+  keyAlgorithm: string | null
+  keySizeBits: number | null
+  selfSigned: boolean
+  /** This certificate's own chain status — not the whole chain's, so the card that is
+   *  actually at fault is the one that turns red. */
+  errors: TlsStatus[] | null
 }
 
 export interface TlsDiagnosis {
@@ -163,7 +191,14 @@ export interface TlsDiagnosis {
   valid: boolean
   error: string | null
   certificates: TlsCertificate[]
-  errors: string[]
+  errors: TlsStatus[]
+  host: string | null
+  port: number | null
+  /** Negotiated protocol, already spelled the way people say it ("TLS 1.3"). */
+  protocol: string | null
+  cipherSuite: string | null
+  checks: TlsCheck[] | null
+  handshakeMs: number | null
 }
 
 /** Wire protocol carried by a request — `http` (default) or `websocket`. Drives baseUrl

@@ -270,12 +270,23 @@ function PrimaryPane({ children }: { children: ReactNode }) {
   )
 }
 
-/** Small count badge shown on a Tabs.Tab (params, headers, variables, …). Renders nothing
- *  when the count is zero so empty sections stay uncluttered. */
-export function TabCount({ count }: { count: number }) {
+/** Small count badge shown on a Tabs.Tab (params, headers, variables, …). `miw` equal to the
+ *  xs badge height makes a single digit a circle; longer counts grow into a pill rather than
+ *  clip (which is why this isn't Badge's own `circle`). Renders nothing when the count is zero
+ *  so empty sections stay uncluttered. Pass `active` on the selected tab to tint it brand. */
+export function TabCount({ count, active = false }: { count: number; active?: boolean }) {
   if (count <= 0) return null
   return (
-    <Badge size="xs" variant="light" color="gray" radius="sm" ml={6} px={6} style={{ fontVariantNumeric: 'tabular-nums' }}>
+    <Badge
+      size="xs"
+      variant="light"
+      color={active ? 'tap' : 'gray'}
+      ml={6}
+      px={3}
+      miw={16}
+      fz={10}
+      style={{ fontVariantNumeric: 'tabular-nums' }}
+    >
       {count}
     </Badge>
   )

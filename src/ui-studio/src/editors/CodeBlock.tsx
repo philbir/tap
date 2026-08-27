@@ -11,6 +11,7 @@ import { vscodeLight } from '@uiw/codemirror-theme-vscode'
 import CodeMirror, { type Extension } from '@uiw/react-codemirror'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { codeSearch, codeSearchMatches, scrollToCodeMatch, setCodeSearch, type CodeSearchSpec } from './codeSearch'
+import { tryPrettyJson, tryPrettyXml } from './prettyPrint'
 
 /**
  * Read-only / editable code viewer powered by CodeMirror 6. The language pack is picked
@@ -19,6 +20,7 @@ import { codeSearch, codeSearchMatches, scrollToCodeMatch, setCodeSearch, type C
  * dark/light Mantine scheme — matches the dreamr behavior.
  *
  * Supported languages: json, xml, html, yaml, javascript, css, markdown, plain text.
+ * JSON and XML are pretty-printed for display unless `format={false}`.
  *
  * Used in:
  *   - ResponsePanel (JSON / XML / HTML / YAML / JS / CSS / Markdown body previews)
@@ -54,10 +56,14 @@ export interface CodeBlockProps {
    *  number as in `value` once JSON has been pretty-printed. Fires on every query and
    *  document change. */
   onSearchCount?: (count: number) => void
+  /** Re-indent structured content (JSON, XML) before display. On by default: a minified
+   *  body is unreadable and every caller showing one wants it wrapped. Pass `false` to show
+   *  the bytes exactly as they arrived — what the response panel's Raw toggle does. */
+  format?: boolean
 }
 
 export function CodeBlock({
-  value, language, contentType, readOnly = true, onChange, height, maxHeight, search, onSearchCount,
+  value, language, contentType, readOnly = true, onChange, height, maxHeight, search, onSearchCount, format = true,
 }: CodeBlockProps) {
   const picked = language ?? detectLanguage(contentType)
 
@@ -80,12 +86,14 @@ export function CodeBlock({
   // The query travels as a state effect instead (below), so this array never has to move.
   const extensions = useMemo<Extension[]>(() => [...lang, codeSearch], [lang])
 
-  // For JSON, try to pretty-print the value so the user doesn't have to. We leave the
-  // original text alone if it's not valid JSON.
+  // Re-indent JSON and XML so the user doesn't have to. Both formatters are total — text
+  // that doesn't parse comes back untouched — so a truncated or mislabelled body still shows.
   const display = useMemo(() => {
-    if (picked !== 'json') return value
-    return tryPrettyJson(value)
-  }, [value, picked])
+    if (!format) return value
+    if (picked === 'json') return tryPrettyJson(value)
+    if (picked === 'xml') return tryPrettyXml(value)
+    return value
+  }, [value, picked, format])
 
   const viewRef = useRef<EditorView | null>(null)
   const [ready, setReady] = useState(false)
@@ -250,13 +258,4 @@ const httpMode: StreamParser<HttpState> = {
     return { ...state }
   },
   languageData: { commentTokens: { line: '#' } },
-}
-
-function tryPrettyJson(s: string): string {
-  if (!s.trim()) return s
-  try {
-    return JSON.stringify(JSON.parse(s), null, 2)
-  } catch {
-    return s
-  }
 }

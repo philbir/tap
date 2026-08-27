@@ -301,6 +301,11 @@ and binary previews), **Headers**, **Request** (exactly what went on the wire), 
 auth + variable steps taken to get there), and **Secrets** (which secret references were
 resolved — names and providers, never values).
 
+**Formatted vs raw.** JSON and XML bodies are re-indented for reading, and the toggle beside
+the status pill switches back to the exact bytes the server sent — the view you want when the
+whitespace is the question. The choice sticks to the tab, so it survives a re-send. HTML keeps
+its own markup/rendered-page toggle in the same spot.
+
 **Searching a response.** `Ctrl/Cmd+F` (or the magnifier in the response header) opens a find
 bar that applies to whichever tab you are on, with toggles for case sensitivity and regular
 expressions. On **Body** and **Request** it walks matches inside the document — `Enter` /

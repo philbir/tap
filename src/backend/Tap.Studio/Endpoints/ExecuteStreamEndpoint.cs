@@ -158,11 +158,16 @@ public static class ExecuteStreamEndpoint
                     var captured = await ResponseCapture.ReadAsync(
                         stream, limits.EffectiveMaxBytes, spool, limits.EffectiveMaxRetainedBytes, timeout.Token)
                         .ConfigureAwait(false);
-                    await spool.FlushAsync(timeout.Token).ConfigureAwait(false);
 
                     totalBytes = captured.TotalBytes;
-                    var retained = bodies.Publish(spool, contentType, totalBytes);
                     var text = HttpExecutionHelpers.TryDecodeBody(captured.Inline, contentType, totalBytes);
+                    // A body we could only describe reaches the panel as "[binary N bytes — …]"
+                    // and nothing else, so retain it whatever its size — the spool is the only
+                    // place a download could read those bytes from.
+                    if (HttpExecutionHelpers.IsBinaryPlaceholder(text))
+                        await spool.MaterializeAsync(timeout.Token).ConfigureAwait(false);
+                    await spool.FlushAsync(timeout.Token).ConfigureAwait(false);
+                    var retained = bodies.Publish(spool, contentType, totalBytes);
                     assertBody = text;
                     await WriteEventAsync(resp, "body", new ExecuteStreamBodyDto(
                         text,

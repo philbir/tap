@@ -4,6 +4,7 @@
 //   * /demo/upload/*     — request content types (json, form-urlencoded, multipart, raw)
 //   * /demo/stream/sse   — Server-Sent Events
 //   * /demo/stream/ws    — WebSocket echo + heartbeat
+//   * /demo/soap/*       — a real SOAP 1.1/1.2 service with a self-contained WSDL at ?wsdl
 //   * /graphql           — HotChocolate GraphQL (query + mutation + subscription over WS)
 //   * /connect/token,    — OpenIddict OAuth2/OIDC (client_credentials + ROPC) with discovery,
 //     /connect/userinfo,   userinfo, and introspection so Tap auth flows have a real OIDC IDP
@@ -56,6 +57,7 @@ MethodsEndpoints.Map(app);
 ContentEndpoints.Map(app);
 UploadEndpoints.Map(app);
 StreamingEndpoints.Map(app);
+SoapEndpoints.Map(app);
 DemoAuth.MapEndpoints(app);
 DemoGraphQL.MapEndpoints(app);
 

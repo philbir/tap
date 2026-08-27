@@ -1,3 +1,4 @@
+using Microsoft.OpenApi;
 using Tap.Studio.Contracts;
 using Tap.Studio.Importing;
 using Tap.Studio.OpenApi;
@@ -196,7 +197,7 @@ public static class OpenApiEndpoints
         OpenApiDocumentCache cache,
         WorkspaceService svc,
         out OpenApiLock? lockFile,
-        out OpenApiDocumentCache.Staged? staged)
+        out StagedDocument<OpenApiDocument>? staged)
     {
         lockFile = null;
         staged = null;
@@ -276,7 +277,7 @@ public static class OpenApiEndpoints
     }
 
     /// <summary>Same document, by content hash when we have one, else by where it came from.</summary>
-    private static bool SameSource(OpenApiLock existing, OpenApiDocumentCache.Staged staged)
+    private static bool SameSource(OpenApiLock existing, StagedDocument<OpenApiDocument> staged)
     {
         if (existing.Source.Url is { Length: > 0 } url)
             return string.Equals(url, staged.SourceUrl, StringComparison.OrdinalIgnoreCase);
@@ -289,7 +290,7 @@ public static class OpenApiEndpoints
 
     private static OpenApiLock BuildLock(
         OpenApiImportPlanner.Result planned,
-        OpenApiDocumentCache.Staged staged,
+        StagedDocument<OpenApiDocument> staged,
         OpenApiImportPlanner.Options options,
         OpenApiImportRequestDto body)
         => new()
@@ -342,7 +343,7 @@ public static class OpenApiEndpoints
 
         var document = read.Document!;
         var staged = cache.Add(document, text, read.SpecVersion, sourceUrl,
-            sourceUrl is null ? sourceName : null, read.Diagnostics);
+            sourceUrl is null ? sourceName : null);
 
         var warnings = new List<string>();
         var operations = OpenApiOperationMapper.Map(document, warnings);

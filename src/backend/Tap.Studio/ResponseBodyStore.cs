@@ -56,14 +56,16 @@ public sealed class ResponseBodyStore : IDisposable
     /// <paramref name="spillAfterBytes"/> — the inline cap — because the overwhelming majority
     /// of responses fit inline and writing every one of them to a temp file would be pure
     /// churn. The caller writes the whole body to it and then calls
-    /// <see cref="Publish"/>; a spool that never spilled publishes as null.
+    /// <see cref="Publish"/>; a spool that never spilled publishes as null — unless the caller
+    /// asked for it anyway with <see cref="ResponseSpool.MaterializeAsync"/>.
     /// </summary>
     public ResponseSpool CreateSpool(long spillAfterBytes)
         => new(this, spillAfterBytes);
 
     /// <summary>
-    /// Registers a completed spool and returns its handle, or null when the response fit
-    /// inline and there is nothing extra to hand out.
+    /// Registers a completed spool and returns its handle, or null when the response fit inline
+    /// and there is nothing extra to hand out. A materialized spool always has a handle, however
+    /// small it is.
     /// </summary>
     public RetainedResponseBody? Publish(ResponseSpool spool, string? contentType, long totalBytes)
     {
@@ -194,6 +196,20 @@ public sealed class ResponseSpool : Stream
         }
         _buffer?.Dispose();
         _buffer = null;
+    }
+
+    /// <summary>
+    /// Put the body on disk even though it fit inline, so <see cref="ResponseBodyStore.Publish"/>
+    /// hands back a handle for it. Worth doing for a body the caller can only describe rather
+    /// than carry — a binary one, which reaches the client as <c>[binary N bytes — …]</c>. The
+    /// bytes exist here and nowhere else on the client's side of the wire, so without a spool
+    /// file behind them "download the response" has nothing to offer and can only sit greyed
+    /// out. No-op once the body has spilled on its own, or when there is nothing to write.
+    /// </summary>
+    public async Task MaterializeAsync(CancellationToken ct = default)
+    {
+        if (_file is not null || _length == 0) return;
+        await SpillAsync(ct).ConfigureAwait(false);
     }
 
     public override async Task FlushAsync(CancellationToken ct)

@@ -1,0 +1,45 @@
+---
+kind: request
+id: 01a041f7-f2ee-708a-a1d5-3b2ad4228e3e
+name: ListStations
+assertions:
+- status: 200
+- xpath: count(//*[local-name()='Station'])
+  equals: '3'
+- xpath: (//*[local-name()='Id'])[1]
+  equals: NL-AMS-01
+- xpath: (//*[local-name()='Station'])[1]/@kind
+  equals: automatic
+tags: [demo, soap]
+---
+
+```http
+POST /demo/soap/weather.asmx
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://demo.tap.dev/weather/ListStations"
+
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Header>
+    <wsse:Security soap:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+      <wsse:UsernameToken>
+        <wsse:Username>{{wsseUsername}}</wsse:Username>
+        <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">{{wssePassword}}</wsse:Password>
+      </wsse:UsernameToken>
+    </wsse:Security>
+  </soap:Header>
+  <soap:Body>
+    <ListStations xmlns="http://demo.tap.dev/weather">
+      <Country>NL</Country>
+    </ListStations>
+  </soap:Body>
+</soap:Envelope>
+```
+
+# ListStations
+
+Every weather station in a country.
+
+`Weather/WeatherSoap` · SOAP 1.1 · document/literal · action `http://demo.tap.dev/weather/ListStations`.
+
+A repeating element in the response — `maxOccurs="unbounded"` on the WSDL side. The last
+assertion reads an attribute, which XPath treats no differently from an element.

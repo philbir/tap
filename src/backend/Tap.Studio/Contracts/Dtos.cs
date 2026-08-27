@@ -486,6 +486,137 @@ public sealed record OpenApiResyncResultDto(
     IReadOnlyList<string> WrittenPaths,
     IReadOnlyList<string> Warnings);
 
+// ---------------------------------------------------------------------------------------------
+// WSDL import.
+//
+// The same two-phase shape as the OpenAPI wizard above, and for the same reasons: stage once,
+// import against the staged id. A WSDL is XML rather than JSON or YAML, so it too arrives as a
+// `string` — and it too is parsed server-side, because the browser has no way to walk a message
+// through its binding into an inlined schema.
+// ---------------------------------------------------------------------------------------------
+
+/// <summary>Body for <c>POST /api/wsdl/documents</c> — the description as text.</summary>
+public sealed record WsdlUploadRequestDto
+{
+    public required string Text { get; init; }
+    public string? FileName { get; init; }
+}
+
+/// <summary>Body for <c>POST /api/wsdl/documents/fetch</c>.</summary>
+public sealed record WsdlFetchRequestDto
+{
+    public required string Url { get; init; }
+}
+
+/// <summary>A staged WSDL: everything the wizard needs to render its picker, having written
+/// nothing to disk.</summary>
+public sealed record WsdlDocumentDto(
+    string DocumentId,
+    string Title,
+    string SpecVersion,
+    string? TargetNamespace,
+    string? Description,
+    string SuggestedSlug,
+    /// <summary>Distinct endpoint addresses, best first — the wizard offers these as base URLs.</summary>
+    IReadOnlyList<string> Addresses,
+    /// <summary>True when a WS-Policy in the document asks for a UsernameToken, which is what
+    /// pre-ticks the "add a UsernameToken header" option.</summary>
+    bool WantsUsernameToken,
+    IReadOnlyList<WsdlPortDto> Ports,
+    IReadOnlyList<WsdlOperationDto> Operations,
+    IReadOnlyList<WsdlDiagnosticDto> Diagnostics);
+
+/// <summary>One <c>service/port</c> pair, so the picker can group by endpoint and say which SOAP
+/// version each speaks.</summary>
+public sealed record WsdlPortDto(
+    string Key,
+    string Service,
+    string Port,
+    string? Address,
+    /// <summary><c>1.1</c> or <c>1.2</c>.</summary>
+    string SoapVersion,
+    /// <summary><c>document</c> or <c>rpc</c>.</summary>
+    string Style,
+    int OperationCount,
+    /// <summary>True when another port binds the same operations over the other SOAP version. The
+    /// wizard pre-selects only one of a pair, since importing both doubles every request.</summary>
+    bool HasSibling);
+
+public sealed record WsdlOperationDto(
+    string OpKey,
+    string PortKey,
+    string Service,
+    string Port,
+    string Name,
+    string? SoapAction,
+    string? Documentation,
+    string SoapVersion,
+    string Style,
+    /// <summary>The element inside <c>&lt;soap:Body&gt;</c>, empty when the message has no single
+    /// wrapper.</summary>
+    string BodyElement,
+    bool HasBody);
+
+public sealed record WsdlDiagnosticDto(string Severity, string Message, string? Pointer);
+
+/// <summary>Body for <c>POST /api/collections/import/wsdl</c>.</summary>
+public sealed record WsdlImportRequestDto
+{
+    public required string DocumentId { get; init; }
+    public string? Slug { get; init; }
+
+    /// <summary>
+    /// <c>req</c> (one <c>.req.tap</c> per operation) or <c>http</c> (one <c>.http</c> file per
+    /// port). Null means <c>req</c>.
+    ///
+    /// <para>Deliberately nullable with no initializer: a property initializer does not survive
+    /// source-generated deserialization when the client omits the field, so the default has to
+    /// live in the code that reads it.</para>
+    /// </summary>
+    public string? Layout { get; init; }
+
+    /// <summary>Null or empty imports every operation.</summary>
+    public IReadOnlyList<string>? OperationKeys { get; init; }
+
+    public string? BaseUrl { get; init; }
+
+    /// <summary>Point the collection at an existing auth profile. There is nothing in a WSDL to
+    /// generate one from, so unlike the OpenAPI importer there is no "generate" counterpart.</summary>
+    public string? LinkAuthPath { get; init; }
+
+    /// <summary>Put a WS-Security UsernameToken header in every generated envelope.</summary>
+    public bool AddUsernameToken { get; init; }
+
+    /// <summary>What to do when the target collection already exists: <c>create</c> (the default —
+    /// fail if it does), <c>merge</c>, or <c>replace</c>. Null means <c>create</c>.</summary>
+    public string? Mode { get; init; }
+}
+
+public sealed record WsdlImportResponseDto(
+    string Slug,
+    string CollectionPath,
+    int RequestCount,
+    int FileCount,
+    string? BaseUrl,
+    IReadOnlyList<string> Warnings);
+
+/// <summary>
+/// <c>GET /api/collections/{slug}/wsdl</c> — the recorded link between a collection and the
+/// description it came from. 404 when the collection was not imported from one.
+/// </summary>
+public sealed record WsdlLinkDto(
+    string Slug,
+    string SourceKind,
+    string? Url,
+    string? FileName,
+    DateTimeOffset FetchedAt,
+    string? ServiceName,
+    string? TargetNamespace,
+    string DocumentHash,
+    string Layout,
+    bool UsernameTokenHeader,
+    int TrackedOperations);
+
 /// <summary>Body for <c>POST /api/collections/import/postman</c>. <see cref="Collection"/>
 /// is the raw Postman v2.1 collection JSON (parsed as a free-form object so we don't have
 /// to register the whole Postman schema in the source-generated context).
@@ -1589,6 +1720,18 @@ public sealed record FileUploadResponseDto(
 [JsonSerializable(typeof(IReadOnlyList<OpenApiSecuritySchemeDto>))]
 [JsonSerializable(typeof(IReadOnlyList<OpenApiOperationDto>))]
 [JsonSerializable(typeof(IReadOnlyList<OpenApiDiagnosticDto>))]
+[JsonSerializable(typeof(WsdlUploadRequestDto))]
+[JsonSerializable(typeof(WsdlFetchRequestDto))]
+[JsonSerializable(typeof(WsdlDocumentDto))]
+[JsonSerializable(typeof(WsdlPortDto))]
+[JsonSerializable(typeof(WsdlOperationDto))]
+[JsonSerializable(typeof(WsdlDiagnosticDto))]
+[JsonSerializable(typeof(WsdlImportRequestDto))]
+[JsonSerializable(typeof(WsdlImportResponseDto))]
+[JsonSerializable(typeof(WsdlLinkDto))]
+[JsonSerializable(typeof(IReadOnlyList<WsdlPortDto>))]
+[JsonSerializable(typeof(IReadOnlyList<WsdlOperationDto>))]
+[JsonSerializable(typeof(IReadOnlyList<WsdlDiagnosticDto>))]
 [JsonSerializable(typeof(TaggedItemDto))]
 [JsonSerializable(typeof(IReadOnlyList<TaggedItemDto>))]
 [JsonSerializable(typeof(WorkspaceSpecDto))]

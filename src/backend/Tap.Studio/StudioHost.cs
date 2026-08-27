@@ -119,6 +119,13 @@ public static class StudioHost
         builder.Services.AddSingleton<OpenApi.OpenApiSpecSource>(sp =>
             new OpenApi.OpenApiSpecSource(sp.GetRequiredService<IHttpClientFactory>().CreateClient("openapi")));
 
+        // WSDL import reuses the "openapi" client: same fetch, same no-auto-redirect requirement,
+        // and a second named client configured identically would only be one more place for that
+        // guarantee to drift.
+        builder.Services.AddSingleton<Wsdl.WsdlDocumentCache>();
+        builder.Services.AddSingleton<Wsdl.WsdlSpecSource>(sp =>
+            new Wsdl.WsdlSpecSource(sp.GetRequiredService<IHttpClientFactory>().CreateClient("openapi")));
+
         builder.Services.AddHttpClient("auth");
         builder.Services.AddSingleton<OidcDiscoveryClient>(sp =>
             new OidcDiscoveryClient(sp.GetRequiredService<IHttpClientFactory>().CreateClient("auth")));
@@ -251,6 +258,7 @@ public static class StudioHost
         CatalogEndpoints.Map(app);
         CollectionEndpoints.Map(app);
         OpenApiEndpoints.Map(app);
+        WsdlEndpoints.Map(app);
         TagEndpoints.Map(app);
         StreamEndpoints.Map(app);
         HttpFileEndpoints.Map(app);

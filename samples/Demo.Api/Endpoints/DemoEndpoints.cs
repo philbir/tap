@@ -54,6 +54,11 @@ public static class DemoEndpoints
                 "GET /demo/stream/sse?count=5&interval=500",
                 "GET /demo/stream/ws    (WebSocket upgrade)",
             },
+            soap = new[]
+            {
+                $"GET  {Endpoints.SoapEndpoints.Path}?wsdl   (WSDL 1.1, SOAP 1.1 + 1.2 bindings)",
+                $"POST {Endpoints.SoapEndpoints.Path}        (GetWeather, ListStations, Boom)",
+            },
             graphql = new[]
             {
                 "POST /graphql",

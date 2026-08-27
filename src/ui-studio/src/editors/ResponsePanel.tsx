@@ -5,14 +5,14 @@ import { useClipboard } from '@mantine/hooks'
 import { notifications } from '@mantine/notifications'
 import {
   IconAlertCircle, IconArrowDown, IconArrowRight, IconArrowUp, IconBolt, IconCheck, IconCircleCheck, IconCircleCheckFilled, IconCircleMinus, IconCircleXFilled, IconCode, IconCopy, IconDots, IconDownload, IconExternalLink, IconEye,
-  IconHistory, IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSearch, IconSend, IconTrash, IconX,
+  IconHistory, IconIndentIncrease, IconKey, IconLock, IconLockOpen, IconPlayerPlayFilled, IconPlayerStopFilled, IconPlugConnected, IconPlugX, IconRefresh, IconSearch, IconSend, IconTrash, IconX,
 } from '@tabler/icons-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../api/client'
 import type { AssertResult, AssertSummary, AuthExecuteResponse, AuthStatus, AuthSummary, ExecutionResult, RenderedRequest, SseEvent, WsFrame } from '../api/types'
 import { BrowserPicker, useBrowserLaunch } from './BrowserPicker'
 import { useTapStore } from '../store'
-import { CodeBlock } from './CodeBlock'
+import { CodeBlock, detectLanguage } from './CodeBlock'
 import { TabCount } from './EditorShell'
 import type { CodeSearchSpec } from './codeSearch'
 import { ResultSearchBar } from './ResultSearchBar'
@@ -163,6 +163,14 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
   const [bodyMode, setBodyMode] = useTabView<BodyMode>(tabPath, 'bodyMode', 'raw')
   const canPreviewHtml = !!execution && isPreviewableHtml(execution)
   const previewing = tab === 'body' && canPreviewHtml && bodyMode === 'preview'
+
+  // ---- Body view: formatted vs raw -------------------------------------------------------
+  // JSON and XML are re-indented for reading, which is right nearly always and wrong exactly
+  // when the bytes themselves are the question — a whitespace-sensitive signature, a body you
+  // are diffing against what curl printed, an "is this really one line?" check. This defaults
+  // to formatted (what the panel has always done to JSON) and parks the choice on the tab.
+  const [bodyFormat, setBodyFormat] = useTabView<BodyFormat>(tabPath, 'bodyFormat', 'formatted')
+  const canFormatBody = !!execution && isFormattableBody(execution)
 
   // ---- Find in result ------------------------------------------------------------------
   // One query for the whole panel. It is parked on the tab (not on this mount) so it
@@ -413,6 +421,31 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
               ]}
             />
           )}
+          {tab === 'body' && canFormatBody && (
+            <SegmentedControl
+              size="xs"
+              value={bodyFormat}
+              onChange={(v) => setBodyFormat(v as BodyFormat)}
+              data={[
+                {
+                  value: 'formatted',
+                  label: (
+                    <Tooltip label="Formatted — indent and wrap the body" withArrow>
+                      <IconIndentIncrease size={14} style={{ display: 'block' }} />
+                    </Tooltip>
+                  ),
+                },
+                {
+                  value: 'raw',
+                  label: (
+                    <Tooltip label="Raw — exactly the bytes the server sent" withArrow>
+                      <IconCode size={14} style={{ display: 'block' }} />
+                    </Tooltip>
+                  ),
+                },
+              ]}
+            />
+          )}
           {replayedAt && <ReplayChip at={replayedAt} redacted={replayRedacted} />}
           {execution && <StatusStrip execution={execution} busy={busy} stopped={stopped} />}
           {busy && onStop && (
@@ -471,6 +504,7 @@ export function ResponsePanel({ tabPath, rendered, execution, error, busy, stopp
               stopped={stopped}
               requestName={requestName}
               preview={previewing}
+              format={bodyFormat === 'formatted'}
               search={findSpec}
               onSearchCount={setFindCount}
               onDiagnoseTls={onDiagnoseTls}
@@ -672,8 +706,11 @@ function ResultActionsMenu({ execution, requestName }: { execution: ExecutionRes
           disabled={!downloadable}
           onClick={() => downloadResult(execution, requestName)}
         >
-          {execution.bodyId ? 'Download full response' : 'Download response'}
+          {wasTruncated(execution) ? 'Download full response' : 'Download response'}
         </Menu.Item>
+        {!canCopy && !downloadable && (
+          <Menu.Label>Nothing to save — this result has no response body.</Menu.Label>
+        )}
       </Menu.Dropdown>
     </Menu>
   )
@@ -707,6 +744,14 @@ function resultToText(execution: ExecutionResult): string | null {
     return null
   }
   return execution.responseBody
+}
+
+/** True when the panel is showing a prefix rather than the whole body. Only then is the
+ *  download offering something more than what is on screen — a retained body also backs a
+ *  binary response that fit inline, and calling that one "full" would promise a difference
+ *  there isn't. */
+function wasTruncated(execution: ExecutionResult): boolean {
+  return !!execution.bodyId && execution.responseBodyBytes > (execution.responseBodyInlineBytes ?? 0)
 }
 
 function isDownloadableImage(execution: ExecutionResult): boolean {
@@ -809,13 +854,15 @@ function extForContentType(ct: string | null): string {
 
 // ---- Body view (CodeMirror) ----------------------------------------------------------
 
-function BodyView({ execution, stopped, requestName, preview, search, onSearchCount, onDiagnoseTls, diagnosingTls, onOpenTransport }: {
+function BodyView({ execution, stopped, requestName, preview, format, search, onSearchCount, onDiagnoseTls, diagnosingTls, onOpenTransport }: {
   execution: ExecutionResult | null
   stopped?: boolean
   requestName?: string
   /** Render the body as a page instead of as markup. Only ever true for HTML — the header's
    *  toggle is the only thing that sets it, and it only appears for previewable responses. */
   preview?: boolean
+  /** Re-indent a JSON or XML body. False shows the wire bytes — see the header's toggle. */
+  format?: boolean
   search: CodeSearchSpec | null
   onSearchCount: (count: number) => void
   onDiagnoseTls?: () => void
@@ -961,6 +1008,7 @@ function BodyView({ execution, stopped, requestName, preview, search, onSearchCo
           value={body}
           contentType={execution.contentType}
           readOnly
+          format={format}
           search={search}
           onSearchCount={onSearchCount}
         />
@@ -972,6 +1020,21 @@ function BodyView({ execution, stopped, requestName, preview, search, onSearchCo
 // ---- HTML preview --------------------------------------------------------------------
 
 type BodyMode = 'raw' | 'preview'
+type BodyFormat = 'formatted' | 'raw'
+
+/** Whether the Body tab should offer the formatted/raw toggle at all. Only the two content
+ *  types we can re-indent, and only when a CodeBlock is what ends up rendering them — an SVG
+ *  is `+xml` but reaches the viewer as an image, and there is nothing to indent in an error,
+ *  a binary placeholder, or an empty body. */
+function isFormattableBody(execution: ExecutionResult): boolean {
+  if (execution.error || !execution.responseBody) return false
+  if (execution.responseBody.startsWith('[binary ')) return false
+  const ct = execution.contentType?.toLowerCase() ?? ''
+  if (ct.includes('text/event-stream')) return false
+  if (ct.startsWith('image/') && execution.responseBody.startsWith('data:')) return false
+  const lang = detectLanguage(execution.contentType)
+  return lang === 'json' || lang === 'xml'
+}
 
 /** Whether the Body tab should offer the raw/rendered toggle at all. Errors, binary
  *  placeholders and empty bodies have nothing to render, whatever the header claimed. */

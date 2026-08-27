@@ -19,7 +19,7 @@ public static class RequestSlug
         // slugifying one directly would collapse it to `getpetbyid`. Splitting first is what makes
         // the generated filename readable.
         if (op.OperationId is { Length: > 0 } id
-            && ImportSlug.Slugify(SplitCamelCase(id)) is { Length: > 0 } fromId)
+            && ImportSlug.Slugify(ImportSlug.SplitCamelCase(id)) is { Length: > 0 } fromId)
             return fromId;
 
         var sb = new StringBuilder(op.Method.ToLowerInvariant());
@@ -28,7 +28,7 @@ public static class RequestSlug
             if (segment.StartsWith('{') && segment.EndsWith('}'))
             {
                 var name = segment[1..^1];
-                sb.Append("-by-").Append(ImportSlug.Slugify(SplitCamelCase(name)));
+                sb.Append("-by-").Append(ImportSlug.Slugify(ImportSlug.SplitCamelCase(name)));
             }
             else
             {
@@ -41,7 +41,7 @@ public static class RequestSlug
     }
 
     /// <summary><c>petId</c> → <c>pet Id</c>, so slugification produces <c>pet-id</c>.</summary>
-    public static string Humanize(string value) => SplitCamelCase(value);
+    public static string Humanize(string value) => ImportSlug.SplitCamelCase(value);
 
     /// <summary>
     /// Slug for an OpenAPI tag — the <c>.http</c> filename or the folder in the structured layout.
@@ -50,18 +50,8 @@ public static class RequestSlug
     /// re-sync when deciding which existing file a new operation belongs in. If those disagreed,
     /// re-sync would start a second file beside the first every time.</para>
     /// </summary>
-    public static string ForTag(string tag) => ImportSlug.Slugify(SplitCamelCase(tag));
+    public static string ForTag(string tag) => ImportSlug.Slugify(ImportSlug.SplitCamelCase(tag));
 
-    private static string SplitCamelCase(string value)
-    {
-        var sb = new StringBuilder(value.Length + 4);
-        for (var i = 0; i < value.Length; i++)
-        {
-            if (i > 0 && char.IsUpper(value[i]) && !char.IsUpper(value[i - 1])) sb.Append(' ');
-            sb.Append(value[i]);
-        }
-        return sb.ToString();
-    }
 }
 
 /// <summary>Builds the request URL line for an operation.</summary>

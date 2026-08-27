@@ -4,15 +4,15 @@ import {
 } from '@mantine/core'
 import { useDisclosure } from '@mantine/hooks'
 import {
-  IconApi, IconCode, IconFileCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRefresh, IconRocket,
-  IconShieldCheck, IconVariable, IconWorld, IconX,
+  IconCode, IconFileCode, IconFileText, IconLayoutDashboard, IconList, IconPlus, IconRefresh, IconRocket,
+  IconSchema, IconShieldCheck, IconVariable, IconWorld, IconX,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { api, ApiError } from '../api/client'
 import { envBindingFor } from '../api/types'
 import type {
   AuthSummary, CollectionDetail, CollectionSpec, CollectionSummary, EnvCollection, EnvSummary,
-  OpenApiLink, VariableContext,
+  VariableContext,
 } from '../api/types'
 import { useTapStore } from '../store'
 import { useTagDictionary } from '../workspace/useTagDictionary'
@@ -23,8 +23,13 @@ import { EditorShell, TabCount, TabDot } from './EditorShell'
 import { saveEnvAssignment } from './envSpec'
 import { HistorySettings } from './HistorySettings'
 import { ImportOpenApiDialog } from './ImportOpenApiDialog'
+import { ImportWsdlDialog } from './ImportWsdlDialog'
 import { KvTable, type KvRow } from './KvTable'
 import { ResyncOpenApiDialog } from './ResyncOpenApiDialog'
+import {
+  SCHEMA_FORMATS, openApiSchemaLink, wsdlSchemaLink,
+  type SchemaFormat, type SchemaLink,
+} from './schemaFormats'
 import { COMMON_HEADER_NAMES, valuesForHeader } from './headerSuggestions'
 import { SourceTab } from './SourceTab'
 import { restoreDraft, usePublishDraft } from './useDraft'
@@ -76,10 +81,14 @@ export function CollectionEditor({ path }: Props) {
   const [varsOpened, varsCtl] = useDisclosure(false)
   const variableContext = useMemo<VariableContext>(() => ({ collectionPath: collectionFilePath }), [collectionFilePath])
 
-  // The OpenAPI document this collection was imported from, if any. Null both while loading
-  // and when the collection was hand-written — the tab reads the same either way.
-  const [link, setLink] = useState<OpenApiLink | null>(null)
-  const [importOpen, importCtl] = useDisclosure(false)
+  // The descriptions this collection was generated from, if any. An empty list covers both
+  // "still loading" and "hand-written" — the tab reads the same either way. A collection can
+  // legitimately carry more than one: merging a WSDL into an OpenAPI collection is an import,
+  // not a replacement.
+  const [links, setLinks] = useState<SchemaLink[]>([])
+  // Which format's wizard is open, or null. One piece of state rather than one flag per format,
+  // so adding GraphQL touches the registry and nothing here.
+  const [importing, setImporting] = useState<SchemaFormat | null>(null)
   const [resyncOpen, resyncCtl] = useDisclosure(false)
 
   useEffect(() => {
@@ -94,8 +103,12 @@ export function CollectionEditor({ path }: Props) {
       setSpec(restoreDraft(path, initial))
       setSavedSpec(initial)
     }).catch((e: Error) => !cancelled && setError(e.message))
-    // A missing link isn't an error — most collections have none.
-    api.openApiLink(slug).then((l) => !cancelled && setLink(l)).catch(() => {})
+    // A missing link isn't an error — most collections have none, and every format is probed
+    // independently so one failing lookup can't hide another format's link.
+    Promise.all([
+      api.openApiLink(slug).then((l) => (l ? openApiSchemaLink(l) : null)).catch(() => null),
+      api.wsdlLink(slug).then((l) => (l ? wsdlSchemaLink(l) : null)).catch(() => null),
+    ]).then((found) => !cancelled && setLinks(found.filter((l) => l !== null)))
     return () => { cancelled = true }
   }, [slug, generation])
 
@@ -159,7 +172,7 @@ export function CollectionEditor({ path }: Props) {
       onTitleChange={(n) => update('name', n)}
     >
       <Tabs value={tab} onChange={setTab}>
-        {/* Ordered left-to-right by how often a section is touched: the tail (Docs, OpenAPI,
+        {/* Ordered left-to-right by how often a section is touched: the tail (Docs, Schema,
             Source) is what AdaptiveTabsList strips down to icons first when space runs out. */}
         <AdaptiveTabsList
           mb="md"
@@ -170,7 +183,7 @@ export function CollectionEditor({ path }: Props) {
             { value: 'variables', label: 'Variables', icon: <IconVariable size={14} />, adornment: <TabCount count={varRows.length} /> },
             { value: 'environments', label: 'Environments', icon: <IconRocket size={14} />, adornment: <TabCount count={assignedEnvs.length} /> },
             { value: 'docs', label: 'Docs', icon: <IconFileText size={14} />, adornment: <TabDot active={!!spec.body && spec.body.trim().length > 0} /> },
-            { value: 'openapi', label: 'OpenAPI', icon: <IconApi size={14} />, adornment: <TabDot active={!!link} /> },
+            { value: 'schema', label: 'Schema', icon: <IconSchema size={14} />, adornment: <TabDot active={links.length > 0} /> },
             { value: 'source', label: 'Source', icon: <IconCode size={14} /> },
           ]}
         />
@@ -346,10 +359,10 @@ export function CollectionEditor({ path }: Props) {
           />
         </Tabs.Panel>
 
-        <Tabs.Panel value="openapi">
-          <OpenApiPanel
-            link={link}
-            onImport={importCtl.open}
+        <Tabs.Panel value="schema">
+          <SchemaPanel
+            links={links}
+            onImport={setImporting}
             onResync={resyncCtl.open}
           />
         </Tabs.Panel>
@@ -366,12 +379,20 @@ export function CollectionEditor({ path }: Props) {
       </Tabs>
     </EditorShell>
     <VariablesPanel opened={varsOpened} onClose={varsCtl.close} context={variableContext} />
-    {importOpen && (
+    {importing === 'openapi' && (
       <ImportOpenApiDialog
-        open={importOpen}
-        onOpenChange={(v) => !v && importCtl.close()}
+        open
+        onOpenChange={(v) => !v && setImporting(null)}
         initialSlug={slug}
-        onImported={importCtl.close}
+        onImported={() => setImporting(null)}
+      />
+    )}
+    {importing === 'wsdl' && (
+      <ImportWsdlDialog
+        open
+        onOpenChange={(v) => !v && setImporting(null)}
+        initialSlug={slug}
+        onImported={() => setImporting(null)}
       />
     )}
     {resyncOpen && (
@@ -385,65 +406,86 @@ export function CollectionEditor({ path }: Props) {
   )
 }
 
-// ---- OpenAPI ------------------------------------------------------------------------
+// ---- Schema -------------------------------------------------------------------------
 
 /** Import and re-sync live here rather than on the explorer's context menu: they're
  *  occasional, collection-scoped operations, and the tab has room to show what the
- *  collection is actually linked to before you fire one. */
-function OpenApiPanel({ link, onImport, onResync }: {
-  link: OpenApiLink | null
-  onImport: () => void
+ *  collection is actually generated from before you fire one.
+ *
+ *  Format-agnostic on purpose. Every description format normalizes to a `SchemaLink`
+ *  (`schemaFormats.tsx`), so OpenAPI, WSDL and whatever comes next render as the same card and
+ *  offer the same actions — the only thing a format decides is whether it can re-sync. */
+function SchemaPanel({ links, onImport, onResync }: {
+  links: SchemaLink[]
+  onImport: (format: SchemaFormat) => void
   onResync: () => void
 }) {
-  if (!link) {
+  const importButtons = (variant: 'filled' | 'default') =>
+    SCHEMA_FORMATS.map((f) => (
+      <Button key={f.id} variant={variant} leftSection={f.icon} onClick={() => onImport(f.id)}>
+        Import from {f.label}…
+      </Button>
+    ))
+
+  if (links.length === 0) {
     return (
       <Stack gap="md" maw={620}>
         <Text size="sm" c="dimmed">
-          This collection isn't linked to an OpenAPI document. Import one to generate requests
-          from its operations — pick which ones you want, how they're laid out, and which
-          security scheme becomes the collection's default auth.
+          This collection isn't generated from a schema. Import one to turn a service's own
+          description into requests.
         </Text>
-        <Box>
-          <Button leftSection={<IconApi size={14} />} onClick={onImport}>Import from OpenAPI…</Button>
-        </Box>
+        <Group gap="sm">{importButtons('filled')}</Group>
+        <Stack gap={4}>
+          {SCHEMA_FORMATS.map((f) => (
+            <Text key={f.id} size="xs" c="dimmed">
+              <Text component="span" fw={600}>{f.label}</Text> — {f.blurb}
+            </Text>
+          ))}
+        </Stack>
       </Stack>
     )
   }
 
-  // `aspire` links carry a URL too — what matters for the icon is whether there's an address
-  // to re-fetch from or just an uploaded file.
-  const fromUrl = !!link.url
   return (
     <Stack gap="md" maw={620}>
-      <Paper withBorder radius="sm" p="md">
-        <Stack gap="xs">
-          <Group gap="xs" wrap="nowrap">
-            {fromUrl ? <IconWorld size={16} opacity={0.6} /> : <IconFileCode size={16} opacity={0.6} />}
-            <Text size="sm" ff="var(--mono)" truncate style={{ flex: 1 }}>
-              {link.url ?? link.fileName ?? link.sourceKind}
-            </Text>
-          </Group>
-          <Group gap={6}>
-            <Badge size="sm" variant="light" color="gray">OpenAPI {link.specVersion}</Badge>
-            {link.apiVersion && <Badge size="sm" variant="light" color="gray">api {link.apiVersion}</Badge>}
-            {link.sourceKind === 'aspire' && <Badge size="sm" variant="light" color="gray">aspire</Badge>}
-            <Badge size="sm" variant="light" color="gray">{link.layout} layout</Badge>
-            <Badge size="sm" variant="light" color="tap">
-              {link.trackedOperations} tracked {link.trackedOperations === 1 ? 'operation' : 'operations'}
-            </Badge>
-          </Group>
-          <Text size="xs" c="dimmed">Last synced {formatFetchedAt(link.fetchedAt)}.</Text>
-        </Stack>
-      </Paper>
-      <Group gap="sm">
-        <Button leftSection={<IconRefresh size={14} />} onClick={onResync}>Re-sync…</Button>
-        <Button variant="default" leftSection={<IconApi size={14} />} onClick={onImport}>
-          Import from OpenAPI…
-        </Button>
-      </Group>
+      {links.map((link) => (
+        <Paper key={link.format} withBorder radius="sm" p="md">
+          <Stack gap="xs">
+            <Group gap="xs" wrap="nowrap">
+              {link.fromUrl ? <IconWorld size={16} opacity={0.6} /> : <IconFileCode size={16} opacity={0.6} />}
+              <Text size="sm" ff="var(--mono)" truncate style={{ flex: 1 }}>{link.source}</Text>
+            </Group>
+            <Group gap={6}>
+              {link.extras.map((e) => (
+                <Badge key={e} size="sm" variant="light" color="gray">{e}</Badge>
+              ))}
+              <Badge size="sm" variant="light" color="gray">{link.layout} layout</Badge>
+              <Badge size="sm" variant="light" color="tap">
+                {link.trackedOperations} tracked {link.trackedOperations === 1 ? 'operation' : 'operations'}
+              </Badge>
+            </Group>
+            <Text size="xs" c="dimmed">Last synced {formatFetchedAt(link.fetchedAt)}.</Text>
+            {link.canResync && (
+              <Box>
+                <Button size="xs" leftSection={<IconRefresh size={14} />} onClick={onResync}>
+                  Re-sync…
+                </Button>
+              </Box>
+            )}
+          </Stack>
+        </Paper>
+      ))}
+      <Group gap="sm">{importButtons('default')}</Group>
       <Text size="xs" c="dimmed">
-        Re-sync diffs the collection against the document and lets you decide, per operation,
-        what to take. Importing again adds operations from any document — including a different one.
+        {/* Only worth explaining re-sync when something here actually offers it. */}
+        {links.some((l) => l.canResync) && (
+          <>
+            Re-sync diffs the collection against the description and lets you decide, per operation,
+            what to take.{' '}
+          </>
+        )}
+        Importing again adds operations from any description — including a different one, in a
+        different format.
       </Text>
     </Stack>
   )

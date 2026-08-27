@@ -40,6 +40,10 @@ import type {
   OpenApiResyncAction,
   OpenApiResyncPreview,
   OpenApiResyncResult,
+  WsdlDocument,
+  WsdlImportRequest,
+  WsdlImportResponse,
+  WsdlLink,
   RenderedRequest,
   RequestDetail,
   RequestSpec,
@@ -318,6 +322,31 @@ export const api = {
   openApiLink: async (slug: string): Promise<OpenApiLink | null> => {
     try {
       return await get<OpenApiLink>(`/api/collections/${encodeURIComponent(slug)}/openapi`)
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null
+      throw e
+    }
+  },
+
+  // WSDL import. Same two-phase shape as OpenAPI above, and for the same reasons — the description
+  // is sent as raw text and every bit of parsing (binding -> message -> schema) is server-side.
+
+  /** Parse + stage an uploaded description. Writes nothing; returns the operation list. */
+  stageWsdlDocument: (text: string, fileName: string | null) =>
+    post<WsdlDocument>('/api/wsdl/documents', { text, fileName }),
+
+  /** Fetch a description by URL, then stage it. The server owns the redirect/SSRF guard. */
+  fetchWsdlDocument: (url: string) =>
+    post<WsdlDocument>('/api/wsdl/documents/fetch', { url }),
+
+  /** Write the selected operations into a collection as SOAP requests. */
+  importWsdlCollection: (request: WsdlImportRequest) =>
+    post<WsdlImportResponse>('/api/collections/import/wsdl', request),
+
+  /** The description a collection was imported from, or null when it wasn't. */
+  wsdlLink: async (slug: string): Promise<WsdlLink | null> => {
+    try {
+      return await get<WsdlLink>(`/api/collections/${encodeURIComponent(slug)}/wsdl`)
     } catch (e) {
       if (e instanceof ApiError && e.status === 404) return null
       throw e

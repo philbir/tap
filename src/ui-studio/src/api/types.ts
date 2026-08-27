@@ -1281,6 +1281,113 @@ export interface OpenApiResyncResult {
   warnings: string[]
 }
 
+// ---------------------------------------------------------------------------------------------
+// WSDL import.
+//
+// The same two-phase shape as the OpenAPI wizard above: stage once, import against the staged id.
+// A WSDL is XML, and it too is parsed server-side — the browser has no way to walk a message
+// through its binding into an inlined schema.
+// ---------------------------------------------------------------------------------------------
+
+/** A staged WSDL: everything the wizard needs to render its picker. */
+export interface WsdlDocument {
+  documentId: string
+  title: string
+  /** Always `1.1` — WSDL 2.0 is refused at read time. */
+  specVersion: string
+  targetNamespace: string | null
+  description: string | null
+  suggestedSlug: string
+  /** Distinct endpoint addresses, best first — offered as base URLs. */
+  addresses: string[]
+  /** A WS-Policy in the document asks for a UsernameToken, so pre-tick the header option. */
+  wantsUsernameToken: boolean
+  ports: WsdlPort[]
+  operations: WsdlOperation[]
+  diagnostics: WsdlDiagnostic[]
+}
+
+/** One `service/port` pair. */
+export interface WsdlPort {
+  key: string
+  service: string
+  port: string
+  address: string | null
+  /** `1.1` | `1.2` */
+  soapVersion: string
+  /** `document` | `rpc` */
+  style: string
+  operationCount: number
+  /** Another port binds the same operations over the other SOAP version. Only one of a pair is
+   *  pre-selected, since importing both doubles every request. */
+  hasSibling: boolean
+}
+
+export interface WsdlOperation {
+  opKey: string
+  portKey: string
+  service: string
+  port: string
+  name: string
+  soapAction: string | null
+  documentation: string | null
+  soapVersion: string
+  style: string
+  /** The element inside `<soap:Body>`; empty when the message has no single wrapper. */
+  bodyElement: string
+  hasBody: boolean
+}
+
+export interface WsdlDiagnostic {
+  /** `error` | `warning` */
+  severity: string
+  message: string
+  pointer: string | null
+}
+
+/** `req` writes one `.req.tap` per operation; `http` writes one `.http` file per port. */
+export type WsdlLayout = 'req' | 'http'
+
+export interface WsdlImportRequest {
+  documentId: string
+  slug: string | null
+  layout: WsdlLayout
+  /** Null or empty imports every operation. */
+  operationKeys: string[] | null
+  baseUrl: string | null
+  /** Point the collection at an existing auth profile. There is nothing in a WSDL to generate one
+   *  from, so unlike the OpenAPI wizard there is no "generate" counterpart. */
+  linkAuthPath: string | null
+  /** Put a WS-Security UsernameToken header in every generated envelope. */
+  addUsernameToken: boolean
+  mode: OpenApiImportMode
+}
+
+export interface WsdlImportResponse {
+  slug: string
+  collectionPath: string
+  requestCount: number
+  fileCount: number
+  baseUrl: string | null
+  warnings: string[]
+}
+
+/** The recorded link between a collection and the description it was generated from. */
+export interface WsdlLink {
+  slug: string
+  /** `url` | `file` */
+  sourceKind: string
+  url: string | null
+  fileName: string | null
+  fetchedAt: string
+  serviceName: string | null
+  targetNamespace: string | null
+  documentHash: string
+  layout: WsdlLayout
+  usernameTokenHeader: boolean
+  trackedOperations: number
+}
+
 /** One (tag, entity) row from `GET /api/tags`. */
 export interface TaggedItem {
   tag: string

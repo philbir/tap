@@ -1,0 +1,43 @@
+---
+kind: request
+id: 01a041f7-f2ee-7b8f-bd7d-bfc50f185b03
+name: Boom
+assertions:
+- status: 500
+- xpath: //*[local-name()='faultcode']
+  equals: soap:Server
+- xpath: //*[local-name()='faultstring']
+  equals: Something went wrong upstream.
+tags: [demo, soap]
+---
+
+```http
+POST /demo/soap/weather.asmx
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://demo.tap.dev/weather/Boom"
+
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Header>
+    <wsse:Security soap:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+      <wsse:UsernameToken>
+        <wsse:Username>{{wsseUsername}}</wsse:Username>
+        <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">{{wssePassword}}</wsse:Password>
+      </wsse:UsernameToken>
+    </wsse:Security>
+  </soap:Header>
+  <soap:Body>
+    <Boom xmlns="http://demo.tap.dev/weather">
+      <Message>Something went wrong upstream.</Message>
+    </Boom>
+  </soap:Body>
+</soap:Envelope>
+```
+
+# Boom
+
+Always answers with a SOAP Fault. For testing the failure path.
+
+`Weather/WeatherSoap` · SOAP 1.1 · document/literal · action `http://demo.tap.dev/weather/Boom`.
+
+The failure path. A SOAP fault is an ordinary 500 with an envelope in it, so these assertions
+read the fault exactly the way the others read a result — inspecting one needs nothing special.

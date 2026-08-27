@@ -81,6 +81,25 @@ public static class ImportSlug
     }
 
     /// <summary>
+    /// <c>petId</c> → <c>pet Id</c>, so slugification produces <c>pet-id</c> instead of
+    /// <c>petid</c>.
+    ///
+    /// <para>Shared because every importer meets the same problem: an <c>operationId</c>, a WSDL
+    /// operation name, and a security-scheme key are all camelCase by convention, and slugifying
+    /// one directly collapses it into an unreadable run of letters.</para>
+    /// </summary>
+    public static string SplitCamelCase(string value)
+    {
+        var sb = new StringBuilder(value.Length + 4);
+        for (var i = 0; i < value.Length; i++)
+        {
+            if (i > 0 && char.IsUpper(value[i]) && !char.IsUpper(value[i - 1])) sb.Append(' ');
+            sb.Append(value[i]);
+        }
+        return sb.ToString();
+    }
+
+    /// <summary>
     /// Slugifies and disambiguates against names already taken in the same directory, appending
     /// <c>-2</c>, <c>-3</c>… <paramref name="siblings"/> is mutated to record the result, so
     /// callers keep one set per directory.

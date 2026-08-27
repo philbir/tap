@@ -125,8 +125,18 @@ public static class HttpExecutionHelpers
         }
         catch { /* fall through to binary summary */ }
 
-        return $"[binary {totalSize:N0} bytes — {contentType ?? "unknown content type"}]";
+        return $"{BinaryPlaceholderPrefix}{totalSize:N0} bytes — {contentType ?? "unknown content type"}]";
     }
+
+    /// <summary>How a decode that gave up announces itself.</summary>
+    private const string BinaryPlaceholderPrefix = "[binary ";
+
+    /// <summary>True when <see cref="TryDecodeBody"/> described the body instead of returning
+    /// it. A caller holding the raw bytes uses this to know that the string it is about to hand
+    /// on carries none of them — so anything that needs the body itself, a download above all,
+    /// has to be served from somewhere else.</summary>
+    public static bool IsBinaryPlaceholder(string? body)
+        => body is not null && body.StartsWith(BinaryPlaceholderPrefix, StringComparison.Ordinal);
 
     public static bool IsTextContentType(string? contentType)
     {

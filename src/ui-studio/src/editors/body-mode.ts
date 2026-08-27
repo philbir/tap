@@ -111,10 +111,9 @@ function safeEncode(s: string): string {
     /^(\$?\{\{[^}]+\}\})$/.test(c) ? c : encodeURIComponent(c))
 }
 
-/** Pretty-print JSON if valid, else return as-is. */
-export function tryPrettyJson(body: string): string {
-  try { return JSON.stringify(JSON.parse(body), null, 2) } catch { return body }
-}
+/** Pretty-print JSON if valid, else return as-is. One implementation, shared with the
+ *  response viewer's Formatted/Raw toggle — see `./prettyPrint`. */
+export { tryPrettyJson } from './prettyPrint'
 
 // -------------------------------- Multipart ------------------------------------------
 

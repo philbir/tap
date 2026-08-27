@@ -87,6 +87,54 @@ public class ResponseCaptureTests : IDisposable
     }
 
     [Fact]
+    public async Task A_binary_body_that_fits_inline_is_still_retained_when_asked_for()
+    {
+        // The panel never receives these bytes — a binary body reaches it as
+        // "[binary N bytes — …]" — so the spool is the only thing a download can read, however
+        // small the response was.
+        await using var spool = _store.CreateSpool(1024);
+        var captured = await ResponseCapture.ReadAsync(Body(500), 1024, spool, 4096, TestContext.Current.CancellationToken);
+        Assert.Null(spool.SpilledPath);
+
+        await spool.MaterializeAsync(TestContext.Current.CancellationToken);
+        await spool.FlushAsync(TestContext.Current.CancellationToken);
+        var retained = _store.Publish(spool, "application/octet-stream", captured.TotalBytes);
+
+        Assert.NotNull(retained);
+        Assert.True(retained.IsComplete);
+        Assert.Equal(500, retained.RetainedBytes);
+
+        await spool.DisposeAsync();
+        var onDisk = await File.ReadAllBytesAsync(retained.Path, TestContext.Current.CancellationToken);
+        Assert.Equal(500, onDisk.Length);
+    }
+
+    [Fact]
+    public async Task Materializing_an_empty_body_leaves_nothing_to_publish()
+    {
+        // A 204 and a failed connection both land here; neither should leave a file behind or
+        // offer a download of nothing.
+        await using var spool = _store.CreateSpool(1024);
+        await ResponseCapture.ReadAsync(new MemoryStream([]), 1024, spool, 4096, TestContext.Current.CancellationToken);
+
+        await spool.MaterializeAsync(TestContext.Current.CancellationToken);
+
+        Assert.Null(spool.SpilledPath);
+        Assert.Null(_store.Publish(spool, "application/octet-stream", 0));
+    }
+
+    [Fact]
+    public void The_decoder_and_the_placeholder_test_agree()
+    {
+        // The two halves of "did the client actually get the body?" are coupled by a string
+        // prefix; retaining binary bodies for download depends on them staying in step.
+        Assert.True(HttpExecutionHelpers.IsBinaryPlaceholder(
+            HttpExecutionHelpers.TryDecodeBody([0x00, 0x01, 0x02, 0xFF], "application/octet-stream", 4)));
+        Assert.False(HttpExecutionHelpers.IsBinaryPlaceholder(
+            HttpExecutionHelpers.TryDecodeBody("{}"u8.ToArray(), "application/json", 2)));
+    }
+
+    [Fact]
     public async Task Without_a_sink_nothing_beyond_the_cap_is_kept()
     {
         // The CLI / test-runner path: report the size, keep the prefix, retain nothing.

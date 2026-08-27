@@ -4,7 +4,7 @@ import {
 } from '@mantine/core'
 import {
   IconAlertCircle, IconArrowsSplit2, IconChecklist, IconFileCode, IconFolders, IconLock, IconPlus,
-  IconApi, IconSend, IconUpload, IconWorld,
+  IconApi, IconPlugConnected, IconSend, IconUpload, IconWorld,
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useEffect, useMemo, useState } from 'react'
@@ -13,6 +13,7 @@ import type { CollectionSummary, WorkspaceFileKind } from '../api/types'
 import { useTapStore } from '../store'
 import { AuthWizard } from './AuthWizard'
 import { ImportOpenApiDialog } from './ImportOpenApiDialog'
+import { ImportWsdlDialog } from './ImportWsdlDialog'
 import { COLLECTION_FILE, fileNameFor, httpFileNameFor } from '../shell/tapFiles'
 
 interface Props {
@@ -44,8 +45,8 @@ const KIND_OPTIONS: KindOption[] = [
   { kind: 'flow', label: 'Flow', description: 'Requests run in order, passing values from one response to the next', icon: IconArrowsSplit2, color: 'violet' },
 ]
 
-/** Collection sub-mode: from-scratch vs. import a Postman v2.1 export. */
-type CollectionMode = 'blank' | 'postman' | 'openapi'
+/** Collection sub-mode: from scratch, or imported from one of the three description formats. */
+type CollectionMode = 'blank' | 'postman' | 'openapi' | 'wsdl'
 
 /** Sentinel for "not owned by a collection" in the auth scope picker — Mantine's Select
  *  treats '' as "nothing selected", so it can't carry a real choice. */
@@ -91,6 +92,10 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
   // Postman file + an overwrite toggle. Reset when the kind switches away.
   const [collectionMode, setCollectionMode] = useState<CollectionMode>('blank')
   const [openApiOpen, setOpenApiOpen] = useState(false)
+  const [wsdlOpen, setWsdlOpen] = useState(false)
+  // The OpenAPI and WSDL modes only hand off to their own wizard — this dialog creates nothing in
+  // either, so its Create button (and the path it promises) would both be lies.
+  const handsOffToWizard = kind === 'collection' && (collectionMode === 'openapi' || collectionMode === 'wsdl')
   const [postman, setPostman] = useState<PostmanPreview | null>(null)
   const [postmanParseError, setPostmanParseError] = useState<string | null>(null)
   const [overwriteExisting, setOverwriteExisting] = useState(false)
@@ -360,6 +365,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
                 { value: 'blank', label: 'Blank' },
                 { value: 'postman', label: 'From Postman' },
                 { value: 'openapi', label: 'From OpenAPI' },
+                { value: 'wsdl', label: 'From WSDL' },
               ]}
             />
             {/* OpenAPI gets its own wizard: picking operations, a layout, and an auth scheme
@@ -375,6 +381,23 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
                     size="xs"
                     leftSection={<IconApi size={14} />}
                     onClick={() => { setOpenApiOpen(true); onOpenChange(false) }}
+                  >
+                    Open the import wizard
+                  </Button>
+                </Group>
+              </Stack>
+            )}
+            {collectionMode === 'wsdl' && (
+              <Stack gap="xs">
+                <Text size="xs" c="dimmed">
+                  Import a SOAP service’s WSDL — upload a file or fetch a URL, then choose which
+                  operations become requests.
+                </Text>
+                <Group justify="flex-end">
+                  <Button
+                    size="xs"
+                    leftSection={<IconPlugConnected size={14} />}
+                    onClick={() => { setWsdlOpen(true); onOpenChange(false) }}
                   >
                     Open the import wizard
                   </Button>
@@ -437,7 +460,8 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
           </Stack>
         )}
 
-        {targetPath && kind !== 'auth' && !(kind === 'collection' && collectionMode === 'postman') && (
+        {targetPath && kind !== 'auth' && !handsOffToWizard
+          && !(kind === 'collection' && collectionMode === 'postman') && (
           <Text size="xs" c="dimmed">
             Created at <Code fz="xs">.tap/{targetPath}</Code>
             {kind === 'httpfile' && ' — a portable starter that also runs in Visual Studio and REST Client.'}
@@ -467,7 +491,7 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
           <Button variant="default" onClick={() => { onOpenChange(false); reset() }} disabled={busy}>
             {importWarnings ? 'Done' : 'Cancel'}
           </Button>
-          {!importWarnings && (
+          {!importWarnings && !handsOffToWizard && (
             <Button
               onClick={create}
               loading={busy}
@@ -498,6 +522,13 @@ export function CreateNewDialog({ open, onOpenChange, onCreated }: Props) {
       <ImportOpenApiDialog
         open={openApiOpen}
         onOpenChange={setOpenApiOpen}
+        onImported={(path) => { onCreated(path, 'collection'); reset() }}
+      />
+    )}
+    {wsdlOpen && (
+      <ImportWsdlDialog
+        open={wsdlOpen}
+        onOpenChange={setWsdlOpen}
         onImported={(path) => { onCreated(path, 'collection'); reset() }}
       />
     )}

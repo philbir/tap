@@ -1,0 +1,27 @@
+---
+kind: test
+name: SOAP
+tests:
+- name: A forecast comes back for a city
+  request: ../collections/soap/get-weather.req.tap
+- name: Stations repeat in the response
+  request: ../collections/soap/list-stations.req.tap
+- name: A fault is still a readable envelope
+  request: ../collections/soap/boom.req.tap
+tags: [demo, soap]
+---
+
+# SOAP
+
+Runs the collection that `Import from WSDL` generated against Demo.Api's SOAP endpoint —
+the request bodies, the `SOAPAction` headers, and the WS-Security header the wizard offers.
+
+Needs Demo.Api: under `Studio.AppHost` it is wired up automatically, and anywhere else you
+point the collection at a running instance the same way CI does:
+
+```
+services__demo-api__http__0=http://localhost:5399 tap-studio test soap
+```
+
+The third case expects a **fault** — a SOAP service reports application errors as a 500 with
+an envelope in it, so a green run here includes one.

@@ -1,0 +1,58 @@
+---
+kind: request
+id: 01a041f7-f2ee-75a8-b006-e34dcff214ef
+name: GetWeather
+assertions:
+- status: 200
+- header: content-type
+  startsWith: text/xml
+- xpath: //*[local-name()='Place']
+  equals: Amsterdam
+- xpath: count(//*[local-name()='Day'])
+  equals: '3'
+- xpath: //*[local-name()='AuthenticatedAs']
+  equals: demo
+tags: [demo, soap]
+---
+
+```http
+POST /demo/soap/weather.asmx
+Content-Type: text/xml; charset=utf-8
+SOAPAction: "http://demo.tap.dev/weather/GetWeather"
+
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+  <soap:Header>
+    <wsse:Security soap:mustUnderstand="1" xmlns:wsse="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd">
+      <wsse:UsernameToken>
+        <wsse:Username>{{wsseUsername}}</wsse:Username>
+        <wsse:Password Type="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordText">{{wssePassword}}</wsse:Password>
+      </wsse:UsernameToken>
+    </wsse:Security>
+  </soap:Header>
+  <soap:Body>
+    <GetWeather xmlns="http://demo.tap.dev/weather">
+      <!-- or: StationId -->
+      <CityName>Amsterdam</CityName>
+      <Days>3</Days>
+      <Units>Celsius</Units>
+    </GetWeather>
+  </soap:Body>
+</soap:Envelope>
+```
+
+# GetWeather
+
+Forecast for a city or a station, up to seven days out.
+
+`Weather/WeatherSoap` · SOAP 1.1 · document/literal · action `http://demo.tap.dev/weather/GetWeather`.
+
+The body is what the WSDL import generated, with real values typed over the placeholders.
+The `<!-- or: -->` comment is the importer marking an `xsd:choice`: send `StationId` instead of
+`CityName` and the service answers the same shape.
+
+The assertions go through `local-name()` because a SOAP response is namespaced and XPath 1.0 has
+no notion of a default namespace — `/Envelope/Body` would match nothing at all.
+
+`AuthenticatedAs` echoes the `<wsse:UsernameToken>` in the header, which is where the collection's
+`wsseUsername` / `wssePassword` variables land. Empty the username and the service answers
+`xsi:nil` instead.

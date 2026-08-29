@@ -24,7 +24,7 @@
     "@types/react-syntax-highlighter": "^15.5.13",
     "@vitejs/plugin-react": "^6.0.5",
     "typescript": "~7.0.2",
-    "vite": "^8.2.1"
+    "vite": "^8.2.2"
   },
   "resolutions": {
     "node-gyp": "^13.0.1",

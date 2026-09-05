@@ -189,6 +189,17 @@ jobs:
           tag_name: ${{ steps.ver.outputs.version }}
           name: Tap Tunnels ${{ steps.ver.outputs.version }}
           generate_release_notes: true
+          # Created as a DRAFT, and published later by desktop.yml's publish-updater
+          # once every platform's assets are attached. This job finishes about ninety
+          # seconds after the tag lands; the Windows installers take another ten
+          # minutes. Published straight away, the result was a release badged "Latest",
+          # announced by email, carrying no Windows download — which is exactly how it
+          # read to anyone who looked: "0.7.5 did not ship a Windows version."
+          #
+          # Only on a tag. A workflow_dispatch run does not reach publish-updater
+          # (it gates on `github.ref_type == 'tag'`), so drafting there would leave a
+          # release nothing ever publishes.
+          draft: ${{ github.ref_type == 'tag' }}
           # Any SemVer pre-release tag carries a `-` (0.5.0-beta.2). Without
           # this, whichever of this job and desktop.yml creates the release
           # first decides the flag — and this one would publish a beta as

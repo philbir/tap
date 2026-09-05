@@ -236,9 +236,12 @@ jobs:
           projectPath: src/desktop
           tagName: ${{ github.ref_name }}
           releaseName: "Tap Studio ${{ github.ref_name }}"
-          # Publish immediately so artifacts are downloadable from Releases.
+          # Draft until every platform has landed — see the matching comment in
+          # release-binaries.yml. publish-updater does the publishing, and it `needs`
+          # this whole matrix, so a Windows bundle that fails leaves an unpublished
+          # draft for a human rather than a public release missing Windows.
           # Tags with a dash (e.g. 0.2.0-alpha.3) are marked as pre-releases.
-          releaseDraft: false
+          releaseDraft: ${{ github.ref_type == 'tag' }}
           prerelease: ${{ contains(github.ref_name, '-') }}
           # tauri-action's own latest.json emitter trips over the asset rename
           # it does on upload, so the manifest is skipped and .sig files never
@@ -348,7 +351,12 @@ jobs:
           { cat downloads.md; echo; echo "---"; echo; cat notes.md; } > body.md
           echo "--- release body ---"
           cat body.md
-          gh release edit "${VERSION}" --notes-file body.md
+
+          # The release goes public here, and only here. Both creators draft it, this
+          # job `needs` the whole bundle matrix, and every asset either workflow
+          # uploads is attached by now — so the release appears complete or not at all,
+          # instead of spending ten minutes badged "Latest" with no Windows installer.
+          gh release edit "${VERSION}" --draft=false --notes-file body.md
 
       - name: Generate and upload latest.json
         shell: bash
@@ -388,7 +396,17 @@ jobs:
               [ -f "${sig_path}" ] || continue
               matched=1
               url="${BASE}/$(basename "${sig_path}" .sig)"
-              code=$(curl -sIL -o /dev/null -w '%{http_code}' "${url}")
+              # Retried, because the step above is what published this release and a
+              # freshly undrafted asset takes a moment to answer on the download host.
+              # Without the retry a cold 404 here would drop a platform from the
+              # manifest — the updater silently stops offering it — for no better
+              # reason than losing a race with GitHub's own propagation.
+              code=000
+              for _ in 1 2 3 4 5 6; do
+                code=$(curl -sIL -o /dev/null -w '%{http_code}' "${url}")
+                [ "${code}" = "200" ] && break
+                sleep 5
+              done
               if [ "${code}" != "200" ]; then
                 echo "${key}: HTTP ${code} — ignoring ${url}" >&2
                 continue

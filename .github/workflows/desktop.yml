@@ -264,9 +264,14 @@ jobs:
         shell: bash
         run: rm -rf "$HOME/.private_keys"
 
-  # Compose latest.json from the per-platform .sig assets tauri-action attached
-  # to the release, and publish it there too. The updater client at
-  # github.com/philbir/tap/releases/latest/download/latest.json reads this.
+  # The last job of the last workflow a tag triggers, and therefore the only place
+  # that can have the final word on this release. Two jobs write it: softprops in
+  # release-binaries.yml creates it with generated notes, and `bundle`'s tauri-action
+  # updates it minutes later — overwriting both the name and the body. That is why
+  # every release through 0.7.4 shipped with an *empty* body: no notes, no download
+  # links, and `latest.json` carrying `"notes": ""` into the updater dialog.
+  #
+  # So the body is composed here, after both, and nowhere else.
   publish-updater:
     needs: bundle
     if: github.ref_type == 'tag'
@@ -274,6 +279,77 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A download table above the asset list, because the asset list is not a
+      # reliable place to find an installer: GitHub collapses it at ten entries and
+      # sorts case-insensitively, so `x64` lands after `aarch64`/`amd64` and both
+      # Windows installers sit below the fold on every release we have ever cut.
+      #
+      # Every link is DERIVED from an asset the release actually carries — the same
+      # rule the manifest below follows, and for the same reason. A hardcoded
+      # filename here would drift into a table of 404s that still renders fine.
+      - name: Compose the release body
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/${GH_REPO}/releases/download/${VERSION}"
+          gh release view "${VERSION}" --json assets --jq '.assets[].name' > assets.txt
+
+          # Emit "| <label> | <link> |" for the first asset matching $2, or nothing at
+          # all when the release does not carry one. A pre-release skips the MSI, and a
+          # platform whose build failed should leave a gap rather than a broken link.
+          row() {
+            local label="$1" pattern="$2" name
+            name=$(grep -E "$pattern" assets.txt | head -n1 || true)
+            [ -n "$name" ] || return 0
+            printf '| %s | [%s](%s/%s) |\n' "$label" "$name" "$BASE" "$name"
+          }
+
+          {
+            echo "## Downloads"
+            echo
+            echo "**Tap Studio** — the desktop workbench."
+            echo
+            echo "| Platform | File |"
+            echo "| --- | --- |"
+            row "macOS (Apple silicon)"  '_aarch64\.dmg$'
+            row "Windows (installer)"    '_x64-setup\.exe$'
+            row "Windows (MSI)"          '_x64_en-US\.msi$'
+            row "Linux (Debian/Ubuntu)"  '_amd64\.deb$'
+            echo
+            echo "**Tap Tunnels** — the \`tap\` inspector CLI."
+            echo
+            echo "| Platform | File |"
+            echo "| --- | --- |"
+            row "macOS (Apple silicon)" '^tap-.*-osx-arm64\.tar\.gz$'
+            row "macOS (Intel)"         '^tap-.*-osx-x64\.tar\.gz$'
+            row "Linux (x64)"           '^tap-.*-linux-x64\.tar\.gz$'
+            row "Linux (arm64)"         '^tap-.*-linux-arm64\.tar\.gz$'
+            echo "| Windows | \`dotnet tool install -g Tap\` |"
+            echo
+            echo "Checksums for the CLI archives are in \`SHA256SUMS\`."
+          } > downloads.md
+
+          # The prose half. `docs/release-notes/<version>.md` is the source of truth
+          # when it exists; otherwise fall back to whatever softprops generated before
+          # tauri-action wiped it, which is better than nothing but usually is nothing.
+          if [ -f "docs/release-notes/${VERSION}.md" ]; then
+            # Drop the H1 — the release page already shows the version as its title.
+            tail -n +2 "docs/release-notes/${VERSION}.md" > notes.md
+          else
+            gh release view "${VERSION}" --json body --jq '.body // ""' > notes.md
+          fi
+
+          { cat downloads.md; echo; echo "---"; echo; cat notes.md; } > body.md
+          echo "--- release body ---"
+          cat body.md
+          gh release edit "${VERSION}" --notes-file body.md
+
       - name: Generate and upload latest.json
         shell: bash
         env:
@@ -287,7 +363,9 @@ jobs:
 
           BASE="https://github.com/${GH_REPO}/releases/download/${VERSION}"
           PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-          NOTES=$(gh release view "${VERSION}" --json body --jq '.body // ""')
+          # The prose only. The updater dialog renders this, and a download table is
+          # noise there — the user is already inside the app that is updating itself.
+          NOTES=$(cat notes.md)
 
           PLATFORMS='{}'
 

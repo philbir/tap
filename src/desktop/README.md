@@ -200,6 +200,62 @@ arrived. It now tracks startup as phases and shows the current one:
   diagnostics blob.
 - **Try again** respawns the sidecar without restarting the app.
 
+### The white screen
+
+Everything above only helps while the splash is still on screen. Navigating is a
+one-way door — `Startup::navigate` replaces the splash with the workbench, and with
+it every diagnostic the user could have read — so a failure *after* the handover
+used to be a white window with nothing in it and no way back. Three guards close
+that gap, and every one of them ends at the same failure card:
+
+- **The sidecar will not say `ready` unless it can serve the SPA.** `studio.ready`
+  used to mean "Kestrel bound a port", which is not the same claim: an install whose
+  `wwwroot` never arrived binds happily and then answers `/` with a bare 404.
+  `StudioHost` now checks for `index.html` under the resolved web root first and
+  emits `studio.error` (`webroot.missing` / `webroot.empty`) naming the path it
+  looked at. Likewise, the shell no longer launches at all when it cannot resolve the
+  bundled `binaries/wwwroot` resource — that path was a guaranteed white screen and
+  the code already knew it.
+- **The shell probes the page before it navigates to it** (`probe_document`) — one
+  loopback GET, retried for `PROBE_GRACE`, that has to come back 2xx with a non-empty
+  body. A refused connection, a 404, or an empty document becomes a failure card
+  quoting the status line instead of a window that goes blank. Every resolved address
+  is tried, not just the first: on Windows `localhost` resolves to `::1` ahead of
+  `127.0.0.1`, and giving up on the first refusal would report a live server as dead.
+- **The page watches itself once it has loaded** (`BLANK_WATCHDOG_JS`). A document
+  that parses, answers 200, and *then* renders nothing — a bundle whose top-level code
+  throws, a WebView2 too old for the syntax Vite emitted — is the one white screen no
+  server-side check can catch. The injected watchdog records what the page's own
+  `error` / `unhandledrejection` handlers see and, if `#root` is still empty after
+  `TAP_STUDIO_BLANK_TIMEOUT_SECS` (default 12; `0` disables), hands the window back to
+  the splash with the reason in the URL fragment. It reports through a navigation
+  rather than a `#[command]` on purpose: the workbench origin can already navigate
+  itself anywhere, whereas a new command would have to be granted to `remote.urls` in
+  `capabilities/default.json` and would then be reachable by anything that injects
+  script into the workbench.
+
+A sidecar that dies *after* the handover is recovered the same way
+(`Startup::recover`): the window returns to the splash and the exit code goes on the
+card, instead of the webview sitting on a page whose backend has gone.
+
+The log now opens with the two facts a blank-page report has to start from — the
+webview runtime version and the resolved `wwwroot` path — and records every
+navigation the webview makes.
+
+To exercise each path locally:
+
+```bash
+# no backend at all — the probe refuses to navigate
+STUDIO_DESKTOP_URL=http://127.0.0.1:9/ yarn --cwd src/desktop tauri dev
+
+# a page that loads and renders nothing — the blank watchdog reports back
+printf '<!doctype html><div id="root"></div><script src="boom.js"></script>' > /tmp/blank/index.html
+printf 'throw new Error("simulated bundle failure")' > /tmp/blank/boom.js
+(cd /tmp/blank && python3 -m http.server 8791 --bind 127.0.0.1 &)
+TAP_STUDIO_BLANK_TIMEOUT_SECS=4 STUDIO_DESKTOP_URL=http://127.0.0.1:8791/ \
+  yarn --cwd src/desktop tauri dev
+```
+
 The failure card lives in `src/index.html` + `src/splash.js`; the Rust side pushes
 status into it with `window.eval` (the page has no bundler, and the payload is a
 serde-produced JSON literal, never hand-quoted text). Its two commands

@@ -36,6 +36,7 @@ public static class StudioHost
         {
             var contentRoot = Path.GetDirectoryName(Path.GetFullPath(webRoot))
                 ?? AppContext.BaseDirectory;
+            StartupSignal.Progress("webroot.resolved", $"Serving the UI from {webRoot}");
             builder = WebApplication.CreateBuilder(new WebApplicationOptions
             {
                 Args = args,
@@ -45,6 +46,18 @@ public static class StudioHost
         }
         else
         {
+            // A shell that asked for a web root and did not get one is heading for a
+            // blank window, and the default ContentRoot/wwwroot probe underneath a
+            // single-file publish will not save it. Say so on the handshake now: the
+            // path it named is the whole diagnosis, and the shell can render it
+            // instead of navigating into the white screen.
+            if (!string.IsNullOrWhiteSpace(webRoot))
+            {
+                StartupSignal.Error(
+                    "webroot.missing",
+                    $"The shell pointed Studio at '{webRoot}' for its UI files, but no such directory exists. "
+                    + "The install looks incomplete — reinstall Tap Studio.");
+            }
             builder = WebApplication.CreateBuilder(args);
         }
 
@@ -324,6 +337,25 @@ public static class StudioHost
                     StartupSignal.Error("server.bind", "Kestrel started but reported no listening address.");
                     return;
                 }
+
+                // `ready` means "the shell may navigate here", and the shell navigates
+                // exactly once — its splash, and with it every diagnostic the user could
+                // have read, is gone the moment it does. So a bound port is not enough:
+                // if index.html is not on disk the fallback below answers `/` with a bare
+                // 404 and the window goes white with nothing to show for it. Report the
+                // path we looked at instead, and let the shell keep its failure screen.
+                var root = app.Environment.WebRootPath;
+                var index = Path.Combine(root ?? string.Empty, "index.html");
+                if (!File.Exists(index))
+                {
+                    StartupSignal.Error(
+                        "webroot.empty",
+                        $"The API is listening at {url}, but the UI files are missing: no index.html under "
+                        + $"'{(string.IsNullOrEmpty(root) ? "<no web root configured>" : root)}'. "
+                        + "The install is incomplete — reinstall Tap Studio.");
+                    return;
+                }
+
                 StartupSignal.Ready(url);
             });
         }

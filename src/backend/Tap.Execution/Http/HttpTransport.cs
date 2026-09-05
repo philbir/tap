@@ -195,7 +195,24 @@ public static class HttpTransport
             KeyAlgorithm: algorithm,
             KeySizeBits: size,
             SelfSigned: string.Equals(certificate.Subject, certificate.Issuer, StringComparison.Ordinal),
-            Errors: errors);
+            Errors: errors,
+            Pem: ExportPem(certificate));
+    }
+
+    /// <summary>The certificate as PEM. Carried on the report so saving a chain is a click
+    /// rather than a second connection with <c>openssl s_client</c> — and so what lands on disk
+    /// is provably the bytes this handshake saw, including the chain a broken server sent.</summary>
+    private static string? ExportPem(X509Certificate2 certificate)
+    {
+        try
+        {
+            return certificate.ExportCertificatePem();
+        }
+        catch (System.Security.Cryptography.CryptographicException)
+        {
+            // Nothing about a certificate we can't re-encode is worth failing the report over.
+            return null;
+        }
     }
 
     /// <summary>Subject alternative names, which is where the hostnames actually live — the

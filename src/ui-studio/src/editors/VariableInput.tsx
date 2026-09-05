@@ -4,7 +4,7 @@ import {
 } from '@tabler/icons-react'
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Variable, VariableContext } from '../api/types'
-import { useVariableView, variableMap } from '../workspace/useVariables'
+import { parseTokens, resolveTemplate, resolveToken, useVariableView, variableMap } from '../workspace/useVariables'
 import { ConvertToVariableModal, type ConvertToVariableRequest } from './ConvertToVariableModal'
 import { passwordManagerOptOut, randomFieldName } from './passwordManagerOptOut'
 import styles from './VariableInput.module.css'
@@ -87,7 +87,7 @@ export function VariableInput({
   const [boxes, setBoxes] = useState<ChipBox[]>([])
   useLayoutEffect(() => {
     if (!measureRef.current) { setBoxes([]); return }
-    const tokens = findTokens(value)
+    const tokens = parseTokens(value)
     const out: ChipBox[] = []
     for (const t of tokens) {
       measureRef.current.textContent = value.slice(0, t.start)
@@ -125,7 +125,7 @@ export function VariableInput({
 
   // -- Preview mode ----------------------------------------------------------------------
   const [previewOn, setPreviewOn] = useState(false)
-  const renderedValue = previewOn ? renderWithValues(value, vars) : value
+  const renderedValue = previewOn ? resolveTemplate(value, view, vars) : value
 
   // -- Autocomplete state ----------------------------------------------------------------
   // Two distinct dropdown modes share the same popup: `variable` shows {{var}} matches
@@ -610,59 +610,6 @@ type VariableSuggestion =
 // box lines up with the token's first glyph. Keep in sync with VariableInput.module.css.
 const SIZE_PADDING_LEFT: Record<'xs' | 'sm' | 'md', number> = { xs: 8, sm: 10, md: 12 }
 
-interface ParsedToken {
-  start: number
-  end: number
-  /** Bare variable name (the part after `provider:` if present, else the whole inner). */
-  name: string
-  /** Optional provider qualifier when the token is `{{provider:name}}`. */
-  provider: string | null
-}
-
-function findTokens(text: string): ParsedToken[] {
-  const out: ParsedToken[] = []
-  const re = /\{\{([^}]*)\}\}/g
-  let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
-    const inner = m[1].trim()
-    const colon = inner.indexOf(':')
-    // Provider qualifier must look like an identifier (letters/digits/_-) — anything
-    // else (e.g. accidental `:` inside the variable name) falls through as a plain name.
-    if (colon > 0 && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(inner.slice(0, colon))) {
-      out.push({
-        start: m.index, end: m.index + m[0].length,
-        provider: inner.slice(0, colon),
-        name: inner.slice(colon + 1).trim(),
-      })
-    } else {
-      out.push({ start: m.index, end: m.index + m[0].length, name: inner, provider: null })
-    }
-  }
-  return out
-}
-
-/** Resolve a parsed token against the view: explicit `{{provider:name}}` searches the
- *  matching provider's set; bare `{{name}}` falls back to the merged cascade. Returns
- *  `null` when nothing matches (caller paints the unknown chip). The qualifier may be
- *  an env-scoped alias (`view.aliases`) rather than a literal provider name — resolve
- *  it first so `{{kv:secret}}` still hits `kv-dev`'s set when `kv` is an alias. */
-function resolveToken(
-  t: ParsedToken,
-  view: import('../api/types').VariableView | null,
-  vars: Map<string, Variable>,
-): Variable | null {
-  if (t.provider && view) {
-    const provider = view.aliases?.[t.provider] ?? t.provider
-    for (const set of view.sets) {
-      if (set.providerName !== provider) continue
-      const hit = set.variables.find((v) => v.name === t.name)
-      if (hit) return hit
-    }
-    return null
-  }
-  return vars.get(t.name) ?? null
-}
-
 function buildVariableSuggestions(
   prefix: string,
   view: import('../api/types').VariableView,
@@ -722,18 +669,3 @@ function buildVariableSuggestions(
   return [...providerHints, ...rankedVars].slice(0, 10)
 }
 
-function renderWithValues(text: string, vars: Map<string, Variable>): string {
-  // Preview mode replaces each `{{…}}` with the resolved value (or `***` for secrets).
-  // Provider-qualified tokens fall through to the cascade map by bare name — close enough
-  // for a preview; the server-side renderer is the source of truth at execute time.
-  return text.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_, raw: string) => {
-    const inner = raw.trim()
-    const colon = inner.indexOf(':')
-    const name = (colon > 0 && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(inner.slice(0, colon)))
-      ? inner.slice(colon + 1).trim()
-      : inner
-    const v = vars.get(name)
-    if (!v) return `{{${inner}}}`
-    return v.isSensitive ? '***' : (v.value ?? '')
-  })
-}

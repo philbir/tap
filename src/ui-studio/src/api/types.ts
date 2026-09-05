@@ -184,6 +184,9 @@ export interface TlsCertificate {
   /** This certificate's own chain status — not the whole chain's, so the card that is
    *  actually at fault is the one that turns red. */
   errors: TlsStatus[] | null
+  /** The certificate itself, PEM-encoded — what the download buttons save. Null when the
+   *  server couldn't re-encode it, which is the only reason a card offers no download. */
+  pem: string | null
 }
 
 export interface TlsDiagnosis {

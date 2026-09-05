@@ -15,6 +15,7 @@ import { CollectionLinkChip } from './CollectionLinkChip'
 import { EditorShell } from './EditorShell'
 import { ResponsePanel } from './ResponsePanel'
 import { TlsDiagnosisModal } from './TlsDiagnosisModal'
+import { methodColor } from './methodColor'
 import { SourceCodeEditor } from './SourceCodeEditor'
 import { restoreDraft, usePublishDraft } from './useDraft'
 import { useExecution } from './useExecution'
@@ -22,13 +23,6 @@ import { useExecution } from './useExecution'
 interface Props {
   /** Workspace-relative path of the `.http` file (no fragment). */
   path: string
-}
-
-/** Method colors, matched to how the rest of Studio reads verbs (green = safe, red = destructive). */
-const METHOD_COLOR: Record<string, string> = {
-  GET: 'teal', HEAD: 'teal', OPTIONS: 'gray',
-  POST: 'blue', PUT: 'orange', PATCH: 'orange',
-  DELETE: 'red',
 }
 
 /**
@@ -316,7 +310,7 @@ export function HttpFileEditor({ path }: Props) {
                             {r.method && (
                               <Badge
                                 size="xs" variant="light" radius="sm"
-                                color={METHOD_COLOR[r.method] ?? 'gray'}
+                                color={methodColor(r.method)}
                                 style={{ flexShrink: 0, fontFamily: 'var(--mono)' }}
                               >
                                 {r.method}

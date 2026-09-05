@@ -4,7 +4,7 @@ import { useMemo } from 'react'
 import { envBindingFor } from '../api/types'
 import type { CollectionSummary, EnvSummary, VariableContext } from '../api/types'
 import { useEnvsFor } from '../store'
-import { useVariableView, variableMap } from '../workspace/useVariables'
+import { resolveTemplate, useVariableView, variableMap } from '../workspace/useVariables'
 
 /**
  * The baseUrl template a request under `summary` resolves against, or `''` when the
@@ -50,7 +50,7 @@ export function CollectionLinkChip({ summary, env, onEnvChange, variableContext,
   const selected = envs.find((e) => e.path === env) ?? null
 
   const baseTemplate = effectiveBaseUrl(summary, selected)
-  const display = useMemo(() => resolveTokens(baseTemplate, vars), [baseTemplate, vars])
+  const display = useMemo(() => resolveTemplate(baseTemplate, view, vars), [baseTemplate, view, vars])
   const hasUnresolved = /\{\{[^}]+\}\}/.test(display)
   // The chip is width-capped so a long base URL can't crowd out the path input, so the
   // tooltip carries the full URL (and the raw template when tokens were substituted).
@@ -94,7 +94,7 @@ export function CollectionLinkChip({ summary, env, onEnvChange, variableContext,
             component="span"
             size="sm"
             ff="var(--mono)"
-            w={100}
+            maw={200}
             truncate
             c={hasUnresolved ? 'dimmed' : undefined}
           >
@@ -159,13 +159,4 @@ function EnvItem({ name, baseUrl, checked, onClick }: {
       </Stack>
     </Menu.Item>
   )
-}
-
-function resolveTokens(text: string, vars: Map<string, { value: string | null; isSensitive: boolean }>): string {
-  return text.replace(/(\$?)\{\{\s*([^}]+?)\s*\}\}/g, (_, dollar: string, name: string) => {
-    if (dollar === '$') return '***'
-    const v = vars.get(name)
-    if (!v) return `{{${name}}}`
-    return v.isSensitive ? '***' : (v.value ?? '')
-  })
 }

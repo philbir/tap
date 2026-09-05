@@ -20,6 +20,7 @@ import { compileSearch, EMPTY_RESULT_SEARCH, Highlighted, matchesAny, type Resul
 import { RequestErrorCard } from './RequestErrorCard'
 import { useTabView } from './useTabView'
 import { COLLECTION_FILE } from '../shell/tapFiles'
+import { sanitizeFilenamePart, triggerDownload } from '../shell/download'
 
 /**
  * What "search" means on each sub-tab. `find` walks matches inside one document and gets
@@ -801,32 +802,11 @@ function buildDownloadName(requestName: string | undefined, ext: string): string
   return base ? `${base}_response_${ts}.${ext}` : `response_${ts}.${ext}`
 }
 
-/** Reduce a request name to filesystem-safe characters: anything outside
- *  `[A-Za-z0-9._-]` becomes `_`, runs collapse, and leading/trailing separators are
- *  trimmed. Capped so a verbose name can't produce an unwieldy filename. */
-function sanitizeFilenamePart(name: string): string {
-  return name
-    .normalize('NFKD')
-    .replace(/[^A-Za-z0-9._-]+/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^[_.]+|[_.]+$/g, '')
-    .slice(0, 80)
-}
-
 /** Local wall-clock timestamp as `YYYY-MM-DD_HH-mm-ss` (filename-safe — no colons). */
 function fileTimestamp(): string {
   const d = new Date()
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`
-}
-
-function triggerDownload(href: string, filename: string): void {
-  const a = document.createElement('a')
-  a.href = href
-  a.download = filename
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
 }
 
 /** Guess a sensible file extension from the response content type. SSE/WS transcripts and

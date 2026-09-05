@@ -1,13 +1,14 @@
 import {
-  ActionIcon, Alert, Badge, Box, Divider, Group, Modal, Paper, ScrollArea, Stack, Text, Tooltip,
+  ActionIcon, Alert, Badge, Box, Divider, Group, Menu, Modal, Paper, ScrollArea, Stack, Text, Tooltip,
 } from '@mantine/core'
 import { useClipboard } from '@mantine/hooks'
 import {
   IconAlertTriangleFilled, IconBuildingBank, IconCertificate, IconCertificateOff, IconCheck,
-  IconCircleCheckFilled, IconCircleXFilled, IconCopy, IconFingerprint, IconHelpCircleFilled,
-  IconKey, IconLock, IconServer, IconShieldCheck, IconShieldX, IconWorld,
+  IconCircleCheckFilled, IconCircleXFilled, IconCopy, IconDownload, IconFingerprint,
+  IconHelpCircleFilled, IconKey, IconLock, IconServer, IconShieldCheck, IconShieldX, IconWorld,
 } from '@tabler/icons-react'
 import type { TlsCertificate, TlsCheck, TlsDiagnosis, TlsStatus } from '../api/types'
+import { downloadText, sanitizeFilenamePart } from '../shell/download'
 
 /**
  * What the server actually presented, read back as a report rather than a stack trace.
@@ -102,15 +103,19 @@ function DiagnosisBody({ diagnosis }: { diagnosis: TlsDiagnosis }) {
 
       {diagnosis.certificates.length > 0 && (
         <Box>
-          <Text size="xs" c="dimmed" tt="uppercase" fw={600} mb={6}>
-            Certificate chain
-          </Text>
+          <Group justify="space-between" align="center" mb={6} wrap="nowrap">
+            <Text size="xs" c="dimmed" tt="uppercase" fw={600}>
+              Certificate chain
+            </Text>
+            <ChainDownloadMenu diagnosis={diagnosis} />
+          </Group>
           <Stack gap="sm">
             {diagnosis.certificates.map((certificate, i) => (
               <CertificateCard
                 key={`${certificate.thumbprint}-${i}`}
                 certificate={certificate}
                 last={i === diagnosis.certificates.length - 1}
+                fileBase={fileBase(diagnosis)}
               />
             ))}
           </Stack>
@@ -153,16 +158,14 @@ function StatusRow({ status }: { status: TlsStatus }) {
   )
 }
 
-function CertificateCard({ certificate, last }: { certificate: TlsCertificate; last: boolean }) {
+function CertificateCard(
+  { certificate, last, fileBase }: { certificate: TlsCertificate; last: boolean; fileBase: string },
+) {
   const clipboard = useClipboard({ timeout: 1200 })
   const errors = certificate.errors ?? []
   const bad = errors.length > 0
   const expiry = describeExpiry(certificate)
-  const role = certificate.index === 0
-    ? { label: 'Leaf', color: 'tap', icon: <IconWorld size={12} /> }
-    : last && certificate.selfSigned
-      ? { label: 'Root', color: 'gray', icon: <IconBuildingBank size={12} /> }
-      : { label: 'Intermediate', color: 'gray', icon: <IconCertificate size={12} /> }
+  const role = certificateRole(certificate, last)
 
   return (
     <Paper
@@ -259,11 +262,99 @@ function CertificateCard({ certificate, last }: { certificate: TlsCertificate; l
                 {clipboard.copied ? <IconCheck size={12} /> : <IconCopy size={12} />}
               </ActionIcon>
             </Tooltip>
+            {certificate.pem && (
+              <Tooltip label={`Download this ${role.label.toLowerCase()} certificate (.pem)`} withArrow>
+                <ActionIcon
+                  size="sm"
+                  variant="subtle"
+                  color="gray"
+                  onClick={() => downloadPem([certificate], certificateFileName(fileBase, certificate, last))}
+                  aria-label="Download certificate"
+                >
+                  <IconDownload size={12} />
+                </ActionIcon>
+              </Tooltip>
+            )}
           </Group>
         </Stack>
       </Stack>
     </Paper>
   )
+}
+
+// ---- Saving what the server presented -------------------------------------------------
+
+/**
+ * The three shapes a certificate is actually wanted in. A single card's button covers "give me
+ * that one"; this menu covers the two whole-chain forms, which differ by exactly one entry and
+ * are wanted for opposite reasons — the full chain to hand someone what the server sends, the
+ * issuers alone to trust a private CA without pinning the leaf that rotates every 90 days.
+ */
+function ChainDownloadMenu({ diagnosis }: { diagnosis: TlsDiagnosis }) {
+  const exportable = diagnosis.certificates.filter((c) => c.pem)
+  const issuers = exportable.filter((c) => c.index > 0)
+  // Nothing encodable means nothing to offer — a disabled menu would only pose a question
+  // whose answer is "this chain didn't survive being re-encoded".
+  if (exportable.length === 0) return null
+  const base = fileBase(diagnosis)
+
+  return (
+    <Menu shadow="md" position="bottom-end" withinPortal width={250}>
+      <Menu.Target>
+        <Tooltip label="Download certificates" withArrow>
+          <ActionIcon variant="subtle" color="gray" size="sm" aria-label="Download certificates">
+            <IconDownload size={15} />
+          </ActionIcon>
+        </Tooltip>
+      </Menu.Target>
+      <Menu.Dropdown>
+        <Menu.Label>Download as PEM</Menu.Label>
+        <Menu.Item
+          leftSection={<IconCertificate size={14} />}
+          onClick={() => downloadPem(exportable, `${base}-chain.pem`)}
+        >
+          Full chain ({exportable.length})
+        </Menu.Item>
+        <Menu.Item
+          leftSection={<IconBuildingBank size={14} />}
+          disabled={issuers.length === 0}
+          onClick={() => downloadPem(issuers, `${base}-issuers.pem`)}
+        >
+          Issuers only, no leaf ({issuers.length})
+        </Menu.Item>
+      </Menu.Dropdown>
+    </Menu>
+  )
+}
+
+/** Concatenated PEM blocks, one per certificate, leaf-first — the order every tool that reads
+ *  a bundle expects. Each block is re-terminated because a missing final newline is the
+ *  classic way a two-certificate file parses as one. */
+function downloadPem(certificates: TlsCertificate[], filename: string): void {
+  const pem = certificates.map((c) => `${c.pem!.trim()}\n`).join('')
+  downloadText(pem, filename, 'application/x-pem-file')
+}
+
+/** Where in the chain this certificate sits — the badge on the card and the name of the file
+ *  it downloads as, decided once so the two can't drift apart. */
+function certificateRole(certificate: TlsCertificate, last: boolean): { label: string; color: string; icon: React.ReactNode } {
+  if (certificate.index === 0) return { label: 'Leaf', color: 'tap', icon: <IconWorld size={12} /> }
+  if (last && certificate.selfSigned) return { label: 'Root', color: 'gray', icon: <IconBuildingBank size={12} /> }
+  return { label: 'Intermediate', color: 'gray', icon: <IconCertificate size={12} /> }
+}
+
+/** `example.com-leaf.pem` / `example.com-intermediate-1.pem` / `example.com-root.pem`. The
+ *  chain position is in the name because saving two intermediates from the same host is the
+ *  normal case, and `example.com.pem (1)` says nothing about which one it is. */
+function certificateFileName(base: string, certificate: TlsCertificate, last: boolean): string {
+  const role = certificateRole(certificate, last).label.toLowerCase()
+  return `${base}-${role === 'intermediate' ? `${role}-${certificate.index}` : role}.pem`
+}
+
+/** Filename stem for everything saved off this report: the host, reduced to characters a
+ *  filesystem will take. */
+function fileBase(diagnosis: TlsDiagnosis): string {
+  return sanitizeFilenamePart(diagnosis.host ?? diagnosis.url) || 'certificate'
 }
 
 function Field({ label, icon, children }: { label: string; icon: React.ReactNode; children: React.ReactNode }) {

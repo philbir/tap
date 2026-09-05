@@ -23,6 +23,7 @@ import {
 } from './body-mode'
 import { AdaptiveTabsList } from './AdaptiveTabsList'
 import { CollectionLinkChip, effectiveBaseUrl } from './CollectionLinkChip'
+import { methodTextColor } from './methodColor'
 import { authSelectGroups, relativizeFrom } from './authOptions'
 import { DocsEditor } from './DocsEditor'
 import { EditorShell, TabCount, TabDot } from './EditorShell'
@@ -52,9 +53,10 @@ interface Props { path: string }
 const METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'] as const
 const BODY_MODES: BodyMode[] = ['none', 'form-urlencoded', 'multipart', 'raw', 'binary', 'graphql', 'soap']
 const RAW_SUB_TYPES: RawSubType[] = ['json', 'text', 'xml']
-/** Header-name suggestions for the request's own headers. `Content-Type` is omitted: it has
- *  a pinned row of its own, so offering it here would only invite a duplicate. */
-const REQUEST_HEADER_NAMES = COMMON_HEADER_NAMES.filter((n) => n !== 'Content-Type')
+/** Header-name suggestions for a request whose `Content-Type` is pinned above the list —
+ *  offering it here too would only invite a duplicate. When there is no pinned row the list
+ *  owns the header, and the full set applies. */
+const HEADER_NAMES_WITHOUT_CONTENT_TYPE = COMMON_HEADER_NAMES.filter((n) => n !== 'Content-Type')
 
 export function RequestEditor({ path }: Props) {
   const generation = useTapStore((s) => s.generation)
@@ -71,6 +73,9 @@ export function RequestEditor({ path }: Props) {
   const [savedSpec, setSavedSpec] = useState<RequestSpec | null>(null)
   const [tab, setTab] = useTabView<string | null>(path, 'tab', 'params')
   const [saving, setSaving] = useState(false)
+  // Set while the user is entering `Content-Type` as an ordinary row in the Headers tab. See
+  // `showContentTypeRow` — the pinned row steps aside for as long as it lasts.
+  const [ctInList, setCtInList] = useState(false)
   const [errorMessage, setError] = useState<string | null>(null)
   // Sending, and everything the response pane renders. Shared with the .http editor, which
   // sends the same way from its own request list. Keyed by tab path, so the response — and a
@@ -366,19 +371,35 @@ export function RequestEditor({ path }: Props) {
     )
   }
 
+  // WebSocket is a protocol flag on the spec, but the picker treats it as one more entry in
+  // the verb list — the handshake is a GET the user never has to think about.
+  const currentMethod = spec.protocol === 'websocket' ? 'WS' : spec.method
   const split = splitUrl(spec.url)
   const queryRows: KvRow[] = split.query.map((p) => ({ key: p.key, value: p.value }))
   const headers = spec.headers ?? []
   const contentTypeHeader = headers.find((h) => h.name.toLowerCase() === 'content-type')?.value ?? null
-  const headersOnly = headers.filter((h) => h.name.toLowerCase() !== 'content-type')
 
   // Content-Type is owned by the Body tab, but it is still a header the user may need to
   // bend (vendor media types, an explicit charset). The Headers tab therefore shows it as a
-  // pinned row: name locked, value editable, badged with where the current value came from.
+  // pinned row: name locked, value editable, badged with where the current value came from…
   const bodyMode = detectBodyMode(contentTypeHeader, spec.requestBody ?? '')
   const bodyRawSub = detectRawSubType(contentTypeHeader)
   const autoContentType = contentTypeForBodyMode(bodyMode, bodyRawSub)
   const ctOrigin = contentTypeOrigin(contentTypeHeader, bodyMode, bodyRawSub)
+  // …but only once there is a Content-Type to say that about: one on the request, or a body
+  // mode that implies one (a Form body with no rows yet still owns its Content-Type, which is
+  // why this is not a test on the body text). On a bodyless DELETE with nothing set, the row
+  // was a permanently empty field advertising a header that is never sent, so it is hidden and
+  // the list below owns the header instead.
+  //
+  // `ctInList` is the other half: once the list owns it, the pinned row stays away until the
+  // row is gone or the Body tab claims the header back. Letting it appear the moment a value
+  // is typed would pull the field being typed in out from under the cursor.
+  const hasContentTypeHeader = headers.some((h) => h.name.toLowerCase() === 'content-type')
+  const showContentTypeRow = !ctInList && (hasContentTypeHeader || bodyMode !== 'none')
+  const headersOnly = showContentTypeRow
+    ? headers.filter((h) => h.name.toLowerCase() !== 'content-type')
+    : headers
   const bodySourceLabel = bodyMode === 'raw'
     ? `Raw · ${RAW_SUB_LABELS[bodyRawSub]}`
     : BODY_MODE_LABELS[bodyMode]
@@ -387,6 +408,8 @@ export function RequestEditor({ path }: Props) {
     update('headers', next.length > 0 ? next : undefined)
   }
   function setContentType(contentType: string | null) {
+    // Whoever calls this owns the header now — the Body tab, or the pinned row itself.
+    setCtInList(false)
     const without = headers.filter((h) => h.name.toLowerCase() !== 'content-type')
     setHeaders(contentType ? [{ name: 'Content-Type', value: contentType }, ...without] : without)
   }
@@ -502,7 +525,7 @@ export function RequestEditor({ path }: Props) {
             { group: 'HTTP', items: METHODS as unknown as string[] },
             { group: 'WebSocket', items: [{ value: 'WS', label: 'WS' }] },
           ]}
-          value={spec.protocol === 'websocket' ? 'WS' : spec.method}
+          value={currentMethod}
           onChange={(v) => {
             if (!v) return
             setSpec((cur) => {
@@ -514,16 +537,29 @@ export function RequestEditor({ path }: Props) {
               return { ...cur, protocol: undefined, method: v }
             })
           }}
-          w={108}
-          styles={{ input: { fontFamily: 'var(--mono)', fontWeight: 600 } }}
+          // Sized to the widest verb rather than to the widest verb plus slack: the URL is the
+          // field that wants the room, and the verb is already legible from its colour before
+          // it is read as a word.
+          w={92}
+          styles={{
+            input: {
+              fontFamily: 'var(--mono)',
+              fontWeight: 700,
+              color: methodTextColor(currentMethod),
+              paddingRight: 24,
+            },
+          }}
+          rightSectionWidth={20}
           allowDeselect={false}
           renderOption={({ option }) => (
-            option.value === 'WS'
-              ? <Group gap={4} wrap="nowrap"><IconBolt size={11} /> {option.label}</Group>
-              : <Text size="sm" ff="var(--mono)" fw={600}>{option.label}</Text>
+            <Text size="sm" ff="var(--mono)" fw={700} c={methodTextColor(option.value)}>
+              {option.value === 'WS'
+                ? <Group gap={4} wrap="nowrap" component="span"><IconBolt size={11} /> {option.label}</Group>
+                : option.label}
+            </Text>
           )}
           leftSection={spec.protocol === 'websocket' ? <IconBolt size={12} /> : undefined}
-          leftSectionWidth={spec.protocol === 'websocket' ? 22 : 0}
+          leftSectionWidth={spec.protocol === 'websocket' ? 20 : 0}
         />
         {linkedCollection && showCollectionChip && (
           <CollectionLinkChip
@@ -641,8 +677,16 @@ export function RequestEditor({ path }: Props) {
             <KvTable
               rows={headersOnly.map((h) => ({ key: h.name, value: h.value }))}
               onChange={(rows) => {
-                // A row typed as `Content-Type` belongs to the pinned row above, not the
-                // list — adopt its value there rather than emitting a duplicate header.
+                // No pinned row means the list owns Content-Type like any other header — take
+                // the rows as written, and remember it so the pinned row does not reappear
+                // between two keystrokes of the value.
+                if (!showContentTypeRow) {
+                  setCtInList(rows.some((r) => r.key.toLowerCase() === 'content-type'))
+                  setHeaders(rows.filter((r) => r.key).map((r) => ({ name: r.key, value: r.value })))
+                  return
+                }
+                // With the pinned row on screen, a row typed as `Content-Type` belongs to it
+                // rather than the list — adopt its value there rather than emitting a duplicate.
                 const typedCt = rows.find((r) => r.key.toLowerCase() === 'content-type' && r.value)
                 const fresh: HttpHeaderSpec[] = rows
                   .filter((r) => r.key && r.key.toLowerCase() !== 'content-type')
@@ -655,9 +699,9 @@ export function RequestEditor({ path }: Props) {
               valuePlaceholder="value"
               variableContext={variableContext}
               onOpenVariables={varsCtl.open}
-              keySuggestions={REQUEST_HEADER_NAMES}
+              keySuggestions={showContentTypeRow ? HEADER_NAMES_WITHOUT_CONTENT_TYPE : COMMON_HEADER_NAMES}
               getValueSuggestions={valuesForHeader}
-              pinnedRow={{
+              pinnedRow={!showContentTypeRow ? undefined : {
                 key: 'Content-Type',
                 value: contentTypeHeader ?? '',
                 onChange: (v) => setContentType(v.trim() ? v : null),

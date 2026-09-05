@@ -13,6 +13,7 @@ import type {
   OpenApiSuggestion,
 } from '../api/types'
 import { useTapStore } from '../store'
+import { methodColor } from './methodColor'
 
 interface Props {
   open: boolean
@@ -23,11 +24,6 @@ interface Props {
 }
 
 type SourceMode = 'file' | 'url'
-
-/** Method colours match the request list's, so a method reads the same everywhere. */
-const METHOD_COLOR: Record<string, string> = {
-  GET: 'teal', POST: 'blue', PUT: 'orange', PATCH: 'grape', DELETE: 'red', HEAD: 'gray', OPTIONS: 'gray',
-}
 
 const NO_AUTH = '__none__'
 
@@ -573,7 +569,7 @@ function OperationRow({ op, checked, onToggle }: { op: OpenApiOperation; checked
     <UnstyledButton onClick={onToggle} px={4} py={2} style={{ borderRadius: 4 }}>
       <Group gap="xs" wrap="nowrap">
         <Checkbox size="xs" checked={checked} onChange={onToggle} tabIndex={-1} />
-        <Badge size="xs" variant="light" color={METHOD_COLOR[op.method] ?? 'gray'} w={58}>
+        <Badge size="xs" variant="light" color={methodColor(op.method)} w={58}>
           {op.method}
         </Badge>
         <Text size="xs" ff="var(--mono)" style={{ flexShrink: 0 }}>{op.path}</Text>

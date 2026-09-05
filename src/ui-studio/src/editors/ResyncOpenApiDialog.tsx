@@ -10,15 +10,12 @@ import type {
   OpenApiChange, OpenApiLink, OpenApiResyncAction, OpenApiResyncPreview, OpenApiResyncResult,
 } from '../api/types'
 import { useTapStore } from '../store'
+import { methodColor } from './methodColor'
 
 interface Props {
   open: boolean
   onOpenChange: (v: boolean) => void
   slug: string
-}
-
-const METHOD_COLOR: Record<string, string> = {
-  GET: 'teal', POST: 'blue', PUT: 'orange', PATCH: 'grape', DELETE: 'red', HEAD: 'gray', OPTIONS: 'gray',
 }
 
 /** Colour and label per verdict. Conflicts are the only thing that needs attention. */
@@ -263,7 +260,7 @@ function ChangeRow(
   return (
     <Group gap="xs" wrap="nowrap" align="center">
       <Badge size="xs" variant="light" color={kind.color} w={92}>{kind.label}</Badge>
-      <Badge size="xs" variant="light" color={METHOD_COLOR[change.method] ?? 'gray'} w={58}>
+      <Badge size="xs" variant="light" color={methodColor(change.method)} w={58}>
         {change.method}
       </Badge>
       <Text size="xs" ff="var(--mono)" style={{ flexShrink: 0 }}>{change.path}</Text>

@@ -133,7 +133,11 @@ public sealed record TlsCertificateDto(
     string? KeyAlgorithm = null,
     int? KeySizeBits = null,
     bool SelfSigned = false,
-    IReadOnlyList<TlsStatusDto>? Errors = null);
+    IReadOnlyList<TlsStatusDto>? Errors = null,
+    /// <summary>The certificate itself, PEM-encoded, so a reader can save what the server
+    /// presented rather than re-fetch it with another tool. Public material by definition —
+    /// this is what the handshake hands to every client.</summary>
+    string? Pem = null);
 
 public sealed record TlsDiagnosisDto(
     string Url,

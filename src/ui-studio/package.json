@@ -56,15 +56,15 @@
     "zustand": "^5.0.15"
   },
   "devDependencies": {
-    "@types/node": "^26.2.0",
+    "@types/node": "^26.3.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
+    "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^6.0.5",
     "postcss": "^8.5.26",
     "postcss-preset-mantine": "^1.18.0",
     "postcss-simple-vars": "^7.0.1",
     "typescript": "~7.0.2",
-    "vite": "^8.2.1"
+    "vite": "^8.2.2"
   },
   "dependenciesMeta": {
     "@base-ui-components/react@1.0.0-rc.0": {
@@ -79,6 +79,6 @@
     "dompurify": "^3.4.13",
     "linkify-it": "^5.0.2",
     "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.8"
+    "@codemirror/view": "^6.43.9"
   }
 }

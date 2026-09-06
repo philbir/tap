@@ -608,6 +608,36 @@ fn resolve_user_path_timely(limit: Duration) -> Result<Option<String>, ()> {
     rx.recv_timeout(limit).map_err(|_| ())
 }
 
+/// Strip Windows' `\\?\` verbatim prefix from a path, when it is safe to do so.
+///
+/// Tauri resolves resources relative to `current_exe()`, which it *canonicalizes* to
+/// defeat symlink attacks — and on Windows `canonicalize` returns a verbatim path.
+/// Verbatim paths reach Win32 without normalization, and the consequence that matters
+/// here is that a forward slash inside one is an ordinary filename character rather
+/// than a separator.
+///
+/// ASP.NET's `PhysicalFileProvider` combines its root with the request's own
+/// `/`-separated subpath and hands the result straight to the filesystem. Under a
+/// `\\?\` root that means every *nested* file — `/assets/index-<hash>.js`, which is
+/// the entire SPA bundle — asks for a file whose name literally contains a slash, and
+/// 404s. Files at the root of `wwwroot` still serve, because their subpath has no
+/// slash in it to mistranslate.
+///
+/// That asymmetry is the white screen, exactly: `index.html` is served, its bundle is
+/// not, and the window renders an empty `<div id="root">`.
+///
+/// Only the plain drive form is unwrapped. `\\?\UNC\server\share` is not a usable path
+/// with the prefix removed, and a path long enough to need the prefix is not one to
+/// quietly shorten — both are left alone.
+fn simplified(path: &str) -> &str {
+    path.strip_prefix(r"\\?\")
+        .filter(|rest| {
+            let b = rest.as_bytes();
+            b.len() >= 3 && b[0].is_ascii_alphabetic() && b[1] == b':' && b[2] == b'\\'
+        })
+        .unwrap_or(path)
+}
+
 /// Fetch the document the webview is about to be pointed at, and decide whether it
 /// is one that can render.
 ///
@@ -838,7 +868,7 @@ fn spawn_sidecar(app: &AppHandle, attempt: u64) {
         .path()
         .resolve("binaries/wwwroot", tauri::path::BaseDirectory::Resource)
         .ok()
-        .map(|p| p.to_string_lossy().to_string());
+        .map(|p| simplified(&p.to_string_lossy()).to_string());
     match &web_root {
         Some(root) => startup.log(&format!("wwwroot resource resolved to {root}")),
         // Launching anyway used to mean a guaranteed white screen: the sidecar would
@@ -1076,14 +1106,6 @@ fn on_page_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayl
         .as_deref()
         .and_then(|a| Url::parse(a).ok())
         .is_some_and(|a| a.origin() == url.origin());
-    let is_splash = startup
-        .splash_url
-        .lock()
-        .unwrap()
-        .as_deref()
-        .and_then(|u| Url::parse(u).ok())
-        .is_some_and(|u| u.origin() == url.origin());
-
     if is_workbench {
         // Armed on *both* events on purpose. The failure this exists to catch is a
         // bundle that throws while it evaluates, and a sink installed at `Finished`
@@ -1094,6 +1116,29 @@ fn on_page_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayl
         arm_blank_watchdog(webview, &startup);
         return;
     }
+
+    // First real page the shell itself serves — that is the splash, whatever scheme
+    // this platform gave it (`tauri://localhost`, `http://tauri.localhost`, a dev
+    // server). Recorded once and never overwritten: it is a page in the bundle, it
+    // does not move, and re-learning it later would let a page the workbench navigated
+    // to take over the address `recover` returns to.
+    //
+    // This runs *before* `is_splash` is decided, so the load that teaches the shell
+    // where its splash lives is itself recognised as one — otherwise the very first
+    // status push, the one that replaces "Starting Tap Studio…" with a real phase,
+    // would be dropped.
+    if !is_blank(&url) && startup.splash_url.lock().unwrap().is_none() {
+        startup.log(&format!("splash at {url}"));
+        *startup.splash_url.lock().unwrap() = Some(strip_fragment(&url));
+    }
+
+    let is_splash = startup
+        .splash_url
+        .lock()
+        .unwrap()
+        .as_deref()
+        .and_then(|u| Url::parse(u).ok())
+        .is_some_and(|u| u.origin() == url.origin());
 
     if !is_splash || !finished {
         return;
@@ -1106,13 +1151,38 @@ fn on_page_load(webview: &tauri::Webview, payload: &tauri::webview::PageLoadPayl
             &app,
             "The Studio UI loaded but did not render",
             &why,
-            "The service itself is running — this is the workbench page failing in the \
-             webview. On Windows that is usually an out-of-date WebView2 runtime; \
-             updating Microsoft Edge WebView2 and relaunching normally fixes it.",
+            blank_page_hint(&why),
         );
         return;
     }
     startup.push(&app);
+}
+
+/// What to tell the user about a page that loaded and then rendered nothing.
+///
+/// The two causes look identical from the outside and have nothing in common as fixes,
+/// so the hint follows the evidence rather than guessing. A subresource that failed to
+/// load is the server not serving it — the install is incomplete, or something between
+/// the webview and the sidecar dropped it. Anything else reaching this point is script
+/// that ran and failed, which on Windows is most often a webview too old for the syntax
+/// the bundle was built with.
+fn blank_page_hint(reported: &str) -> &'static str {
+    if reported.contains("failed to load") {
+        "The service is running, but the page could not fetch part of itself — so this is \
+         the UI files, not the browser engine. It is almost always an incomplete install: \
+         reinstall Tap Studio. The log below names the file and the status it came back with."
+    } else {
+        "The service is running and the page loaded — it is the workbench script that \
+         failed. On Windows the usual cause is an out-of-date WebView2 runtime; updating \
+         Microsoft Edge WebView2 and relaunching normally fixes it."
+    }
+}
+
+/// `about:blank` — what a webview reports before it has navigated anywhere, and the
+/// one address that must never be recorded as the splash: navigating "back" to it
+/// produces the white screen the whole failure path exists to replace.
+fn is_blank(url: &Url) -> bool {
+    url.scheme() == "about"
 }
 
 /// Drop the fragment from an observed URL. The splash address is reused as a
@@ -1191,15 +1261,25 @@ pub fn run() {
             }
 
             // Read the splash address from the window itself rather than waiting to
-            // observe its first load. `navigate` can win that race — it always does
-            // in the `STUDIO_DESKTOP_URL` path, which runs straight from here — and a
+            // observe its first load. `navigate` can win that race — it always does in
+            // the `STUDIO_DESKTOP_URL` path, which runs straight from here — and a
             // shell that never learned where its splash lives has no way back from a
             // workbench that turns out to be blank.
+            //
+            // On Windows the window is still on `about:blank` at this point: it
+            // navigates to the custom protocol asynchronously, ~80ms later. Recording
+            // that would be worse than recording nothing — `recover` would "return" the
+            // user to a blank page, which is the very thing it exists to prevent — so
+            // about:blank is rejected here and `on_page_load` picks up the real address
+            // when it arrives, still comfortably before the sidecar is ready.
             match handle
                 .get_webview_window("main")
                 .ok_or_else(|| "no main window".to_string())
                 .and_then(|w| w.url().map_err(|e| e.to_string()))
             {
+                Ok(url) if is_blank(&url) => {
+                    startup.log("splash has not navigated yet — waiting for its first load")
+                }
                 Ok(url) => {
                     startup.log(&format!("splash at {url}"));
                     *startup.splash_url.lock().unwrap() = Some(strip_fragment(&url));
@@ -1288,4 +1368,70 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Windows white screen in one assertion. Tauri canonicalizes `current_exe()`,
+    /// Windows canonicalization yields a `\\?\` path, and a `\\?\` path passed to the
+    /// sidecar makes every nested asset request — the SPA bundle — resolve to a
+    /// filename that contains a slash and cannot exist. Root-level files keep working,
+    /// which is why the window renders index.html and nothing else.
+    #[test]
+    fn simplified_unwraps_a_drive_rooted_verbatim_path() {
+        assert_eq!(
+            simplified(r"\\?\C:\Users\p7e\AppData\Local\Tap Studio\binaries\wwwroot"),
+            r"C:\Users\p7e\AppData\Local\Tap Studio\binaries\wwwroot"
+        );
+    }
+
+    #[test]
+    fn simplified_leaves_ordinary_paths_alone() {
+        for path in [
+            r"C:\Program Files\Tap Studio\binaries\wwwroot",
+            "/Applications/Tap Studio.app/Contents/Resources/binaries/wwwroot",
+            "",
+        ] {
+            assert_eq!(simplified(path), path);
+        }
+    }
+
+    /// `UNC\server\share` is a relative path once the prefix is gone, so it keeps it.
+    #[test]
+    fn simplified_leaves_verbatim_unc_alone() {
+        let unc = r"\\?\UNC\server\share\wwwroot";
+        assert_eq!(simplified(unc), unc);
+    }
+
+    /// `about:blank` is what a webview reports before it has navigated. Recording it as
+    /// the splash address is what made 0.7.5 report a blank workbench *into a blank
+    /// page* — the diagnosis reached the log and never the screen.
+    #[test]
+    fn about_blank_is_never_mistaken_for_the_splash() {
+        assert!(is_blank(&Url::parse("about:blank").unwrap()));
+        assert!(!is_blank(&Url::parse("http://tauri.localhost/").unwrap()));
+        assert!(!is_blank(&Url::parse("tauri://localhost/index.html").unwrap()));
+    }
+
+    /// A stale `#tapfail=` carried into the recovery target would re-raise a failure the
+    /// user has already dismissed by retrying.
+    #[test]
+    fn the_recovery_target_carries_no_fragment() {
+        assert_eq!(
+            strip_fragment(&Url::parse("http://tauri.localhost/#tapfail=boom").unwrap()),
+            "http://tauri.localhost/"
+        );
+    }
+
+    #[test]
+    fn a_reported_failure_round_trips_through_the_fragment() {
+        let url = Url::parse("http://tauri.localhost/#tapfail=failed%20to%20load%20bundle.js").unwrap();
+        assert_eq!(
+            reported_failure(&url).as_deref(),
+            Some("failed to load bundle.js")
+        );
+        assert_eq!(reported_failure(&Url::parse("http://tauri.localhost/").unwrap()), None);
+    }
 }

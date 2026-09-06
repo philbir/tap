@@ -30,7 +30,7 @@ public static class StudioHost
         // that directory explicitly. PublishSingleFile makes
         // AppContext.BaseDirectory a temp extraction dir, so the default
         // ContentRoot/wwwroot lookup misses the SPA we just shipped.
-        var webRoot = Environment.GetEnvironmentVariable("Studio__WebRoot");
+        var webRoot = StripVerbatimPrefix(Environment.GetEnvironmentVariable("Studio__WebRoot"));
         WebApplicationBuilder builder;
         if (!string.IsNullOrWhiteSpace(webRoot) && Directory.Exists(webRoot))
         {
@@ -514,6 +514,40 @@ public static class StudioHost
     /// address inside <c>127.0.0.0/8</c>. Anything else is treated as exposing the API beyond
     /// the local machine.
     /// </summary>
+    /// <summary>
+    /// Drop Windows' <c>\\?\</c> verbatim prefix from a host-supplied web root.
+    /// </summary>
+    /// <remarks>
+    /// <para>A verbatim path is passed to Win32 without normalization, which makes a forward
+    /// slash inside it an ordinary filename character rather than a separator. Static files
+    /// then break in a way that looks like nothing at all: <c>PhysicalFileProvider</c> joins
+    /// its root to the request's own <c>/</c>-separated subpath, so under a <c>\\?\</c> root
+    /// every <em>nested</em> file — the whole of <c>/assets/</c>, which is the SPA bundle —
+    /// asks for a filename containing a slash and 404s, while files sitting at the root of
+    /// <c>wwwroot</c> serve normally. index.html loads, its script does not, and the window
+    /// is blank.</para>
+    /// <para>The desktop shell already simplifies the path it sends (Tauri canonicalizes
+    /// <c>current_exe()</c>, which is where the prefix comes from). This is the second half of
+    /// that fix, kept here because this is the layer that knows the file provider is sensitive
+    /// to it — and because an older shell paired with a newer sidecar would otherwise
+    /// reintroduce the same blank window.</para>
+    /// <para>Only the plain drive form is unwrapped: <c>\\?\UNC\…</c> is not a usable path
+    /// without its prefix, and a path long enough to have needed the prefix is not one to
+    /// silently shorten.</para>
+    /// </remarks>
+    public static string? StripVerbatimPrefix(string? path)
+    {
+        const string Prefix = @"\\?\";
+        if (path is null || !path.StartsWith(Prefix, StringComparison.Ordinal)) return path;
+
+        var rest = path[Prefix.Length..];
+        var isDriveRooted = rest.Length >= 3
+            && char.IsAsciiLetter(rest[0])
+            && rest[1] == ':'
+            && rest[2] == '\\';
+        return isDriveRooted ? rest : path;
+    }
+
     internal static bool TryParseLoopback(string? host, out IPAddress address)
     {
         if (string.IsNullOrWhiteSpace(host))

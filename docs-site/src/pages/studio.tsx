@@ -680,8 +680,8 @@ const docs: DocSection[] = [
           out of the box.
         </p>
         <p>
-          <a className="text-link" href={`${repoUrl}/releases/latest`}>
-            Download the latest release from GitHub
+          <a className="text-link" href={href("download", "desktop")}>
+            Go to the download page
           </a>
         </p>
         <p className="doc-note">
@@ -710,7 +710,7 @@ export const StudioPage = () => (
           workspace living in your repository as reviewable Markdown.
         </p>
         <div className="hero-actions">
-          <a className="button primary" href={`${repoUrl}/releases/latest`}>
+          <a className="button primary" href={href("download")}>
             Download Studio
           </a>
           <a className="button ghost" href={href("studio", "studio-testing")}>

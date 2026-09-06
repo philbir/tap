@@ -84,6 +84,15 @@ export const PromptMark = () => (
  */
 export const AspireMark = () => <img className="raster-mark" src="./aspire-icon.png" alt="" />;
 
+/** The header's download affordance. Drawn here — no brand owns an arrow. */
+export const DownloadArrow = () => (
+  <svg className="download-arrow" viewBox="0 0 24 24" aria-hidden="true" focusable="false" {...line}>
+    <path d="M12 4v11" />
+    <path d="M7.5 10.5 12 15l4.5 -4.5" />
+    <path d="M5 19h14" />
+  </svg>
+);
+
 export type PlatformId = "macos" | "windows" | "linux";
 
 export const platforms: Record<PlatformId, { label: string; Mark: () => React.ReactElement }> = {

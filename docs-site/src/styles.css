@@ -494,6 +494,35 @@ h3 {
   font-size: 14px;
 }
 
+/* Pricing and Download: the two answers people arrive wanting. Download is the
+   only header action that survives every breakpoint — below 720px it keeps the
+   arrow and drops the word. */
+.header-link {
+  color: var(--ink-2);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: var(--tracking-display);
+  padding: 9px 6px;
+  white-space: nowrap;
+}
+
+.header-link:hover {
+  color: var(--accent);
+}
+
+.header-download {
+  gap: 8px;
+  padding: 9px 18px;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+.download-arrow {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+}
+
 .github-octocat {
   width: 19px;
   height: 19px;
@@ -553,6 +582,30 @@ h3 {
 .rail-nav {
   display: grid;
   gap: 1px;
+}
+
+/* Only ever seen inside the drawer — above 1080px the header still carries these. */
+.rail-quick {
+  display: none;
+  flex-wrap: wrap;
+  gap: 8px;
+  border-bottom: 1px solid var(--line-hairline);
+  padding-bottom: 14px;
+}
+
+.rail-quick a {
+  border: 1.5px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--ink-1);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 8px 14px;
+}
+
+.rail-quick a:hover {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 
 .rail-nav a {
@@ -2036,6 +2089,233 @@ h3 {
   line-height: 1.6;
 }
 
+/* --- download page ---------------------------------------------------------- */
+
+.download-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 20px;
+  max-width: 860px;
+  scroll-margin-top: 88px;
+  padding: clamp(44px, 5.5vw, 68px) var(--gutter) clamp(32px, 4vw, 44px);
+}
+
+.download-hero h1 {
+  margin-bottom: 0;
+  font-size: clamp(34px, 4.6vw, 50px);
+}
+
+.download-hero .lead {
+  margin-bottom: 0;
+}
+
+/* Which build the primary button is actually pointing at — it changes once the
+   release answers, so it has to be readable rather than decorative. */
+/* The button wears the platform's own mark, which arrives as a 24-unit brand
+   path — the button itself sets no icon size. */
+.dl-cta {
+  gap: 10px;
+}
+
+.dl-cta svg {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 auto;
+}
+
+.download-meta {
+  margin: 0;
+  color: var(--ink-3);
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+/* Three cards that never need a breakpoint of their own: the track count
+   follows the content column, which the rail narrows by 268px. */
+.dl-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(258px, 1fr));
+  gap: 18px;
+}
+
+.dl-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  background: var(--card-surface);
+  padding: clamp(20px, 2.2vw, 26px);
+  box-shadow: var(--shadow-card);
+}
+
+.dl-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dl-card-mark {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.dl-card-mark svg {
+  width: 20px;
+  height: 20px;
+}
+
+.dl-card-head h3 {
+  margin-bottom: 0;
+  font-size: 19px;
+  letter-spacing: var(--tracking-display);
+}
+
+.dl-card > p {
+  margin-bottom: 0;
+  color: var(--ink-2);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.dl-detail {
+  margin: auto 0 0;
+  color: var(--ink-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.dl-assets {
+  display: grid;
+  gap: 8px;
+}
+
+/* The CLI archives and the checksum files are a shelf rather than a stack. */
+.dl-assets.row {
+  display: flex;
+  flex-wrap: wrap;
+}
+
+.dl-asset {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  border: 1.5px solid var(--line-2);
+  border-radius: var(--radius-md);
+  background: var(--bg-surface);
+  color: var(--ink-1);
+  font-size: 13.5px;
+  font-weight: 700;
+  padding: 11px 14px;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease,
+    color 0.15s ease;
+}
+
+.dl-asset:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.dl-asset.primary {
+  border-color: transparent;
+  background: var(--accent);
+  color: var(--ink-on-accent);
+}
+
+.dl-asset.primary:hover {
+  background: var(--accent-strong);
+  color: var(--ink-on-accent);
+}
+
+.dl-asset-mark {
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.dl-asset-mark svg {
+  width: 16px;
+  height: 16px;
+}
+
+.dl-asset-label {
+  min-width: 0;
+}
+
+/* Size, or the fallback's "on GitHub": the part that is never the label. */
+.dl-asset-meta {
+  margin-left: auto;
+  padding-left: 10px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 600;
+  opacity: 0.75;
+  white-space: nowrap;
+}
+
+.dl-tool {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xl);
+  background: var(--card-surface);
+  padding: clamp(22px, 2.6vw, 30px);
+  box-shadow: var(--shadow-card);
+}
+
+.dl-tool + .dl-tool {
+  margin-top: 20px;
+}
+
+.dl-tool-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 18px;
+  align-items: start;
+  margin-bottom: 20px;
+}
+
+.dl-tool-icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+.dl-tool-icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.dl-tool-copy p {
+  margin-bottom: 0;
+  max-width: 78ch;
+  color: var(--ink-2);
+  font-size: 14.5px;
+  line-height: 1.6;
+}
+
+.dl-tool .code-grid + .doc-note {
+  margin-top: 14px;
+}
+
+.dl-tool .dl-assets {
+  margin-top: 18px;
+}
+
+.ships-more {
+  margin: 28px 0 0;
+}
+
 /* --- dark ------------------------------------------------------------------ */
 
 @media (prefers-color-scheme: dark) {
@@ -2091,9 +2371,16 @@ h3 {
 
   .button.ghost,
   .nav-cta,
-  .ship-source {
+  .ship-source,
+  .rail-quick a,
+  .dl-asset {
     background: var(--glass-surface-2);
     color: var(--ink-1);
+  }
+
+  .dl-asset.primary {
+    background: var(--accent);
+    color: var(--ink-on-accent);
   }
 
   .flow-band {
@@ -2182,6 +2469,10 @@ h3 {
 
   .rail-toggle {
     display: inline-flex;
+  }
+
+  .rail.open .rail-quick {
+    display: flex;
   }
 
   .rail-note {
@@ -2288,6 +2579,16 @@ h3 {
 }
 
 @media (max-width: 720px) {
+  .header-link,
+  .header-download-text {
+    display: none;
+  }
+
+  .header-download {
+    gap: 0;
+    padding: 9px 12px;
+  }
+
   .public-warning {
     grid-template-columns: 1fr;
   }
@@ -2314,7 +2615,8 @@ h3 {
   }
 
   /* The source button drops under the group's title rather than squeezing it. */
-  .ship-group-head {
+  .ship-group-head,
+  .dl-tool-head {
     grid-template-columns: auto minmax(0, 1fr);
   }
 

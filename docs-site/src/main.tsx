@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 import { Shell } from "./components/Shell";
+import { DownloadPage } from "./pages/download";
 import { HomePage } from "./pages/home";
 import { TunnelsPage } from "./pages/tunnels";
 import { StudioPage } from "./pages/studio";
@@ -15,6 +16,8 @@ const App = () => {
         <TunnelsPage />
       ) : route.page === "studio" ? (
         <StudioPage />
+      ) : route.page === "download" ? (
+        <DownloadPage />
       ) : (
         <HomePage />
       )}

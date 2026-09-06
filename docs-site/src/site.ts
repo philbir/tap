@@ -1,7 +1,7 @@
 export const version = import.meta.env.VITE_TAP_VERSION ?? "v0.1.0";
 export const repoUrl = import.meta.env.VITE_TAP_REPO_URL ?? "https://github.com/philbir/tap";
 
-export type PageId = "home" | "tunnels" | "studio";
+export type PageId = "home" | "tunnels" | "studio" | "download";
 
 export type NavItem = {
   /** Section id on the page. Empty means the top of the page. */
@@ -101,9 +101,25 @@ export const pages: Record<PageId, PageMeta> = {
       { id: "studio-install", label: "Get Tap Studio" },
     ],
   },
+  download: {
+    id: "download",
+    name: "Download",
+    shortName: "Download",
+    tagline: "Every channel",
+    title: "Download Tap — desktop app, CLI, NuGet, and containers",
+    navLabel: "Download",
+    nav: [
+      { id: "", label: "Overview" },
+      { id: "desktop", label: "Desktop app" },
+      { id: "cli", label: "Command line" },
+      { id: "nuget", label: "NuGet packages" },
+      { id: "docker", label: "Docker images" },
+      { id: "verify", label: "Checksums and updates" },
+    ],
+  },
 };
 
-export const pageOrder: PageId[] = ["home", "studio", "tunnels"];
+export const pageOrder: PageId[] = ["home", "studio", "tunnels", "download"];
 
 /**
  * Anchors from the previous one-page site. Everything used to live under a bare

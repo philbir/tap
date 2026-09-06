@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { href, useActiveSection } from "../router";
 import { pages, productOrder, repoUrl, version, type PageId } from "../site";
-import { GitHubMark } from "./icons";
+import { DownloadArrow, GitHubMark } from "./icons";
 
 export const Shell = ({ page, children }: { page: PageId; children: React.ReactNode }) => {
   const meta = pages[page];
@@ -56,9 +56,23 @@ export const Shell = ({ page, children }: { page: PageId; children: React.ReactN
         </nav>
 
         <div className="header-actions">
-          <a className="button ghost header-cta" href={repoUrl}>
+          {/* The two things a reader arrives looking for. Download is a page;
+              pricing is a section of the overview, so it keeps its own route. */}
+          <a className="header-link" href={href("home", "pricing")}>
+            Pricing
+          </a>
+          <a
+            className="button primary header-download"
+            href={href("download")}
+            aria-label="Download"
+            aria-current={page === "download" ? "page" : undefined}
+          >
+            <DownloadArrow />
+            <span className="header-download-text">Download</span>
+          </a>
+          <a className="button ghost header-cta" href={repoUrl} aria-label="Tap on GitHub">
             <GitHubMark />
-            GitHub
+            <span className="header-cta-text">GitHub</span>
           </a>
           <button
             type="button"
@@ -80,6 +94,13 @@ export const Shell = ({ page, children }: { page: PageId; children: React.ReactN
           id="rail-nav"
           onClick={() => setMenuOpen(false)}
         >
+          {/* The header actions, repeated for the widths where the header has
+              had to drop them. Hidden while the rail is a sidebar. */}
+          <nav className="rail-quick" aria-label="Quick links">
+            <a href={href("download")}>Download</a>
+            <a href={href("home", "pricing")}>Pricing</a>
+            <a href={repoUrl}>GitHub</a>
+          </nav>
           <nav className="rail-nav" aria-label={meta.navLabel}>
             <span className="rail-label">{meta.navLabel}</span>
             {meta.nav.map((item) => (
@@ -111,6 +132,8 @@ const SiteFooter = () => (
     <span className="mono">
       {version} · the local-first HTTP workbench · Studio + Tunnels
     </span>
+    <a href={href("download")}>Download</a>
+    <a href={href("home", "pricing")}>Pricing</a>
     <a href={repoUrl}>GitHub</a>
   </footer>
 );

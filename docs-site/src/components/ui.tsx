@@ -1,5 +1,7 @@
 import React from "react";
 import type { Feature } from "../data/features";
+import type { ShipGroup } from "../data/shipped";
+import { channels, marks } from "./icons";
 
 export type DocSection = {
   id: string;
@@ -180,3 +182,114 @@ export const PublicTunnelInlineWarning = ({ provider }: { provider: string }) =>
     in the Inspector request log.
   </Callout>
 );
+
+/**
+ * One published channel — the desktop bundles, the CLIs, the NuGet packages, or
+ * the images — rendered from its `ShipGroup`. The home page lists every group;
+ * the download page pulls single groups out of the same array, so the two never
+ * describe the same artifact differently.
+ */
+export const ShipGroupCard = ({ group }: { group: ShipGroup }) => {
+  const ChannelMark = channels[group.channel];
+  const SourceMark = group.source ? channels[group.source.channel] : null;
+  const NoteMark = group.noteMark ? marks[group.noteMark].Mark : null;
+
+  return (
+    <article className="ship-group" id={group.id}>
+      <header className="ship-group-head">
+        <span className="ship-group-icon" aria-hidden="true">
+          <ChannelMark />
+        </span>
+        <div className="ship-group-copy">
+          <h3>{group.title}</h3>
+          <p>{group.blurb}</p>
+        </div>
+        {group.source && SourceMark ? (
+          <a className="ship-source" href={group.source.href}>
+            <SourceMark />
+            {group.source.label}
+          </a>
+        ) : null}
+      </header>
+
+      <ul className="ship-list">
+        {group.items.map((item) => {
+          const ItemMark = item.mark ? marks[item.mark].Mark : null;
+          const chips = [...(item.platforms ?? []), ...(item.badges ?? [])];
+          return (
+            <li className="ship-item" key={item.name}>
+              <div className="ship-item-copy">
+                <div className="ship-item-head">
+                  {ItemMark ? (
+                    <span className="ship-mark" aria-hidden="true">
+                      <ItemMark />
+                    </span>
+                  ) : null}
+                  <strong>{item.name}</strong>
+                  {item.product ? <span className="ship-product">{item.product}</span> : null}
+                  {item.formats?.map((format) => (
+                    <code className="ship-format" key={format}>
+                      {format}
+                    </code>
+                  ))}
+                </div>
+                <p>{item.note}</p>
+                {item.cmd ? <code className="ship-cmd">{item.cmd}</code> : null}
+              </div>
+              <div className="ship-item-side">
+                {chips.length > 0 ? (
+                  <div className="plat-row">
+                    {chips.map((id) => {
+                      const { label, Mark } = marks[id];
+                      return (
+                        <span className="plat-chip" key={id}>
+                          <Mark />
+                          {label}
+                        </span>
+                      );
+                    })}
+                  </div>
+                ) : null}
+                {item.link ? (
+                  <a className="text-link" href={item.link.href}>
+                    {item.link.label}
+                  </a>
+                ) : null}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+
+      {group.cmds ? (
+        <div className="ship-cmds">
+          {group.cmds.map((cmd) => (
+            <code className="ship-cmd" key={cmd}>
+              {cmd}
+            </code>
+          ))}
+        </div>
+      ) : null}
+
+      {group.note || group.install ? (
+        <footer className="ship-group-foot">
+          {group.note ? (
+            <p>
+              {NoteMark ? (
+                <span className="ship-note-mark" aria-hidden="true">
+                  <NoteMark />
+                </span>
+              ) : null}
+              {group.note}
+            </p>
+          ) : null}
+          {group.install ? (
+            <a className="text-link" href={group.install.href}>
+              {group.install.label}
+            </a>
+          ) : null}
+        </footer>
+      ) : null}
+    </article>
+  );
+};

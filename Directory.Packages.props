@@ -47,13 +47,13 @@
     <!-- Test dependencies — only consumed by src/backend/Tap.Tests. -->
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.9.0" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
 
     <!-- Demo.Api dependencies — only consumed by samples/Demo.Api. -->
     <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.6" />
     <PackageVersion Include="HotChocolate.Subscriptions.InMemory" Version="16.6.6" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(AspNetCoreVersion)" />
-    <PackageVersion Include="OpenIddict.AspNetCore" Version="7.6.0" />
-    <PackageVersion Include="OpenIddict.EntityFrameworkCore" Version="7.6.0" />
+    <PackageVersion Include="OpenIddict.AspNetCore" Version="7.7.0" />
+    <PackageVersion Include="OpenIddict.EntityFrameworkCore" Version="7.7.0" />
   </ItemGroup>
 </Project>

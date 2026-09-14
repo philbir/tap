@@ -17,6 +17,12 @@ version: 2
 #
 # Caveat: a group does NOT span `directories`. The npm entry therefore yields
 # up to one PR per package.json per group, not one PR overall.
+#
+# Caveat 2: `cooldown.semver-*-days` is rejected for `github-actions` — the
+# whole file then fails validation and Dependabot silently reverts to
+# one-PR-per-dependency, which is why none of the groups below took effect
+# between 2026-08-17 and 2026-09-14. Only `default-days` is accepted for every
+# ecosystem, so the actions entry soaks every bump rather than just majors.
 updates:
   - package-ecosystem: github-actions
     directory: "/"
@@ -26,7 +32,7 @@ updates:
     commit-message:
       prefix: "ci"
     cooldown:
-      semver-major-days: 14
+      default-days: 14
     groups:
       actions:
         patterns: ["*"]

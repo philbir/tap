@@ -6,7 +6,7 @@ import {
   type Icon as TablerIcon,
 } from '@tabler/icons-react'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { Group as PanelGroup, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import { ErrorBoundary } from '../shell/ErrorBoundary'
 import styles from './EditorShell.module.css'
 
@@ -76,6 +76,7 @@ export function EditorShell(props: EditorShellProps) {
   const KindIcon = KIND_ICON[kindLabel] ?? IconSend
   // Stable localStorage key so each editor kind remembers its preferred split sizes.
   const autoSaveId = `tap-studio:split:${kindLabel.toLowerCase()}`
+  const rightLayout = useDefaultLayout({ id: `${autoSaveId}:right`, storage: localStorage })
 
   return (
     <Box style={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -129,12 +130,12 @@ export function EditorShell(props: EditorShellProps) {
           below while the Assistant occupies the right pane.
         */}
         {rightPane ? (
-          <PanelGroup direction="horizontal" autoSaveId={`${autoSaveId}:right`} style={{ height: '100%' }}>
-            <Panel defaultSize={68} minSize={30}>
+          <PanelGroup orientation="horizontal" defaultLayout={rightLayout.defaultLayout} onLayoutChanged={rightLayout.onLayoutChanged} style={{ height: '100%' }}>
+            <Panel id="editor" defaultSize="68%" minSize="30%">
               <EditorColumn autoSaveId={autoSaveId} bottomPane={bottomPane} resetKey={title}>{children}</EditorColumn>
             </Panel>
-            <PanelResizeHandle className={styles.handleVertical} />
-            <Panel defaultSize={32} minSize={20}>
+            <Separator className={styles.handleVertical} />
+            <Panel id="side" defaultSize="32%" minSize="20%">
               <Box style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column', background: 'var(--mantine-color-body)' }}>
                 <ErrorBoundary label={`${kindLabel} side panel`} resetKeys={[title]}>{rightPane}</ErrorBoundary>
               </Box>
@@ -156,6 +157,7 @@ export function EditorShell(props: EditorShellProps) {
 function EditorColumn({ autoSaveId, bottomPane, children, resetKey }: { autoSaveId: string; bottomPane?: ReactNode; children: ReactNode; resetKey: string }) {
   // Each pane gets its own boundary rather than one around the pair: a crash while rendering
   // a response body should still leave the request editor above it editable.
+  const bottomLayout = useDefaultLayout({ id: `${autoSaveId}:bottom`, storage: localStorage })
   const editor = (
     <PrimaryPane>
       <ErrorBoundary label="Editor" resetKeys={[resetKey]}>{children}</ErrorBoundary>
@@ -163,12 +165,12 @@ function EditorColumn({ autoSaveId, bottomPane, children, resetKey }: { autoSave
   )
   if (!bottomPane) return editor
   return (
-    <PanelGroup direction="vertical" autoSaveId={`${autoSaveId}:bottom`} style={{ height: '100%' }}>
-      <Panel defaultSize={55} minSize={20}>
+    <PanelGroup orientation="vertical" defaultLayout={bottomLayout.defaultLayout} onLayoutChanged={bottomLayout.onLayoutChanged} style={{ height: '100%' }}>
+      <Panel id="editor" defaultSize="55%" minSize="20%">
         {editor}
       </Panel>
-      <PanelResizeHandle className={styles.handleHorizontal} />
-      <Panel defaultSize={45} minSize={15}>
+      <Separator className={styles.handleHorizontal} />
+      <Panel id="bottom" defaultSize="45%" minSize="15%">
         <Box style={{ height: '100%', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
           <ErrorBoundary label="Response panel" resetKeys={[resetKey]}>{bottomPane}</ErrorBoundary>
         </Box>

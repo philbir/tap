@@ -14,7 +14,7 @@
   inset: -3px 0;             /* expand hit area vertically without changing visual size */
 }
 .handleHorizontal:hover,
-.handleHorizontal[data-resize-handle-active] {
+.handleHorizontal[data-separator="active"] {
   background: var(--mantine-color-tap-filled);
   height: 2px;
   cursor: row-resize;
@@ -32,7 +32,7 @@
   inset: 0 -3px;
 }
 .handleVertical:hover,
-.handleVertical[data-resize-handle-active] {
+.handleVertical[data-separator="active"] {
   background: var(--mantine-color-tap-filled);
   width: 2px;
   cursor: col-resize;

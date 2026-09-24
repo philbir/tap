@@ -1,7 +1,7 @@
 import { ActionIcon, Box, Center, Group, Stack, Text, Tooltip } from '@mantine/core'
 import { IconLayoutDashboard, IconMoon, IconSettings, IconSun } from '@tabler/icons-react'
 import { useCallback, useEffect, useState } from 'react'
-import { Panel, PanelGroup, PanelResizeHandle } from 'react-resizable-panels'
+import { Group as PanelGroup, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
 import type { TreeNode, WorkspaceFileKind } from './api/types'
 import { useDesktopUpdater } from './desktop/desktopUpdater'
 import { AuthEditor } from './editors/AuthEditor'
@@ -28,9 +28,9 @@ import { HttpFileEditor } from './editors/HttpFileEditor'
 const HEADER_HEIGHT = 52
 
 /**
- * Top-level layout. A fixed header sits above a horizontal PanelGroup that splits the
+ * Top-level layout. A fixed header sits above a horizontal panel group that splits the
  * sidebar (left) from the main workspace (right). The split is draggable; the chosen
- * size persists per-user via the `autoSaveId` localStorage key.
+ * size persists per-user in localStorage via `useDefaultLayout`.
  *
  * Below the workspace's TabBar, each editor renders its own internal split (e.g. the
  * RequestEditor adds a horizontal divider with the Response panel underneath).
@@ -50,6 +50,7 @@ export function App() {
   const loadError = useTapStore((s) => s.loadError)
   const openTab = useTapStore((s) => s.openTab)
   const hasActiveWorkspace = useHasActiveWorkspace()
+  const shellLayout = useDefaultLayout({ id: 'tap-studio:shell', storage: localStorage })
 
   const openFromTree = useCallback((node: TreeNode) => {
     if (node.kind === 'directory') return
@@ -122,11 +123,12 @@ export function App() {
       </Box>
 
       <Box style={{ flex: 1, minHeight: 0 }}>
-        <PanelGroup direction="horizontal" autoSaveId="tap-studio:shell" style={{ height: '100%' }}>
+        <PanelGroup orientation="horizontal" defaultLayout={shellLayout.defaultLayout} onLayoutChanged={shellLayout.onLayoutChanged} style={{ height: '100%' }}>
           <Panel
-            defaultSize={20}
-            minSize={12}
-            maxSize={40}
+            id="sidebar"
+            defaultSize="20%"
+            minSize="12%"
+            maxSize="40%"
             style={{ borderRight: '1px solid var(--mantine-color-default-border)' }}
           >
             <Sidebar
@@ -136,9 +138,9 @@ export function App() {
             />
           </Panel>
 
-          <PanelResizeHandle className={shellStyles.handleVertical} />
+          <Separator className={shellStyles.handleVertical} />
 
-          <Panel>
+          <Panel id="main">
             <Box style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <TabBar />
               <Box style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>

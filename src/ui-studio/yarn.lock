@@ -3339,13 +3339,13 @@ __metadata:
   languageName: node
   linkType: hard
 
-"react-resizable-panels@npm:^2.1.9":
-  version: 2.1.9
-  resolution: "react-resizable-panels@npm:2.1.9"
+"react-resizable-panels@npm:^4.12.4":
+  version: 4.12.4
+  resolution: "react-resizable-panels@npm:4.12.4"
   peerDependencies:
-    react: ^16.14.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc
-    react-dom: ^16.14.0 || ^17.0.0 || ^18.0.0 || ^19.0.0 || ^19.0.0-rc
-  checksum: 10c0/bb8691a21b75142607d2503c1db84da8fe17acbde64cadbd06745e036a52f78de8c589faccef476559d69a61a95ddc30342fc8f6df59d7855a26a9dbba03dbcf
+    react: ^18.0.0 || ^19.0.0
+    react-dom: ^18.0.0 || ^19.0.0
+  checksum: 10c0/2c9ecf26af8897cd406a0e9d53a64328f9536dbed36a2a5b4328f03a09951ef6aa9647fad25401a26c05dfe575963ea1f66bcf1457e55aab21346d0ff2e19dfb
   languageName: node
   linkType: hard
 
@@ -3689,7 +3689,7 @@ __metadata:
     react: "npm:^19.3.0"
     react-dom: "npm:^19.3.0"
     react-markdown: "npm:^10.1.0"
-    react-resizable-panels: "npm:^2.1.9"
+    react-resizable-panels: "npm:^4.12.4"
     remark-gfm: "npm:^4.0.1"
     tiptap-markdown: "npm:^0.9.0"
     typescript: "npm:~7.0.2"

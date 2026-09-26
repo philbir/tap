@@ -13,7 +13,7 @@
     "icons": "tauri icon"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.4"
+    "@tauri-apps/cli": "^2.11.5"
   },
   "resolutions": {
     "node-gyp": "^13.0.1",

@@ -1,0 +1,8 @@
+---
+kind: collection
+id: 01a0e2c3-5a8d-715a-8187-5fe5bee61971
+name: Debug
+baseUrl: '{{DEMO_API_URL}}'
+vars:
+  account_id: 1234
+---

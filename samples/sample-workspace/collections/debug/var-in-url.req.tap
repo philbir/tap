@@ -1,0 +1,9 @@
+---
+kind: request
+id: 01a0e2c4-a075-738f-9105-82b2667ba80a
+name: Var in Url
+---
+
+```http
+GET echo/{{account_id}}
+```

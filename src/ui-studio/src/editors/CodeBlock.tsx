@@ -116,8 +116,11 @@ export function CodeBlock({
     <CodeMirror
       value={display}
       onChange={onChange}
+      // Read-only blocks edits but stays `editable` (contenteditable) so the viewer can take
+      // focus: without it, Mod-A falls through to the page and selects every label in the app
+      // instead of the body.
       readOnly={readOnly}
-      editable={!readOnly}
+      editable
       theme={vscodeLight}
       extensions={extensions}
       onCreateEditor={(view) => { viewRef.current = view; setReady(true) }}

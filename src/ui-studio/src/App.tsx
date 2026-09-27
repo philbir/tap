@@ -14,6 +14,7 @@ import shellStyles from './editors/EditorShell.module.css'
 import { RequestEditor } from './editors/RequestEditor'
 import { ProviderEditor } from './editors/ProviderEditor'
 import { SettingsEditor } from './editors/SettingsEditor'
+import { WorkspacesEditor } from './editors/WorkspacesEditor'
 import { TestSetEditor } from './editors/TestSetEditor'
 import { WorkspaceEditor } from './editors/WorkspaceEditor'
 import { collectionDirOf } from './shell/explorerTree'
@@ -154,6 +155,7 @@ export function App() {
                 {active?.kind === 'test' && <TestSetEditor key={active.path} path={active.path} />}
                 {active?.kind === 'flow' && <FlowEditor key={active.path} path={active.path} />}
                 {active?.kind === 'settings' && <SettingsEditor />}
+                {active?.kind === 'workspaces' && <WorkspacesEditor />}
                 {active?.kind === 'provider' && (
                   <ProviderEditor key={active.path} name={providerNameFromTab(active.path) ?? ''} />
                 )}

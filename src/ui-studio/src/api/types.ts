@@ -3,6 +3,8 @@
 export type WorkspaceFileKind =
   | 'workspace' | 'request' | 'auth' | 'env' | 'collection' | 'flow' | 'test'
   | 'folder' | 'settings' | 'git-diff'
+  /** The Manage workspaces tab — lists known workspaces; not a workspace file. */
+  | 'workspaces'
   /** A variable provider's contents, opened as its own tab. Not a workspace file — the
    *  provider may live in system settings — so its tab path is a `__provider__:<name>` token. */
   | 'provider'

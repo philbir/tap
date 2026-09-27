@@ -4,12 +4,13 @@ import { useDisclosure } from '@mantine/hooks'
 import { IconBook, IconBrandGit, IconBrandGithub, IconCheck, IconChevronDown, IconDeviceDesktop, IconExternalLink, IconFolders, IconPencil, IconPlugConnected, IconPlus, IconStack2 } from '@tabler/icons-react'
 import { useState, type ReactNode } from 'react'
 import { api, ApiError } from '../api/client'
-import { MANIFEST_TAB_PATH, useActiveCollection, useEnvSelection, useTapStore } from '../store'
+import { MANIFEST_TAB_PATH, WORKSPACES_TAB_PATH, useActiveCollection, useEnvSelection, useTapStore } from '../store'
 import { isDesktop } from '../desktop/desktopUpdater'
 import { DirectoryPicker } from './DirectoryPicker'
 import { fileNameFor } from './tapFiles'
 
 const ADD_WORKSPACE_SENTINEL = '__add_workspace__'
+const MANAGE_WORKSPACES_SENTINEL = '__manage_workspaces__'
 const ADD_ENV_SENTINEL = '__add_env__'
 
 interface Props {
@@ -63,6 +64,7 @@ export function Header({ rightAction }: Props) {
           label: w.name + (w.available ? '' : ' (missing)'),
         })),
         { value: ADD_WORKSPACE_SENTINEL, label: '+ Add workspace…' },
+        { value: MANAGE_WORKSPACES_SENTINEL, label: 'Manage workspaces…' },
       ]
   // Grouped so it stays obvious which choices belong to the collection at hand and which are
   // workspace-wide — the same split the base-URL chip draws.
@@ -85,6 +87,10 @@ export function Header({ rightAction }: Props) {
   async function handleWorkspacePick(value: string | null) {
     if (!value) return
     if (value === ADD_WORKSPACE_SENTINEL) { addControls.open(); return }
+    if (value === MANAGE_WORKSPACES_SENTINEL) {
+      openTab({ path: WORKSPACES_TAB_PATH, kind: 'workspaces', label: 'Workspaces' })
+      return
+    }
     if (value === activeWs?.path) return
     try { await activateWorkspace(value) }
     catch (e) { console.error(e) }

@@ -18,7 +18,8 @@
         "url": "index.html",
         "visible": true,
         "decorations": true,
-        "resizable": true
+        "resizable": true,
+        "dragDropEnabled": false
       }
     ],
     "security": {

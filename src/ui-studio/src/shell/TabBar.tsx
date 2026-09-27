@@ -25,6 +25,7 @@ const KIND_ICON: Record<WorkspaceFileKind, TablerIcon> = {
   test: IconChecklist,
   folder: IconFolder,
   settings: IconSettings,
+  workspaces: IconFolders,
   'git-diff': IconBrandGit,
   httpfile: IconFileCode,
   provider: IconServer,

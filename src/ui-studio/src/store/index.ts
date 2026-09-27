@@ -46,6 +46,9 @@ export interface OpenTab {
 export const MANIFEST_TAB_PATH = '__manifest__'
 /** Reserved path for the Settings tab — not a real workspace file. */
 export const SETTINGS_TAB_PATH = '__settings__'
+/** Reserved path for the Manage workspaces tab. It outlives a workspace switch — it is the
+ *  one tab that is about every workspace rather than the open one. */
+export const WORKSPACES_TAB_PATH = '__workspaces__'
 
 /** Reserved tab path for one variable provider's editor. Providers aren't workspace files —
  *  a system-scope one has no path at all — so the name is carried in the token itself. */
@@ -377,7 +380,11 @@ export const useTapStore = create<TapStore>()(
         // refetch. activeEnvByRoot is preserved so jumping back keeps your selection.
         // Pending declarations go with the drafts they were waiting for — they name paths in
         // the workspace being left, and every editor that could have consumed them is gone.
-        set({ tabs: [], activeTab: null, tabState: {}, declaredVars: {} })
+        // The Manage workspaces tab is the exception: it is where the switch was made from.
+        set((s) => ({
+          tabs: s.tabs.filter((t) => t.path === WORKSPACES_TAB_PATH),
+          activeTab: null, tabState: {}, declaredVars: {},
+        }))
         await get().reload()
       },
 

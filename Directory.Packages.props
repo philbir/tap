@@ -18,7 +18,7 @@
     <!-- Spectre.Console.Cli ships from its own repo and its newest stable is 0.55.0
          (later versions are 1.0.0-alpha only). It floats up to Spectre.Console 0.57.2. -->
     <PackageVersion Include="Spectre.Console.Cli" Version="0.55.0" />
-    <PackageVersion Include="Markdig" Version="1.3.2" />
+    <PackageVersion Include="Markdig" Version="1.4.0" />
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
     <!-- RFC 9535 JSONPath over System.Text.Json nodes — backs the `jsonpath:` assertion
          extractor. Chosen over the alternatives because it binds to JsonNode directly and
@@ -50,8 +50,8 @@
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
 
     <!-- Demo.Api dependencies — only consumed by samples/Demo.Api. -->
-    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.6" />
-    <PackageVersion Include="HotChocolate.Subscriptions.InMemory" Version="16.6.6" />
+    <PackageVersion Include="HotChocolate.AspNetCore" Version="16.6.7" />
+    <PackageVersion Include="HotChocolate.Subscriptions.InMemory" Version="16.6.7" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.InMemory" Version="$(AspNetCoreVersion)" />
     <PackageVersion Include="OpenIddict.AspNetCore" Version="7.7.1" />
     <PackageVersion Include="OpenIddict.EntityFrameworkCore" Version="7.7.1" />
